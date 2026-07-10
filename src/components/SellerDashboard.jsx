@@ -73,7 +73,6 @@ function SellerDashboard({ projects, leads, visits, updateProject, addProject })
     }
 
     const createdProject = {
-      id: `proj-${Date.now()}`,
       name: newProject.name,
       developer: newProject.developer,
       village: newProject.village,

@@ -14,10 +14,10 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js')
       .then((registration) => {
-        console.log('PlotIt Service Worker registered with scope:', registration.scope);
+        console.log('Druvio Service Worker registered with scope:', registration.scope);
       })
       .catch((error) => {
-        console.error('PlotIt Service Worker registration failed:', error);
+        console.error('Druvio Service Worker registration failed:', error);
       });
   });
 }

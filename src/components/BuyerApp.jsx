@@ -5,7 +5,7 @@ import {
   MapPin, Gift, Phone, Check, RefreshCw, X, Download, ZoomIn, MessageSquare 
 } from 'lucide-react';
 
-function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCashback }) {
+function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, addVisit, addCashback }) {
   const [activeTab, setActiveTab] = useState('feed'); // 'feed', 'map', 'cashback'
   const [selectedProject, setSelectedProject] = useState(null);
   
@@ -72,12 +72,13 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCa
     }
 
     const newVisit = {
-      id: `visit-${Date.now()}`,
       buyerName: bookingForm.name,
       buyerPhone: bookingForm.phone,
       date: bookingForm.date,
       time: bookingForm.time,
       project: selectedProject.name,
+      projectId: selectedProject.id,
+      projectOwnerId: selectedProject.ownerId || '',
       status: "Scheduled"
     };
 
@@ -87,19 +88,19 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCa
     const existingLead = leads.find(l => l.phone === bookingForm.phone);
     if (!existingLead) {
       const newLead = {
-        id: `lead-${Date.now()}`,
         name: bookingForm.name,
         phone: bookingForm.phone,
         budget: `₹${(selectedProject.startingPrice / 100000).toFixed(0)}L+`,
         stage: "Book Visit",
         date: new Date().toISOString().split('T')[0],
-        project: selectedProject.name
+        project: selectedProject.name,
+        projectId: selectedProject.id,
+        projectOwnerId: selectedProject.ownerId || ''
       };
       addLead(newLead);
     } else {
       // Update existing lead stage
-      existingLead.stage = "Book Visit";
-      existingLead.project = selectedProject.name;
+      updateLead({ ...existingLead, stage: "Book Visit", project: selectedProject.name, projectId: selectedProject.id, projectOwnerId: selectedProject.ownerId || '' });
     }
 
     setBookingSuccess(true);
@@ -123,10 +124,11 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCa
     const cbVal = Math.round(purchaseVal * 0.01);
 
     const newClaim = {
-      id: `cash-${Date.now()}`,
       buyerName: cashbackForm.buyerName,
       buyerPhone: cashbackForm.buyerPhone,
       project: proj ? proj.name : "Custom Project",
+      projectId: proj?.id || '',
+      projectOwnerId: proj?.ownerId || '',
       purchasePrice: purchaseVal,
       cashbackAmount: cbVal,
       commissionAmount: cbVal, // PlotIt keeps 1%
@@ -141,13 +143,14 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCa
     const existingLead = leads.find(l => l.phone === cashbackForm.buyerPhone);
     if (!existingLead) {
       addLead({
-        id: `lead-${Date.now()}`,
         name: cashbackForm.buyerName,
         phone: cashbackForm.buyerPhone,
         budget: `₹${(purchaseVal / 100000).toFixed(0)}L`,
         stage: "Negotiation",
         date: new Date().toISOString().split('T')[0],
-        project: proj ? proj.name : "PlotIt Verified"
+        project: proj ? proj.name : "PlotIt Verified",
+        projectId: proj?.id || '',
+        projectOwnerId: proj?.ownerId || ''
       });
     }
 
@@ -443,7 +446,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCa
                 </p>
               </div>
 
-              {/* Layout view (Pinch & Zoom Simulator) */}
+              {/* Layout plan viewer */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <h4 style={{ fontSize: '13px', fontWeight: '700' }}>Layout Plan</h4>

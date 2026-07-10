@@ -69,106 +69,6 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid rgba(37, 99, 235, 0.1);
 }
 
-/* Simulator Split Layout */
-.app-container {
-  display: flex;
-  width: 100vw;
-  height: 100vh;
-  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
-  overflow: hidden;
-}
-
-/* Left Simulator Column */
-.simulator-pane {
-  flex: 0 0 480px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(160deg, #dbeafe 0%, #eff6ff 60%, #f0f9ff 100%);
-  border-right: 1px solid var(--border-color);
-  position: relative;
-  padding: 20px;
-}
-
-/* Right Dashboard Column */
-.dashboard-pane {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background-color: var(--bg-page);
-  overflow: hidden;
-}
-
-/* Phone Bezel Frame */
-.phone-bezel {
-  width: 375px;
-  height: 780px;
-  background: #fff;
-  border-radius: 44px;
-  padding: 12px;
-  box-shadow:
-    0 0 0 4px #e2e8f0,
-    0 0 0 8px #f1f5f9,
-    0 30px 60px -10px rgba(37, 99, 235, 0.2),
-    0 10px 20px -5px rgba(0, 0, 0, 0.08);
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.phone-notch {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 140px;
-  height: 24px;
-  background: #e2e8f0;
-  border-bottom-left-radius: 18px;
-  border-bottom-right-radius: 18px;
-  z-index: 1000;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.phone-speaker {
-  width: 40px;
-  height: 4px;
-  background: #cbd5e1;
-  border-radius: 2px;
-  margin-bottom: 4px;
-}
-
-.phone-screen {
-  flex: 1;
-  background-color: var(--bg-page);
-  border-radius: 34px;
-  overflow: hidden;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  user-select: none;
-}
-
-/* Mobile PWA */
-@media (max-width: 1023px) {
-  .simulator-pane { display: none; }
-  .dashboard-pane { flex: 1; height: 100vh; }
-  .mobile-only-pwa {
-    display: flex;
-    flex-direction: column;
-    width: 100vw;
-    height: 100vh;
-    position: fixed;
-    top: 0; left: 0;
-    z-index: 9999;
-    background: var(--bg-page);
-  }
-}
-
 /* Leaflet Overrides */
 .leaflet-container {
   width: 100%;
@@ -546,35 +446,16 @@ h1, h2, h3, h4, h5, h6 {
 .badge-info { background-color: #dbeafe; color: #2563eb; }
 .badge-danger { background-color: #fee2e2; color: #dc2626; }
 
-/* Role Quick Toggle (Mobile) */
-.role-quick-toggle {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 9999;
-  background-color: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--border-color);
-  padding: 4px;
-  border-radius: 30px;
-  display: flex;
-  gap: 2px;
-  box-shadow: var(--shadow-md);
-}
-
-.role-quick-btn {
-  padding: 4px 10px;
-  border-radius: 20px;
-  border: none;
-  font-size: 10px;
-  font-weight: 600;
-  background-color: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.role-quick-btn.active {
-  background-color: var(--brand-primary);
-  color: white;
-}
+.live-app { min-height: 100vh; background: var(--bg-page); }
+.live-app-header { min-height: 64px; padding: 12px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #fff; border-bottom: 1px solid var(--border-color); }
+.brand-lockup, .account-actions, .account-actions button { display: flex; align-items: center; gap: 9px; }
+.brand-lockup { color: var(--brand-primary); font-size: 20px; }
+.brand-lockup span { color: var(--text-secondary); background: var(--brand-light); padding: 3px 8px; border-radius: 99px; font-size: 11px; font-weight: 700; text-transform: capitalize; }
+.account-actions { color: var(--text-secondary); font-size: 13px; }
+.account-actions button { border: 1px solid var(--border-color); background: #fff; color: var(--text-primary); border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+.live-app-content { min-height: calc(100vh - 64px); padding: 24px; }
+.buyer-experience .live-app-content { max-width: 760px; margin: 0 auto; padding: 0; min-height: calc(100vh - 64px); }
+.buyer-experience .live-app-content > div { min-height: calc(100vh - 64px); }
+.app-loading { min-height: 100vh; display: grid; place-items: center; color: var(--text-secondary); font-weight: 600; }
+.app-error { margin: 12px auto 0; max-width: 900px; padding: 10px 14px; border-radius: 8px; background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; font-size: 13px; }
+@media (max-width: 640px) { .live-app-header { padding: 10px 14px; } .account-actions span { display: none; } .live-app-content { padding: 14px; } .buyer-experience .live-app-content { padding: 0; } }
