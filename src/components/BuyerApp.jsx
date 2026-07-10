@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 
 function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCashback }) {
-  // Navigation & Screen Control
   const [activeTab, setActiveTab] = useState('feed'); // 'feed', 'map', 'cashback'
   const [selectedProject, setSelectedProject] = useState(null);
   
@@ -192,10 +191,10 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCa
         <div style={{ padding: '14px 16px 8px', background: 'var(--bg-sidebar)', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px', flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Compass size={22} className="text-active" style={{ color: 'var(--brand-primary)' }} />
+              <Compass size={22} style={{ color: 'var(--brand-primary)' }} />
               <div>
-                <h2 style={{ fontSize: '16px', fontFamily: 'var(--font-title)', fontWeight: '800', letterSpacing: '0.5px' }}>
-                  PlotIt <span style={{ color: 'var(--brand-primary)' }}>Chakan</span>
+                <h2 style={{ fontSize: '16px', fontFamily: 'var(--font-title)', fontWeight: '800', letterSpacing: '0.5px', color: 'var(--text-primary)' }}>
+                  Dru<span style={{ color: 'var(--brand-primary)' }}>vio</span>
                 </h2>
                 <p style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Hyperlocal Land Hub</p>
               </div>
@@ -359,7 +358,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCa
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Star size={16} fill="var(--accent-gold)" color="var(--accent-gold)" />
                     <h4 style={{ fontSize: '13px', fontWeight: '800', color: 'var(--accent-gold)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      PlotIt Score
+                      Druvio Score
                     </h4>
                   </div>
                   <div style={{ background: 'var(--accent-gold)', color: 'black', fontWeight: '800', fontSize: '15px', padding: '2px 10px', borderRadius: '20px', fontFamily: 'var(--font-title)' }}>
@@ -583,11 +582,11 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, addVisit, addCa
         ) : activeTab === 'cashback' ? (
           // CASHBACK CLAIM SCREEN
           <div className="fade-in" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ background: 'linear-gradient(135deg, rgba(16,185,129,0.15) 0%, rgba(21,31,50,0.7) 100%)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: '16px', padding: '16px', textAlign: 'center' }}>
+            <div style={{ background: 'var(--brand-light)', border: '1px solid rgba(37,99,235,0.3)', borderRadius: '16px', padding: '16px', textAlign: 'center' }}>
               <Gift size={32} color="var(--brand-primary)" style={{ margin: '0 auto 8px' }} />
               <h3 style={{ fontSize: '15px', fontWeight: '800' }}>1% Plot Purchase Cashback</h3>
               <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4', marginTop: '6px' }}>
-                Bought a plot via PlotIt? Submit your agreement document or token receipt to claim your **1% direct cash cashback** verified by our admin.
+                Bought a plot via Druvio? Submit your agreement document or token receipt to claim your **1% direct cash cashback** verified by our admin.
               </p>
             </div>
 

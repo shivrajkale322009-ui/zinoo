@@ -1,6 +1,6 @@
 {
-  "short_name": "PlotIt",
-  "name": "PlotIt – Hyperlocal Plot Buying Platform",
+  "short_name": "Druvio",
+  "name": "Druvio – Hyperlocal Plot Buying Platform",
   "icons": [
     {
       "src": "/icon.svg",
@@ -16,8 +16,8 @@
     }
   ],
   "start_url": "/",
-  "background_color": "#0f172a",
-  "theme_color": "#10b981",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
   "display": "standalone",
   "orientation": "portrait-primary"
 }

@@ -4,27 +4,27 @@ import BuyerApp from './components/BuyerApp';
 import SellerDashboard from './components/SellerDashboard';
 import AdminPanel from './components/AdminPanel';
 import DatabaseInspector from './components/DatabaseInspector';
-import { Shield, Sparkles, Smartphone, Layers, Layout, RefreshCw } from 'lucide-react';
+import { Layers, RefreshCw } from 'lucide-react';
 
 function App() {
   // Global State (persisted in localStorage)
   const [projects, setProjects] = useState(() => {
-    const saved = localStorage.getItem('plotit_projects');
+    const saved = localStorage.getItem('druvio_projects');
     return saved ? JSON.parse(saved) : initialProjects;
   });
 
   const [leads, setLeads] = useState(() => {
-    const saved = localStorage.getItem('plotit_leads');
+    const saved = localStorage.getItem('druvio_leads');
     return saved ? JSON.parse(saved) : initialLeads;
   });
 
   const [visits, setVisits] = useState(() => {
-    const saved = localStorage.getItem('plotit_visits');
+    const saved = localStorage.getItem('druvio_visits');
     return saved ? JSON.parse(saved) : initialVisits;
   });
 
   const [cashbacks, setCashbacks] = useState(() => {
-    const saved = localStorage.getItem('plotit_cashbacks');
+    const saved = localStorage.getItem('druvio_cashbacks');
     return saved ? JSON.parse(saved) : initialCashbacks;
   });
 
@@ -44,19 +44,19 @@ function App() {
 
   // Sync to LocalStorage
   useEffect(() => {
-    localStorage.setItem('plotit_projects', JSON.stringify(projects));
+    localStorage.setItem('druvio_projects', JSON.stringify(projects));
   }, [projects]);
 
   useEffect(() => {
-    localStorage.setItem('plotit_leads', JSON.stringify(leads));
+    localStorage.setItem('druvio_leads', JSON.stringify(leads));
   }, [leads]);
 
   useEffect(() => {
-    localStorage.setItem('plotit_visits', JSON.stringify(visits));
+    localStorage.setItem('druvio_visits', JSON.stringify(visits));
   }, [visits]);
 
   useEffect(() => {
-    localStorage.setItem('plotit_cashbacks', JSON.stringify(cashbacks));
+    localStorage.setItem('druvio_cashbacks', JSON.stringify(cashbacks));
   }, [cashbacks]);
 
   // Database Reset Handler
@@ -66,10 +66,10 @@ function App() {
       setLeads(initialLeads);
       setVisits(initialVisits);
       setCashbacks(initialCashbacks);
-      localStorage.removeItem('plotit_projects');
-      localStorage.removeItem('plotit_leads');
-      localStorage.removeItem('plotit_visits');
-      localStorage.removeItem('plotit_cashbacks');
+      localStorage.removeItem('druvio_projects');
+      localStorage.removeItem('druvio_leads');
+      localStorage.removeItem('druvio_visits');
+      localStorage.removeItem('druvio_cashbacks');
     }
   };
 
@@ -214,7 +214,7 @@ function App() {
               <Layers size={20} color="white" />
             </div>
             <div>
-              <h1 style={{ fontSize: '18px', lineHeight: '1.2' }}>PlotIt Console</h1>
+              <h1 style={{ fontSize: '18px', lineHeight: '1.2' }}>Druvio Console</h1>
               <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Hyperlocal Backoffice Simulator v1.0</span>
             </div>
           </div>
@@ -238,7 +238,7 @@ function App() {
               <RefreshCw size={14} />
               Reset DB
             </button>
-            <div style={{ fontSize: '11px', background: 'var(--brand-glow)', border: '1px solid var(--brand-primary)', color: 'var(--brand-primary)', padding: '4px 10px', borderRadius: '12px', fontWeight: '500' }}>
+            <div style={{ fontSize: '11px', background: 'var(--brand-light)', border: '1px solid var(--brand-primary)', color: 'var(--brand-primary)', padding: '4px 10px', borderRadius: '12px', fontWeight: '600' }}>
               Connected to Chakan Node
             </div>
           </div>
@@ -246,7 +246,7 @@ function App() {
 
         {/* Console Nav Bar */}
         <div className="dash-nav">
-          <button 
+          <button
             className={`dash-nav-btn ${activeBackofficeTab === 'seller' ? 'active' : ''}`}
             onClick={() => setActiveBackofficeTab('seller')}
           >
