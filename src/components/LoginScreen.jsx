@@ -68,8 +68,9 @@ function LoginScreen({ onLogin }) {
       setConfirmationResult(result);
       setStep('otp');
     } catch (err) {
-      setError('Failed to send OTP. Please check the number and try again.');
-      console.error(err);
+      const errorMessage = `${err?.code || 'otp-error'}: ${err?.message || 'Failed to send OTP. Please try again.'}`;
+      setError(errorMessage);
+      console.error('OTP error:', err);
       if (window.recaptchaVerifier) {
         window.recaptchaVerifier.clear();
         window.recaptchaVerifier = null;
