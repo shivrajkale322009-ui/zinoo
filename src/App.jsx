@@ -11,7 +11,7 @@ import {
   updateDoc,
   where
 } from 'firebase/firestore';
-import { LogOut, MapPin } from 'lucide-react';
+import { MapPin } from 'lucide-react';
 import BuyerApp from './components/BuyerApp';
 import SellerDashboard from './components/SellerDashboard';
 import AdminPanel from './components/AdminPanel';
@@ -167,6 +167,8 @@ function App() {
   if (user && !role) return <div className="app-loading">Loading account…</div>;
   if (!user) return <LoginScreen onLogin={(signedInUser, signedInRole) => { setUser(signedInUser); setRole(signedInRole); }} />;
 
+  const profileName = user.displayName || user.phoneNumber || user.email || 'User';
+  const profileInitial = profileName.trim().charAt(0).toUpperCase() || 'U';
   const content = role === 'admin'
     ? <AdminPanel {...data} updateCashbackStatus={updateCashbackStatus} addProject={addProject} />
     : role === 'seller'
