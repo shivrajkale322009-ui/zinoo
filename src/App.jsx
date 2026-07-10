@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
 import {
   addDoc,
   collection,
@@ -11,7 +11,7 @@ import {
   updateDoc,
   where
 } from 'firebase/firestore';
-import { LogOut, MapPin } from 'lucide-react';
+import { MapPin } from 'lucide-react';
 import BuyerApp from './components/BuyerApp';
 import SellerDashboard from './components/SellerDashboard';
 import AdminPanel from './components/AdminPanel';
@@ -102,6 +102,8 @@ function App() {
   if (user && !role) return <div className="app-loading">Loading account…</div>;
   if (!user) return <LoginScreen onLogin={(signedInUser, signedInRole) => { setUser(signedInUser); setRole(signedInRole); }} />;
 
+  const profileName = user.displayName || user.phoneNumber || user.email || 'User';
+  const profileInitial = profileName.trim().charAt(0).toUpperCase() || 'U';
   const content = role === 'admin'
     ? <AdminPanel {...data} updateCashbackStatus={updateCashbackStatus} addProject={addProject} />
     : role === 'seller'
@@ -113,8 +115,12 @@ function App() {
       <header className="live-app-header">
         <div className="brand-lockup"><MapPin size={21} /><strong>Druvio</strong><span>{role}</span></div>
         <div className="account-actions">
-          <span>{user.displayName || user.phoneNumber || user.email}</span>
-          <button onClick={() => signOut(auth)} aria-label="Sign out"><LogOut size={17} /> Sign out</button>
+          <span>{profileName}</span>
+          <div className="profile-avatar" aria-label={`${profileName} profile`}>
+            {user.photoURL
+              ? <img src={user.photoURL} alt={`${profileName} avatar`} />
+              : <span>{profileInitial}</span>}
+          </div>
         </div>
       </header>
       {error && <div className="app-error" role="alert">{error}</div>}
