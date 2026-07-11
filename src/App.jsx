@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   addDoc,
@@ -19,6 +19,71 @@ import LoginScreen from './components/LoginScreen';
 import { auth, db } from './firebaseConfig';
 
 const collections = ['projects', 'leads', 'visits', 'cashbacks'];
+
+function Avatar({ user, size = 36 }) {
+  const [failed, setFailed] = useState(false);
+  const label = user.displayName || user.phoneNumber || user.email || 'Account';
+  const initials = (user.displayName || user.email || user.phoneNumber || '?').trim().charAt(0).toUpperCase();
+  const sizing = { width: size, height: size, fontSize: Math.round(size * 0.42) };
+
+  if (user.photoURL && !failed) {
+    return (
+      <img
+        className="avatar-img"
+        style={sizing}
+        src={user.photoURL}
+        alt={label}
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return <span className="avatar-fallback" style={sizing}>{initials}</span>;
+}
+
+function AccountMenu({ user }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef(null);
+  const label = user.displayName || user.phoneNumber || user.email || 'Account';
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleClick = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  return (
+    <div className="account-menu" ref={menuRef}>
+      <button
+        type="button"
+        className="avatar-button"
+        onClick={() => setOpen((value) => !value)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Account menu"
+      >
+        <Avatar user={user} size={38} />
+      </button>
+      {open && (
+        <div className="account-dropdown" role="menu">
+          <div className="account-dropdown-header">
+            <Avatar user={user} size={42} />
+            <div className="account-dropdown-meta">
+              <strong>{label}</strong>
+              {user.email && <span>{user.email}</span>}
+            </div>
+          </div>
+          <button type="button" className="account-dropdown-action" role="menuitem" onClick={() => signOut(auth)}>
+            <LogOut size={16} /> Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function App() {
   const [user, setUser] = useState(null);
@@ -112,10 +177,7 @@ function App() {
     <main className={`live-app ${role === 'buyer' ? 'buyer-experience' : 'backoffice-experience'}`}>
       <header className="live-app-header">
         <div className="brand-lockup"><MapPin size={21} /><strong>Druvio</strong><span>{role}</span></div>
-        <div className="account-actions">
-          <span>{user.displayName || user.phoneNumber || user.email}</span>
-          <button onClick={() => signOut(auth)} aria-label="Sign out"><LogOut size={17} /> Sign out</button>
-        </div>
+        <AccountMenu user={user} />
       </header>
       {error && <div className="app-error" role="alert">{error}</div>}
       <section className="live-app-content">{content}</section>
