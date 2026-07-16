@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import BuyerMap from './BuyerMap';
-import { 
-  Search, Filter, Map, List, Compass, Star, ChevronLeft, Calendar, 
-  MapPin, Gift, Phone, Check, RefreshCw, X, Download, ZoomIn, MessageSquare 
+import {
+  Search, Filter, Map, List, Compass, Star, ChevronLeft, Calendar,
+  MapPin, Gift, Phone, Check, RefreshCw, X, Download, ZoomIn, MessageSquare
 } from 'lucide-react';
 
 function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, addVisit, addCashback }) {
   const [activeTab, setActiveTab] = useState('feed'); // 'feed', 'map', 'cashback'
   const [selectedProject, setSelectedProject] = useState(null);
-  
+
   // Filter Drawer & Search State
   const [showFilters, setShowFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -35,30 +35,31 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
   // Filter Logic
   const filteredProjects = projects.filter(p => {
+    // Only show approved properties
+    const isApproved = p.status === 'approved';
+    if (!isApproved) return false;
+
     // Search query matches project name, village, area, developer
     const q = searchQuery.toLowerCase();
-    const matchesSearch = !searchQuery || 
-      p.name.toLowerCase().includes(q) || 
-      p.village.toLowerCase().includes(q) || 
-      p.area.toLowerCase().includes(q) || 
+    const matchesSearch = !searchQuery ||
+      p.name.toLowerCase().includes(q) ||
+      p.village.toLowerCase().includes(q) ||
+      p.area.toLowerCase().includes(q) ||
       p.developer.toLowerCase().includes(q);
 
     // Budget
     const matchesBudget = p.startingPrice <= filters.budgetMax;
-    
+
     // Distance
     const matchesDistance = p.distance <= filters.distanceMax;
-    
+
     // Size
     const matchesSize = p.sizeMin >= filters.minSize;
-    
-    // Facing
-    const matchesFacing = filters.facing === 'Any' || p.facing.includes(filters.facing);
-    
+
     // Status filters
     const matchesBankLoan = !filters.bankLoan || p.bankLoan;
     const matchesNaPlot = !filters.naPlot || p.naPlot;
-    const matchesScore = p.plotItScore >= filters.minScore;
+    const matchesScore = p.DruvioScore >= filters.minScore;
 
     return matchesSearch && matchesBudget && matchesDistance && matchesSize && matchesFacing && matchesBankLoan && matchesNaPlot && matchesScore;
   });
@@ -131,7 +132,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
       projectOwnerId: proj?.ownerId || '',
       purchasePrice: purchaseVal,
       cashbackAmount: cbVal,
-      commissionAmount: cbVal, // PlotIt keeps 1%
+      commissionAmount: cbVal, // Druvio keeps 1%
       documentName: cashbackForm.documentName,
       submittedAt: new Date().toISOString().split('T')[0],
       status: "Pending Verification"
@@ -148,7 +149,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
         budget: `₹${(purchaseVal / 100000).toFixed(0)}L`,
         stage: "Negotiation",
         date: new Date().toISOString().split('T')[0],
-        project: proj ? proj.name : "PlotIt Verified",
+        project: proj ? proj.name : "Druvio Verified",
         projectId: proj?.id || '',
         projectOwnerId: proj?.ownerId || ''
       });
@@ -172,7 +173,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', position: 'relative' }}>
-      
+
       {/* PHONE STATUS BAR SPACE */}
       <div style={{ height: '24px', background: '#0b0f19', flexShrink: 0 }} />
 
@@ -184,7 +185,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
             <span style={{ fontSize: '14px', fontWeight: '600', marginLeft: '4px' }}>Back</span>
           </button>
           <div style={{ fontSize: '13px', fontWeight: '800', fontFamily: 'var(--font-title)', color: 'var(--brand-primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            PlotIt
+            Druvio
           </div>
           <a href={`https://wa.me/919999999999?text=Hi, I am interested in ${encodeURIComponent(selectedProject.name)}`} target="_blank" rel="noreferrer" style={{ display: 'flex', padding: '6px', background: '#128C7E', borderRadius: '50%', color: 'white' }}>
             <MessageSquare size={16} />
@@ -202,7 +203,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                 <p style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Hyperlocal Land Hub</p>
               </div>
             </div>
-            <button 
+            <button
               onClick={() => setActiveTab(activeTab === 'map' ? 'feed' : 'map')}
               style={{
                 display: 'flex',
@@ -227,9 +228,9 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
             <div style={{ display: 'flex', gap: '8px' }}>
               <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
                 <Search size={14} style={{ position: 'absolute', left: '10px', color: 'var(--text-muted)' }} />
-                <input 
-                  type="text" 
-                  placeholder="Search village, project, builder..." 
+                <input
+                  type="text"
+                  placeholder="Search village, project, builder..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   style={{
@@ -244,14 +245,14 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                   }}
                 />
                 {searchQuery && (
-                  <X 
-                    size={12} 
+                  <X
+                    size={12}
                     onClick={() => setSearchQuery('')}
-                    style={{ position: 'absolute', right: '10px', color: 'var(--text-muted)', cursor: 'pointer' }} 
+                    style={{ position: 'absolute', right: '10px', color: 'var(--text-muted)', cursor: 'pointer' }}
                   />
                 )}
               </div>
-              <button 
+              <button
                 onClick={() => setShowFilters(true)}
                 style={{
                   background: 'var(--bg-input)',
@@ -274,26 +275,26 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
       {/* CORE VIEW AREA */}
       <div style={{ flex: 1, overflowY: 'auto', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-        
+
         {/* DETAIL SCREEN OVERLAY */}
         {selectedProject ? (
           <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-dark)' }}>
-            
+
             {/* HERO HERO IMAGE */}
             <div style={{ position: 'relative', width: '100%', height: '180px', flexShrink: 0 }}>
-              <img 
-                src={selectedProject.heroImage} 
-                alt={selectedProject.name} 
+              <img
+                src={selectedProject.heroImage}
+                alt={selectedProject.name}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
               <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '80px', background: 'linear-gradient(to top, rgba(11,15,25,1) 0%, rgba(11,15,25,0) 100%)' }} />
-              
+
               {/* Floating Verified Tag */}
-              <div 
-                style={{ 
-                  position: 'absolute', 
-                  top: '12px', 
-                  left: '12px', 
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '12px',
+                  left: '12px',
                   background: selectedProject.verified ? 'var(--color-active)' : 'var(--color-sold)',
                   color: 'white',
                   fontSize: '9px',
@@ -308,11 +309,11 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               </div>
 
               {/* Status Badge */}
-              <div 
-                style={{ 
-                  position: 'absolute', 
-                  top: '12px', 
-                  right: '12px', 
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '12px',
+                  right: '12px',
                   background: selectedProject.status === 'Active' ? 'rgba(34,197,94,0.95)' : 'rgba(100,116,139,0.95)',
                   color: 'white',
                   fontSize: '9px',
@@ -328,7 +329,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
             {/* DETAIL DATA CONTENT */}
             <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              
+
               {/* Title & Price Header */}
               <div>
                 <h3 style={{ fontSize: '18px', fontWeight: '800', lineHeight: '1.2' }}>{selectedProject.name}</h3>
@@ -348,13 +349,13 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                 </div>
               </div>
 
-              {/* USP SIGNATURE FEATURE: PlotIt Score Card */}
-              <div 
-                style={{ 
-                  background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(21, 31, 50, 0.7) 100%)', 
-                  border: '1px solid rgba(245, 158, 11, 0.25)', 
-                  borderRadius: '16px', 
-                  padding: '16px' 
+              {/* USP SIGNATURE FEATURE: Druvio Score Card */}
+              <div
+                style={{
+                  background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(21, 31, 50, 0.7) 100%)',
+                  border: '1px solid rgba(245, 158, 11, 0.25)',
+                  borderRadius: '16px',
+                  padding: '16px'
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
@@ -365,10 +366,10 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                     </h4>
                   </div>
                   <div style={{ background: 'var(--accent-gold)', color: 'black', fontWeight: '800', fontSize: '15px', padding: '2px 10px', borderRadius: '20px', fontFamily: 'var(--font-title)' }}>
-                    {selectedProject.plotItScore} / 100
+                    {selectedProject.DruvioScore} / 100
                   </div>
                 </div>
-                
+
                 <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4', marginBottom: '12px' }}>
                   Objective benchmark analyzing safety, facilities, connectivity, and local market price value.
                 </p>
@@ -453,9 +454,9 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Tap image to simulate zoom</span>
                 </div>
                 <div className="layout-image-container">
-                  <img 
-                    src={selectedProject.layoutPlanUrl} 
-                    alt="Layout Plan" 
+                  <img
+                    src={selectedProject.layoutPlanUrl}
+                    alt="Layout Plan"
                     className={`layout-image ${layoutZoomed ? 'zoomed' : ''}`}
                     onClick={() => setLayoutZoomed(!layoutZoomed)}
                   />
@@ -465,7 +466,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                  <button 
+                  <button
                     onClick={() => alert("Downloading PDF Layout copy to mobile storage...")}
                     style={{
                       flex: 1,
@@ -530,8 +531,8 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               {/* CTA Booking bar */}
               {selectedProject.status === 'Active' ? (
                 <div style={{ display: 'flex', gap: '10px', position: 'sticky', bottom: 0, background: 'var(--bg-dark)', padding: '10px 0 0 0', borderTop: '1px solid var(--border-color)' }}>
-                  <a 
-                    href={`https://wa.me/919999999999?text=Hello,%20I%20want%20to%20know%20more%20about%20your%20plotting%20project%20"${encodeURIComponent(selectedProject.name)}"%20listed%20on%20PlotIt.`}
+                  <a
+                    href={`https://wa.me/919999999999?text=Hello,%20I%20want%20to%20know%20more%20about%20your%20plotting%20project%20"${encodeURIComponent(selectedProject.name)}"%20listed%20on%20Druvio.`}
                     target="_blank"
                     rel="noreferrer"
                     style={{
@@ -554,9 +555,9 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                     <MessageSquare size={16} />
                     WhatsApp Dev
                   </a>
-                  <button 
+                  <button
                     onClick={() => setShowBookingModal(true)}
-                    className="btn-primary" 
+                    className="btn-primary"
                     style={{ flex: 1.5, padding: '12px 10px', fontSize: '12px' }}
                   >
                     <Calendar size={16} />
@@ -576,8 +577,8 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
         ) : activeTab === 'map' ? (
           // INTERACTIVE MAP SCREEN
           <div style={{ flex: 1, width: '100%', height: '100%', position: 'relative' }}>
-            <BuyerMap 
-              projects={filteredProjects} 
+            <BuyerMap
+              projects={filteredProjects}
               onSelectProject={setSelectedProject}
               selectedProject={null}
             />
@@ -595,10 +596,10 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
             <form onSubmit={handleCashbackSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Select PlotIt Project</label>
-                <select 
-                  className="form-input" 
-                  value={cashbackForm.projectId} 
+                <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Select Druvio Project</label>
+                <select
+                  className="form-input"
+                  value={cashbackForm.projectId}
                   onChange={(e) => setCashbackForm({ ...cashbackForm, projectId: e.target.value })}
                 >
                   <option value="">-- Choose Project --</option>
@@ -610,9 +611,9 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
               <div>
                 <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Purchaser Full Name</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
+                <input
+                  type="text"
+                  className="form-input"
                   placeholder="Enter name matching agreement"
                   value={cashbackForm.buyerName}
                   onChange={(e) => setCashbackForm({ ...cashbackForm, buyerName: e.target.value })}
@@ -621,9 +622,9 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
               <div>
                 <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Purchaser Phone Number</label>
-                <input 
-                  type="tel" 
-                  className="form-input" 
+                <input
+                  type="tel"
+                  className="form-input"
                   placeholder="Enter registered mobile"
                   value={cashbackForm.buyerPhone}
                   onChange={(e) => setCashbackForm({ ...cashbackForm, buyerPhone: e.target.value })}
@@ -632,9 +633,9 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
               <div>
                 <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Plot Purchase Price (₹)</label>
-                <input 
-                  type="number" 
-                  className="form-input" 
+                <input
+                  type="number"
+                  className="form-input"
                   placeholder="Example: 1200000"
                   value={cashbackForm.purchasePrice}
                   onChange={(e) => setCashbackForm({ ...cashbackForm, purchasePrice: e.target.value })}
@@ -644,7 +645,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               <div>
                 <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Upload Purchase Receipt / Agreement</label>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <button 
+                  <button
                     type="button"
                     onClick={() => {
                       const name = prompt("Enter simulated file name:", "plot_agreement_stamp.pdf");
@@ -699,8 +700,8 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               </div>
             ) : (
               filteredProjects.map((project) => (
-                <div 
-                  key={project.id} 
+                <div
+                  key={project.id}
                   onClick={() => setSelectedProject(project)}
                   style={{
                     background: 'var(--bg-card)',
@@ -717,19 +718,19 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                 >
                   {/* Card Image banner */}
                   <div style={{ height: '140px', width: '100%', position: 'relative' }}>
-                    <img 
-                      src={project.heroImage} 
-                      alt={project.name} 
+                    <img
+                      src={project.heroImage}
+                      alt={project.name}
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                     />
-                    
-                    {/* PlotIt Score floating badge */}
-                    <div 
-                      style={{ 
-                        position: 'absolute', 
-                        bottom: '10px', 
-                        right: '10px', 
-                        background: 'rgba(15,23,42,0.9)', 
+
+                    {/* Druvio Score floating badge */}
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: '10px',
+                        right: '10px',
+                        background: 'rgba(15,23,42,0.9)',
                         backdropFilter: 'blur(4px)',
                         border: '1px solid rgba(245,158,11,0.4)',
                         color: 'var(--accent-gold)',
@@ -743,16 +744,16 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                       }}
                     >
                       <Star size={10} fill="var(--accent-gold)" color="var(--accent-gold)" />
-                      {project.plotItScore}
+                      {project.DruvioScore}
                     </div>
 
                     {/* Verified stamp */}
-                    <div 
-                      style={{ 
-                        position: 'absolute', 
-                        top: '10px', 
-                        left: '10px', 
-                        background: 'rgba(16, 185, 129, 0.9)', 
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '10px',
+                        left: '10px',
+                        background: 'rgba(16, 185, 129, 0.9)',
                         color: 'white',
                         padding: '2px 8px',
                         borderRadius: '12px',
@@ -797,21 +798,21 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
       {/* FOOTER TAB NAV BAR */}
       {!selectedProject && (
         <div className="buyer-nav">
-          <div 
+          <div
             className={`buyer-nav-item ${activeTab === 'feed' ? 'active' : ''}`}
             onClick={() => setActiveTab('feed')}
           >
             <Compass size={18} />
             <span>Explore Plots</span>
           </div>
-          <div 
+          <div
             className={`buyer-nav-item ${activeTab === 'map' ? 'active' : ''}`}
             onClick={() => setActiveTab('map')}
           >
             <Map size={18} />
             <span>Map Center</span>
           </div>
-          <div 
+          <div
             className={`buyer-nav-item ${activeTab === 'cashback' ? 'active' : ''}`}
             onClick={() => setActiveTab('cashback')}
           >
@@ -823,8 +824,8 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
       {/* FILTER DRAWER SLIDE-UP */}
       {showFilters && (
-        <div 
-          className="fade-in" 
+        <div
+          className="fade-in"
           style={{
             position: 'absolute',
             top: 0,
@@ -837,7 +838,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
             alignItems: 'flex-end'
           }}
         >
-          <div 
+          <div
             className="slide-up"
             style={{
               width: '100%',
@@ -854,7 +855,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '15px', fontWeight: '800' }}>Filter Plot Listings</h3>
-              <button 
+              <button
                 onClick={() => setShowFilters(false)}
                 style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
               >
@@ -863,16 +864,16 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '350px', overflowY: 'auto', paddingRight: '4px' }}>
-              
+
               {/* Budget Range */}
               <div>
                 <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                   Max Budget: <strong style={{ color: 'var(--brand-primary)' }}>{formatINR(filters.budgetMax)}</strong>
                 </label>
-                <input 
-                  type="range" 
-                  min="800000" 
-                  max="3000000" 
+                <input
+                  type="range"
+                  min="800000"
+                  max="3000000"
                   step="100000"
                   value={filters.budgetMax}
                   onChange={(e) => setFilters({ ...filters, budgetMax: parseInt(e.target.value) })}
@@ -885,10 +886,10 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                 <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                   Max Distance: <strong style={{ color: 'var(--brand-primary)' }}>{filters.distanceMax} km</strong>
                 </label>
-                <input 
-                  type="range" 
-                  min="1" 
-                  max="10" 
+                <input
+                  type="range"
+                  min="1"
+                  max="10"
                   step="1"
                   value={filters.distanceMax}
                   onChange={(e) => setFilters({ ...filters, distanceMax: parseInt(e.target.value) })}
@@ -899,8 +900,8 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               {/* Facing */}
               <div>
                 <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Plot Facing</label>
-                <select 
-                  className="form-input" 
+                <select
+                  className="form-input"
                   value={filters.facing}
                   onChange={(e) => setFilters({ ...filters, facing: e.target.value })}
                 >
@@ -914,10 +915,10 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               {/* Score benchmark */}
               <div>
                 <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Min PlotIt Score: <strong style={{ color: 'var(--accent-gold)' }}>{filters.minScore}+</strong>
+                  Min Druvio Score: <strong style={{ color: 'var(--accent-gold)' }}>{filters.minScore}+</strong>
                 </label>
-                <select 
-                  className="form-input" 
+                <select
+                  className="form-input"
                   value={filters.minScore}
                   onChange={(e) => setFilters({ ...filters, minScore: parseInt(e.target.value) })}
                 >
@@ -931,9 +932,9 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               {/* Legal/Verified Toggles */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={filters.naPlot} 
+                  <input
+                    type="checkbox"
+                    checked={filters.naPlot}
                     onChange={(e) => setFilters({ ...filters, naPlot: e.target.checked })}
                     style={{ accentColor: 'var(--brand-primary)' }}
                   />
@@ -941,9 +942,9 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                 </label>
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={filters.bankLoan} 
+                  <input
+                    type="checkbox"
+                    checked={filters.bankLoan}
                     onChange={(e) => setFilters({ ...filters, bankLoan: e.target.checked })}
                     style={{ accentColor: 'var(--brand-primary)' }}
                   />
@@ -953,7 +954,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
             </div>
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-              <button 
+              <button
                 onClick={() => {
                   setFilters({
                     budgetMax: 3000000,
@@ -971,7 +972,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               >
                 Reset All
               </button>
-              <button 
+              <button
                 onClick={() => setShowFilters(false)}
                 className="btn-primary"
                 style={{ flex: 1, padding: '10px' }}
@@ -985,8 +986,8 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
       {/* BOOK SITE VISIT MODAL */}
       {showBookingModal && (
-        <div 
-          className="fade-in" 
+        <div
+          className="fade-in"
           style={{
             position: 'absolute',
             top: 0,
@@ -1001,7 +1002,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
             padding: '16px'
           }}
         >
-          <div 
+          <div
             style={{
               width: '100%',
               maxWidth: '320px',
@@ -1016,7 +1017,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '14px', fontWeight: '800' }}>Schedule Site Visit</h3>
-              <button 
+              <button
                 onClick={() => setShowBookingModal(false)}
                 style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
               >
@@ -1035,41 +1036,41 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
             ) : (
               <form onSubmit={handleBookVisit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <p style={{ fontSize: '10px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-                  A PlotIt field executive will meet you at the site location of **{selectedProject.name}** and show you the exact physical plot boundaries.
+                  A Druvio field executive will meet you at the site location of **{selectedProject.name}** and show you the exact physical plot boundaries.
                 </p>
 
                 <div>
-                  <input 
-                    type="text" 
-                    placeholder="Your Name" 
-                    className="form-input" 
-                    required 
+                  <input
+                    type="text"
+                    placeholder="Your Name"
+                    className="form-input"
+                    required
                     value={bookingForm.name}
                     onChange={(e) => setBookingForm({ ...bookingForm, name: e.target.value })}
                   />
                 </div>
                 <div>
-                  <input 
-                    type="tel" 
-                    placeholder="Mobile Number" 
-                    className="form-input" 
-                    required 
+                  <input
+                    type="tel"
+                    placeholder="Mobile Number"
+                    className="form-input"
+                    required
                     value={bookingForm.phone}
                     onChange={(e) => setBookingForm({ ...bookingForm, phone: e.target.value })}
                   />
                 </div>
                 <div>
-                  <input 
-                    type="date" 
-                    className="form-input" 
+                  <input
+                    type="date"
+                    className="form-input"
                     required
                     value={bookingForm.date}
                     onChange={(e) => setBookingForm({ ...bookingForm, date: e.target.value })}
                   />
                 </div>
                 <div>
-                  <select 
-                    className="form-input" 
+                  <select
+                    className="form-input"
                     value={bookingForm.time}
                     onChange={(e) => setBookingForm({ ...bookingForm, time: e.target.value })}
                   >

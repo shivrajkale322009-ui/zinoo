@@ -1,57 +1,127 @@
-import React, { useState } from 'react';
-import { 
-  Building, Users, PhoneCall, Calendar, Plus, Save, 
-  MapPin, CheckSquare, Edit, IndianRupee, Layers, Check 
+import React, { useMemo, useState } from 'react';
+import {
+  ArrowRight,
+  ArrowLeft,
+  BarChart3,
+  Building,
+  Calendar,
+  Check,
+  ClipboardList,
+  Edit,
+  IndianRupee,
+  Layers,
+  LayoutDashboard,
+  ListPlus,
+  MapPin,
+  MessageSquareMore,
+  PhoneCall,
+  Plus,
+  ShieldCheck,
+  ShieldX,
+  Save,
+  User,
+  Users
 } from 'lucide-react';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebaseConfig';
+import EditProfileModal from './EditProfileModal';
 
-function SellerDashboard({ projects, leads, visits, updateProject, addProject }) {
-  const [activeTab, setActiveTab] = useState('listings'); // 'listings', 'add', 'leads', 'visits'
+const createProjectDraft = (developer) => ({
+  name: '',
+  developer: developer || 'Shivraj Land Developers',
+  village: 'Chakan',
+  area: '',
+  latitude: 18.7889,
+  longitude: 73.8568,
+  startingPrice: 1000000,
+  pricePerSqFt: 1000,
+  distance: 3.5,
+  remainingPlots: 20,
+  totalPlots: 40,
+  sizeMin: 1200,
+  sizeMax: 2400,
+  facing: 'East, North',
+  bankLoan: true,
+  naPlot: true,
+  verified: true,
+  amenities: 'Water Supply Connection, Electricity Line, 9m Tar Road, Street Lights',
+  nearbySchools: '',
+  nearbyHospitals: '',
+  nearbyMIDC: '',
+  nearbyHighway: '',
+  description: '',
+  heroImage: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80',
+  layoutPlanUrl: 'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=800&q=80'
+});
+
+const toNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const formatLakhs = (value) => `₹${(toNumber(value) / 100000).toFixed(1)}L`;
+
+const stageClassName = (stage) => {
+  if (stage === 'Purchased') return 'badge-success';
+  if (stage === 'Visit Done') return 'badge-info';
+  if (stage === 'Book Visit' || stage === 'Scheduled') return 'badge-warning';
+  return 'badge-danger';
+};
+
+const getProjectBadgeClass = (status) => {
+  if (status === 'approved' || status === 'Active') return 'badge-success';
+  if (status === 'rejected' || status === 'Sold Out') return 'badge-danger';
+  return 'badge-warning';
+};
+
+const formatProjectStatus = (status) => {
+  if (status === 'approved') return 'Approved';
+  if (status === 'pending_review') return 'Pending Review';
+  if (status === 'rejected') return 'Rejected';
+  return status || 'Active';
+};
+
+function SellerDashboard({
+  projects,
+  leads,
+  visits,
+  updateProject,
+  addProject,
+  isAdminView = false,
+  selectedSeller = null,
+  onBackToAdmin,
+  onSelectedSellerChange
+}) {
+  const [activeTab, setActiveTab] = useState('listings');
   const [editingProject, setEditingProject] = useState(null);
-
-  // New Project Form State
-  const [newProject, setNewProject] = useState({
-    name: '',
-    developer: 'Shivraj Land Developers',
-    village: 'Chakan',
-    area: '',
-    latitude: 18.7889,
-    longitude: 73.8568,
-    startingPrice: 1000000,
-    pricePerSqFt: 1000,
-    distance: 3.5,
-    remainingPlots: 20,
-    totalPlots: 40,
-    sizeMin: 1200,
-    sizeMax: 2400,
-    facing: 'East, North',
-    bankLoan: true,
-    naPlot: true,
-    verified: true,
-    amenities: 'Water Supply Connection, Electricity Line, 9m Tar Road, Street Lights',
-    nearbySchools: '',
-    nearbyHospitals: '',
-    nearbyMIDC: '',
-    nearbyHighway: '',
-    description: '',
-    heroImage: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80',
-    layoutPlanUrl: 'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=800&q=80'
-  });
-
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showSellerProfileEditor, setShowSellerProfileEditor] = useState(false);
 
-  // Filter listings by Developer
-  const developerName = 'Shivraj Land Developers';
-  const myProjects = projects.filter(p => p.developer === developerName);
+  const developerName = projects[0]?.developer || 'Shivraj Land Developers';
+  const [newProject, setNewProject] = useState(() => createProjectDraft(developerName));
 
-  // Leads and visits for this developer's projects
-  const myProjectNames = myProjects.map(p => p.name);
-  const myLeads = leads.filter(l => myProjectNames.includes(l.project) || l.project === "PlotIt Verified");
-  const myVisits = visits.filter(v => myProjectNames.includes(v.project));
+  const myProjects = useMemo(() => projects, [projects]);
+  const myLeads = useMemo(() => leads, [leads]);
+  const myVisits = useMemo(() => visits, [visits]);
 
-  // Metrics
-  const totalPlotsForSale = myProjects.reduce((acc, p) => acc + p.remainingPlots, 0);
+  const totalPlotsForSale = useMemo(
+    () => myProjects.reduce((acc, project) => acc + toNumber(project.remainingPlots), 0),
+    [myProjects]
+  );
+  const totalInventory = useMemo(
+    () => myProjects.reduce((acc, project) => acc + toNumber(project.totalPlots), 0),
+    [myProjects]
+  );
   const totalLeads = myLeads.length;
-  const pendingVisits = myVisits.filter(v => v.status === "Scheduled").length;
+  const pendingVisits = myVisits.filter((visit) => visit.status === 'Scheduled').length;
+  const pendingReviewCount = myProjects.filter((project) => project.status === 'pending_review').length;
+  const conversionRate = totalLeads ? Math.round((myLeads.filter((lead) => lead.stage === 'Purchased').length / totalLeads) * 100) : 0;
+  const fillRate = totalInventory ? Math.round((totalPlotsForSale / totalInventory) * 100) : 0;
+
+  const showToast = () => {
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 2200);
+  };
 
   const handleEditClick = (project) => {
     setEditingProject({ ...project });
@@ -59,483 +129,657 @@ function SellerDashboard({ projects, leads, visits, updateProject, addProject })
 
   const handleEditSave = (e) => {
     e.preventDefault();
-    updateProject(editingProject);
+    updateProject({
+      ...editingProject,
+      startingPrice: toNumber(editingProject.startingPrice),
+      pricePerSqFt: toNumber(editingProject.pricePerSqFt),
+      remainingPlots: toNumber(editingProject.remainingPlots),
+      totalPlots: toNumber(editingProject.totalPlots),
+      status: isAdminView ? editingProject.status : 'pending_review'
+    });
     setEditingProject(null);
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 2000);
+    showToast();
+  };
+
+  const handleApproveProject = async (projectId) => {
+    await updateDoc(doc(db, 'projects', projectId), {
+      status: 'approved',
+      reviewedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+    showToast();
+  };
+
+  const handleRejectProject = async (projectId) => {
+    await updateDoc(doc(db, 'projects', projectId), {
+      status: 'rejected',
+      reviewedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+    showToast();
   };
 
   const handleAddProject = (e) => {
     e.preventDefault();
-    if (!newProject.name || !newProject.area) {
-      alert("Please fill name and area!");
-      return;
-    }
+    if (!newProject.name.trim() || !newProject.area.trim()) return;
 
     const createdProject = {
-      name: newProject.name,
+      name: newProject.name.trim(),
       developer: newProject.developer,
-      village: newProject.village,
-      area: newProject.area,
-      coords: [parseFloat(newProject.latitude), parseFloat(newProject.longitude)],
-      startingPrice: parseInt(newProject.startingPrice),
-      pricePerSqFt: parseInt(newProject.pricePerSqFt),
-      distance: parseFloat(newProject.distance),
-      remainingPlots: parseInt(newProject.remainingPlots),
-      totalPlots: parseInt(newProject.totalPlots),
-      sizeMin: parseInt(newProject.sizeMin),
-      sizeMax: parseInt(newProject.sizeMax),
-      facing: newProject.facing.split(',').map(f => f.trim()),
+      village: newProject.village.trim(),
+      area: newProject.area.trim(),
+      coords: [toNumber(newProject.latitude, 18.7889), toNumber(newProject.longitude, 73.8568)],
+      startingPrice: toNumber(newProject.startingPrice),
+      pricePerSqFt: toNumber(newProject.pricePerSqFt),
+      distance: toNumber(newProject.distance),
+      remainingPlots: toNumber(newProject.remainingPlots),
+      totalPlots: toNumber(newProject.totalPlots),
+      sizeMin: toNumber(newProject.sizeMin),
+      sizeMax: toNumber(newProject.sizeMax),
+      facing: newProject.facing.split(',').map((face) => face.trim()).filter(Boolean),
       bankLoan: newProject.bankLoan,
       naPlot: newProject.naPlot,
       verified: newProject.verified,
-      amenities: newProject.amenities.split(',').map(a => a.trim()),
+      amenities: newProject.amenities.split(',').map((item) => item.trim()).filter(Boolean),
       nearby: {
-        schools: newProject.nearbySchools || "ZP School (2.0 km)",
-        hospitals: newProject.nearbyHospitals || "Rural Hospital (3.0 km)",
-        midc: newProject.nearbyMIDC || "Chakan MIDC (1.5 km)",
-        highway: newProject.nearbyHighway || "Pune-Nashik Highway (2.0 km)"
+        schools: newProject.nearbySchools || 'ZP School (2.0 km)',
+        hospitals: newProject.nearbyHospitals || 'Rural Hospital (3.0 km)',
+        midc: newProject.nearbyMIDC || 'Chakan MIDC (1.5 km)',
+        highway: newProject.nearbyHighway || 'Pune-Nashik Highway (2.0 km)'
       },
-      updated: "Just Now",
-      status: "Active",
+      updated: 'Just now',
+      status: isAdminView ? 'approved' : 'pending_review',
       heroImage: newProject.heroImage,
-      description: newProject.description || "Freshly listed residential plotting development near Chakan.",
-      layoutPlanUrl: newProject.layoutPlanUrl
+      description: newProject.description || 'Freshly listed residential plotting development near Chakan.',
+      layoutPlanUrl: newProject.layoutPlanUrl,
+      DruvioScore: 4.6
     };
 
     addProject(createdProject);
-    setSaveSuccess(true);
-    
-    // Reset form
-    setNewProject({
-      name: '',
-      developer: 'Shivraj Land Developers',
-      village: 'Chakan',
-      area: '',
-      latitude: 18.7889,
-      longitude: 73.8568,
-      startingPrice: 1000000,
-      pricePerSqFt: 1000,
-      distance: 3.5,
-      remainingPlots: 20,
-      totalPlots: 40,
-      sizeMin: 1200,
-      sizeMax: 2400,
-      facing: 'East, North',
-      bankLoan: true,
-      naPlot: true,
-      verified: true,
-      amenities: 'Water Supply Connection, Electricity Line, 9m Tar Road, Street Lights',
-      nearbySchools: '',
-      nearbyHospitals: '',
-      nearbyMIDC: '',
-      nearbyHighway: '',
-      description: '',
-      heroImage: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80',
-      layoutPlanUrl: 'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=800&q=80'
-    });
+    setNewProject(createProjectDraft(developerName));
+    setActiveTab('listings');
+    showToast();
+  };
 
-    setTimeout(() => {
-      setSaveSuccess(false);
-      setActiveTab('listings');
-    }, 2000);
+  const metrics = isAdminView
+    ? [
+      {
+        label: 'Seller Projects',
+        value: myProjects.length,
+        helper: developerName,
+        icon: <Building size={20} color="var(--brand-primary)" />
+      },
+      {
+        label: 'Remaining Inventory',
+        value: totalPlotsForSale,
+        helper: totalInventory ? `${fillRate}% of layout still sellable` : 'Unsold plots',
+        icon: <Layers size={20} color="var(--accent-gold)" />
+      },
+      {
+        label: 'Approved Listings',
+        value: myProjects.filter((project) => project.status === 'approved' || project.status === 'Active').length,
+        helper: 'Visible to buyers',
+        icon: <ShieldCheck size={20} color="#10b981" />
+      },
+      {
+        label: 'Pending Review',
+        value: pendingReviewCount,
+        helper: 'Awaiting admin action',
+        icon: <ClipboardList size={20} color="#a855f7" />
+      }
+    ]
+    : [
+      {
+        label: 'Active Projects',
+        value: myProjects.length,
+        helper: developerName,
+        icon: <Building size={20} color="var(--brand-primary)" />
+      },
+      {
+        label: 'Remaining Inventory',
+        value: totalPlotsForSale,
+        helper: totalInventory ? `${fillRate}% of layout still sellable` : 'Unsold plots',
+        icon: <Layers size={20} color="var(--accent-gold)" />
+      },
+      {
+        label: 'Total Platform Leads',
+        value: totalLeads,
+        helper: totalLeads ? `${conversionRate}% converted so far` : 'Buyer enquiries tracked in Druvio',
+        icon: <Users size={20} color="#3b82f6" />
+      },
+      {
+        label: 'Booked Site Visits',
+        value: pendingVisits,
+        helper: myVisits.length ? `${myVisits.length} total visits tracked` : 'Scheduled visits',
+        icon: <Calendar size={20} color="#a855f7" />
+      }
+    ];
+
+  const onboardingItems = [
+    'Add your first project with location, price, and inventory.',
+    'Upload clear layout plan and hero image for better trust.',
+    'Keep pricing and approval status updated as soon as the listing goes live.'
+  ];
+
+  const selectTab = (tab) => {
+    setActiveTab(tab);
+    setEditingProject(null);
   };
 
   return (
-    <div>
-      {/* Metrics Row */}
-      <div className="metric-grid">
-        <div className="metric-card">
-          <div className="metric-title">Active Projects</div>
-          <div className="metric-value" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Building size={20} color="var(--brand-primary)" />
-            {myProjects.length}
+    <div className="seller-dashboard seller-workspace">
+      <aside className="seller-desktop-sidebar" aria-label="Seller workspace navigation">
+        <div className="seller-sidebar-brand">
+          <div className="seller-brand-mark"><Building size={19} /></div>
+          <div>
+            <span>Druvio</span>
+            <strong>Seller studio</strong>
           </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Shivraj Developers</span>
         </div>
-        <div className="metric-card">
-          <div className="metric-title">Remaining Inventory</div>
-          <div className="metric-value" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Layers size={20} color="var(--accent-gold)" />
-            {totalPlotsForSale}
+
+        <div className="seller-sidebar-account">
+          <span className="seller-sidebar-avatar">{developerName.charAt(0)}</span>
+          <div>
+            <strong>{developerName}</strong>
+            <span>Property partner</span>
           </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Unsold Plots</span>
         </div>
-        <div className="metric-card">
-          <div className="metric-title">Total Platform Leads</div>
-          <div className="metric-value" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Users size={20} color="#3b82f6" />
-            {totalLeads}
+
+        <nav className="seller-sidebar-nav">
+          <span className="seller-sidebar-label">Workspace</span>
+          <button type="button" className={`seller-sidebar-link ${activeTab === 'listings' ? 'active' : ''}`} onClick={() => selectTab('listings')}>
+            <LayoutDashboard size={17} /> Overview
+          </button>
+          <button type="button" className={`seller-sidebar-link ${activeTab === 'add' ? 'active' : ''}`} onClick={() => selectTab('add')}>
+            <ListPlus size={17} /> Create listing
+          </button>
+          {!isAdminView && (
+            <button type="button" className={`seller-sidebar-link ${activeTab === 'leads' ? 'active' : ''}`} onClick={() => selectTab('leads')}>
+              <MessageSquareMore size={17} /> Leads <span>{totalLeads}</span>
+            </button>
+          )}
+          {!isAdminView && (
+            <button type="button" className={`seller-sidebar-link ${activeTab === 'visits' ? 'active' : ''}`} onClick={() => selectTab('visits')}>
+              <Calendar size={17} /> Site visits <span>{myVisits.length}</span>
+            </button>
+          )}
+        </nav>
+
+        <div className="seller-sidebar-tip">
+          <BarChart3 size={18} />
+          <strong>Keep listings fresh</strong>
+          <p>Updated inventory helps buyers make faster decisions.</p>
+        </div>
+      </aside>
+
+      <main className="seller-workspace-main">
+        <header className="seller-desktop-topbar">
+          <div>
+            <span className="seller-topbar-kicker">{isAdminView ? 'Admin view' : 'Seller workspace'}</span>
+            <h1>{activeTab === 'add' ? 'Create a listing' : activeTab === 'leads' ? 'Lead pipeline' : activeTab === 'visits' ? 'Visit calendar' : 'Portfolio overview'}</h1>
           </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Meta Ads & Direct App</span>
-        </div>
-        <div className="metric-card">
-          <div className="metric-title">Booked Site Visits</div>
-          <div className="metric-value" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Calendar size={20} color="#a855f7" />
-            {pendingVisits}
+          <button type="button" className="btn-primary" onClick={() => selectTab('add')}>
+            <Plus size={16} /> New listing
+          </button>
+        </header>
+      {isAdminView && selectedSeller && (
+        <section className="seller-panel seller-content-panel" style={{ marginBottom: '16px' }}>
+          <div className="seller-panel-heading">
+            <div>
+              <span className="seller-section-kicker">Admin seller context</span>
+              <h3>{selectedSeller.displayName || selectedSeller.name || selectedSeller.businessName || 'Seller account'}</h3>
+              <p style={{ marginTop: '6px', color: 'var(--text-secondary)' }}>
+                Review the existing seller workspace with admin permissions still enabled.
+              </p>
+            </div>
+            <div className="seller-form-actions">
+              <button type="button" className="btn-secondary" onClick={onBackToAdmin}>
+                <ArrowLeft size={16} /> Seller list
+              </button>
+              <button type="button" className="btn-primary" onClick={() => setShowSellerProfileEditor(true)}>
+                <User size={16} /> Edit seller
+              </button>
+            </div>
           </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Scheduled Visits</span>
+
+          <div className="seller-project-stats">
+            <div>
+              <span>Business</span>
+              <strong>{selectedSeller.businessName || 'Not provided'}</strong>
+            </div>
+            <div>
+              <span>Email</span>
+              <strong>{selectedSeller.email || 'Not provided'}</strong>
+            </div>
+            <div>
+              <span>Phone</span>
+              <strong>{selectedSeller.phoneNumber || selectedSeller.phone || 'Not provided'}</strong>
+            </div>
+            <div>
+              <span>Pending approvals</span>
+              <strong>{pendingReviewCount}</strong>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <section className="seller-hero">
+        <div className="seller-hero-copy">
+          <span className="seller-eyebrow">{isAdminView ? 'Seller workspace - admin mode' : 'Seller workspace'}</span>
+          <h2>{isAdminView ? 'Manage seller projects from the existing dashboard.' : 'Manage projects, leads, and visits from one cleaner dashboard.'}</h2>
+          <p>
+            {isAdminView
+              ? 'Review seller activity, approve listings, and update seller information using the existing seller flow.'
+              : 'Keep inventory updated, monitor buyer interest, and make your listings feel active even before the first lead arrives.'}
+          </p>
+          <div className="seller-hero-actions">
+            <button type="button" className="btn-primary" onClick={() => { setActiveTab('add'); setEditingProject(null); }}>
+              <Plus size={16} /> Add project
+            </button>
+            {isAdminView ? (
+              <button type="button" className="btn-secondary" onClick={() => { setActiveTab('listings'); setEditingProject(null); }}>
+                Review listings <ArrowRight size={16} />
+              </button>
+            ) : (
+              <button type="button" className="btn-secondary" onClick={() => { setActiveTab('leads'); setEditingProject(null); }}>
+                Review leads <ArrowRight size={16} />
+              </button>
+            )}
+          </div>
         </div>
+        <div className="seller-hero-panel">
+          <div className="seller-hero-stat">
+            <span>Live listings</span>
+            <strong>{myProjects.length}</strong>
+          </div>
+          <div className="seller-hero-stat">
+            <span>{isAdminView ? 'Approved' : 'Buyer pipeline'}</span>
+            <strong>{isAdminView ? myProjects.filter((project) => project.status === 'approved' || project.status === 'Active').length : totalLeads}</strong>
+          </div>
+          <div className="seller-hero-stat">
+            <span>{isAdminView ? 'Pending review' : 'Visit requests'}</span>
+            <strong>{isAdminView ? pendingReviewCount : pendingVisits}</strong>
+          </div>
+          <p className="seller-hero-note">
+            {isAdminView
+              ? (myProjects.length === 0
+                ? 'This seller does not have any listings yet.'
+                : 'Approve, reject, or update listings without leaving the existing seller workspace.')
+              : (myProjects.length === 0
+                ? 'Start with one polished listing to unlock the rest of the seller flow.'
+                : 'Keep project details fresh so buyers trust the listing and book visits faster.')}
+          </p>
+        </div>
+      </section>
+
+      <div className="metric-grid seller-metric-grid">
+        {metrics.map((metric) => (
+          <div key={metric.label} className="metric-card">
+            <div className="metric-title">{metric.label}</div>
+            <div className="metric-value seller-metric-value">
+              {metric.icon}
+              {metric.value}
+            </div>
+            <span className="seller-metric-helper">{metric.helper}</span>
+          </div>
+        ))}
       </div>
 
-      {/* Sub tabs */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
-        <button 
-          onClick={() => { setActiveTab('listings'); setEditingProject(null); }}
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'listings' ? 'var(--brand-primary)' : 'var(--text-secondary)', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer' }}
-        >
-          My Plotting Projects
-        </button>
-        <button 
-          onClick={() => { setActiveTab('add'); setEditingProject(null); }}
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'add' ? 'var(--brand-primary)' : 'var(--text-secondary)', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-        >
-          <Plus size={14} /> Add New Project
-        </button>
-        <button 
-          onClick={() => { setActiveTab('leads'); setEditingProject(null); }}
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'leads' ? 'var(--brand-primary)' : 'var(--text-secondary)', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer' }}
-        >
-          Leads Pipeline ({totalLeads})
-        </button>
-        <button 
-          onClick={() => { setActiveTab('visits'); setEditingProject(null); }}
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'visits' ? 'var(--brand-primary)' : 'var(--text-secondary)', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer' }}
-        >
-          Site Visits ({myVisits.length})
-        </button>
-      </div>
-
-      {/* SUCCESS POPUP FOR SAVE ACTION */}
       {saveSuccess && (
-        <div style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid var(--color-active)', color: 'var(--color-active)', padding: '12px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold' }}>
-          <Check size={18} /> Operation Successful! State updated.
+        <div className="seller-toast">
+          <Check size={18} />
+          <span>Seller dashboard updated successfully.</span>
         </div>
       )}
 
-      {/* EDITING FORM */}
       {editingProject ? (
-        <form onSubmit={handleEditSave} style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ fontSize: '15px' }}>Edit Project Details: <strong>{editingProject.name}</strong></h3>
-            <button type="button" onClick={() => setEditingProject(null)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
+        <form onSubmit={handleEditSave} className="seller-panel seller-form">
+          <div className="seller-panel-heading">
+            <div>
+              <span className="seller-section-kicker">Project editor</span>
+              <h3>Edit {editingProject.name}</h3>
+            </div>
+            <button type="button" className="seller-link-button" onClick={() => setEditingProject(null)}>Cancel</button>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Starting Price (₹)</label>
-              <input 
-                type="number" 
-                className="form-input" 
+          <div className="seller-form-grid">
+            <label className="seller-field">
+              <span>Starting price (INR)</span>
+              <input
+                type="number"
+                className="form-input"
                 value={editingProject.startingPrice}
-                onChange={(e) => setEditingProject({ ...editingProject, startingPrice: parseInt(e.target.value) })}
+                onChange={(e) => setEditingProject({ ...editingProject, startingPrice: e.target.value })}
               />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Price per Sq.Ft (₹)</label>
-              <input 
-                type="number" 
-                className="form-input" 
+            </label>
+            <label className="seller-field">
+              <span>Price per sq.ft</span>
+              <input
+                type="number"
+                className="form-input"
                 value={editingProject.pricePerSqFt}
-                onChange={(e) => setEditingProject({ ...editingProject, pricePerSqFt: parseInt(e.target.value) })}
+                onChange={(e) => setEditingProject({ ...editingProject, pricePerSqFt: e.target.value })}
               />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Remaining Plots Inventory</label>
-              <input 
-                type="number" 
-                className="form-input" 
+            </label>
+            <label className="seller-field">
+              <span>Remaining plots</span>
+              <input
+                type="number"
+                className="form-input"
                 value={editingProject.remainingPlots}
-                onChange={(e) => setEditingProject({ ...editingProject, remainingPlots: parseInt(e.target.value) })}
+                onChange={(e) => setEditingProject({ ...editingProject, remainingPlots: e.target.value })}
               />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Availability Status</label>
-              <select 
-                className="form-input" 
+            </label>
+            <label className="seller-field">
+              <span>Availability status</span>
+              <select
+                className="form-input"
                 value={editingProject.status}
                 onChange={(e) => setEditingProject({ ...editingProject, status: e.target.value })}
               >
-                <option value="Active">Active (Showing in feed)</option>
-                <option value="Sold Out">Sold Out (Gray markers)</option>
+                <option value="Active">Active</option>
+                <option value="Sold Out">Sold Out</option>
               </select>
-            </div>
+            </label>
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-            <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Save size={16} /> Save Changes
-            </button>
+          <div className="seller-form-actions">
+            <button type="submit" className="btn-primary"><Save size={16} /> Save changes</button>
             <button type="button" className="btn-secondary" onClick={() => setEditingProject(null)}>Cancel</button>
           </div>
         </form>
       ) : activeTab === 'listings' ? (
-        // LISTINGS TAB
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <section className="seller-panel seller-content-panel">
+          <div className="seller-panel-heading">
+            <div>
+              <span className="seller-section-kicker">Project overview</span>
+              <h3>Your plotting projects</h3>
+            </div>
+            <button type="button" className="btn-secondary" onClick={() => setActiveTab('add')}>
+              <Plus size={16} /> Add another
+            </button>
+          </div>
+
           {myProjects.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>No projects registered under {developerName} yet. Add one!</p>
-          ) : (
-            myProjects.map(proj => (
-              <div 
-                key={proj.id} 
-                style={{ 
-                  background: 'var(--bg-card)', 
-                  border: '1px solid var(--border-color)', 
-                  borderRadius: '12px', 
-                  padding: '16px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}
-              >
-                <div>
-                  <h4 style={{ fontSize: '15px', fontWeight: 'bold' }}>{proj.name}</h4>
-                  <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                    📍 {proj.village} • {proj.distance} km from center
-                  </p>
-                  <div style={{ display: 'flex', gap: '12px', marginTop: '10px', fontSize: '12px' }}>
-                    <span>Starting: <strong style={{ color: 'var(--brand-primary)' }}>₹{(proj.startingPrice / 100000).toFixed(1)}L</strong></span>
-                    <span>Unsold: <strong>{proj.remainingPlots} / {proj.totalPlots}</strong></span>
-                    <span>PlotIt Score: <strong style={{ color: 'var(--accent-gold)' }}>★ {proj.plotItScore}</strong></span>
-                    <span>Status: <strong style={{ color: proj.status === 'Active' ? 'var(--color-active)' : 'var(--text-muted)' }}>{proj.status}</strong></span>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => handleEditClick(proj)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '8px 14px',
-                    background: 'var(--bg-input)',
-                    border: '1px solid var(--border-color)',
-                    color: 'white',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontSize: '12px'
-                  }}
-                >
-                  <Edit size={12} /> Edit Details
-                </button>
+            <div className="seller-empty-state">
+              <div className="seller-empty-icon"><ClipboardList size={24} /></div>
+              <h4>No projects live yet</h4>
+              <p>Create your first listing so buyers can view pricing, inventory, and layout details.</p>
+              <div className="seller-empty-list">
+                {onboardingItems.map((item) => <span key={item}>{item}</span>)}
               </div>
-            ))
+              <button type="button" className="btn-primary" onClick={() => setActiveTab('add')}>
+                <Plus size={16} /> Create first project
+              </button>
+            </div>
+          ) : (
+            <div className="seller-project-grid">
+              {myProjects.map((project) => (
+                <article key={project.id} className="seller-project-card">
+                  <div className="seller-project-head">
+                    <div>
+                      <h4>{project.name}</h4>
+                      <p><MapPin size={14} /> {project.village} {project.area ? `• ${project.area}` : ''}</p>
+                    </div>
+                    <span className={`badge ${getProjectBadgeClass(project.status)}`}>
+                      {formatProjectStatus(project.status)}
+                    </span>
+                  </div>
+
+                  <div className="seller-project-stats">
+                    <div>
+                      <span>Starting at</span>
+                      <strong>{formatLakhs(project.startingPrice)}</strong>
+                    </div>
+                    <div>
+                      <span>Inventory left</span>
+                      <strong>{toNumber(project.remainingPlots)} / {toNumber(project.totalPlots)}</strong>
+                    </div>
+                    <div>
+                      <span>Druvio score</span>
+                      <strong>{project.DruvioScore ?? project.plotItScore ?? 4.6}</strong>
+                    </div>
+                    <div>
+                      <span>Distance</span>
+                      <strong>{toNumber(project.distance).toFixed(1)} km</strong>
+                    </div>
+                  </div>
+
+                  <div className="seller-project-tags">
+                    {project.naPlot && <span>NA Certified</span>}
+                    {project.bankLoan && <span>Bank Loan Ready</span>}
+                    {(project.amenities || []).slice(0, 2).map((item) => <span key={item}>{item}</span>)}
+                  </div>
+
+                  <div className="seller-project-footer">
+                    <span>Updated {project.updated || 'recently'}</span>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {isAdminView && project.status !== 'approved' && (
+                        <button type="button" className="btn-primary seller-inline-button" onClick={() => handleApproveProject(project.id)}>
+                          <ShieldCheck size={14} /> Approve
+                        </button>
+                      )}
+                      {isAdminView && project.status !== 'rejected' && (
+                        <button type="button" className="btn-secondary seller-inline-button" onClick={() => handleRejectProject(project.id)}>
+                          <ShieldX size={14} /> Reject
+                        </button>
+                      )}
+                      <button type="button" className="btn-secondary seller-inline-button" onClick={() => handleEditClick(project)}>
+                        <Edit size={14} /> Edit details
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
           )}
-        </div>
+        </section>
       ) : activeTab === 'add' ? (
-        // ADD NEW PROJECT TAB
-        <form onSubmit={handleAddProject} style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <h3 style={{ fontSize: '15px' }}>Register New Plotting Project</h3>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        <form onSubmit={handleAddProject} className="seller-panel seller-form">
+          <div className="seller-panel-heading">
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Project Name *</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                placeholder="Example: Shrinath NA Meadows"
-                required
-                value={newProject.name}
-                onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
-              />
+              <span className="seller-section-kicker">New listing</span>
+              <h3>Register a new plotting project</h3>
             </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Village Location *</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                placeholder="Example: Kadachiwadi"
-                required
-                value={newProject.village}
-                onChange={(e) => setNewProject({ ...newProject, village: e.target.value })}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Micro-Area / Proximity Area *</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                placeholder="Example: Near Mercedes Benz Junction"
-                required
-                value={newProject.area}
-                onChange={(e) => setNewProject({ ...newProject, area: e.target.value })}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Developer Identity</label>
-              <input type="text" className="form-input" disabled value={newProject.developer} />
-            </div>
+            <span className="seller-muted-chip">Required fields marked by context</span>
+          </div>
 
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Latitude (Chakan: ~18.78)</label>
-              <input 
-                type="number" 
-                step="0.0001"
-                className="form-input" 
-                value={newProject.latitude}
-                onChange={(e) => setNewProject({ ...newProject, latitude: e.target.value })}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Longitude (Chakan: ~73.85)</label>
-              <input 
-                type="number" 
-                step="0.0001"
-                className="form-input" 
-                value={newProject.longitude}
-                onChange={(e) => setNewProject({ ...newProject, longitude: e.target.value })}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Starting Price (₹)</label>
-              <input 
-                type="number" 
-                className="form-input" 
-                value={newProject.startingPrice}
-                onChange={(e) => setNewProject({ ...newProject, startingPrice: e.target.value })}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Price per Sq.Ft (₹)</label>
-              <input 
-                type="number" 
-                className="form-input" 
-                value={newProject.pricePerSqFt}
-                onChange={(e) => setNewProject({ ...newProject, pricePerSqFt: e.target.value })}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Total Lots Layout</label>
-              <input 
-                type="number" 
-                className="form-input" 
-                value={newProject.totalPlots}
-                onChange={(e) => setNewProject({ ...newProject, totalPlots: e.target.value })}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Remaining Available Lots</label>
-              <input 
-                type="number" 
-                className="form-input" 
-                value={newProject.remainingPlots}
-                onChange={(e) => setNewProject({ ...newProject, remainingPlots: e.target.value })}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Amenities (Comma separated)</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={newProject.amenities}
-                onChange={(e) => setNewProject({ ...newProject, amenities: e.target.value })}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Distance from Chakan Circle (km)</label>
-              <input 
-                type="number" 
-                step="0.1"
-                className="form-input" 
-                value={newProject.distance}
-                onChange={(e) => setNewProject({ ...newProject, distance: e.target.value })}
-              />
+          <div className="seller-form-section">
+            <h4>Basic details</h4>
+            <div className="seller-form-grid">
+              <label className="seller-field">
+                <span>Project name</span>
+                <input type="text" className="form-input" placeholder="Shrinath NA Meadows" required value={newProject.name} onChange={(e) => setNewProject({ ...newProject, name: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Village</span>
+                <input type="text" className="form-input" required value={newProject.village} onChange={(e) => setNewProject({ ...newProject, village: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Micro-area / landmark</span>
+                <input type="text" className="form-input" placeholder="Near Mercedes Benz Junction" required value={newProject.area} onChange={(e) => setNewProject({ ...newProject, area: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Developer identity</span>
+                <input type="text" className="form-input" disabled value={newProject.developer} />
+              </label>
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
-              <input 
-                type="checkbox" 
-                checked={newProject.naPlot} 
-                onChange={(e) => setNewProject({ ...newProject, naPlot: e.target.checked })}
-              />
-              Collector NA Certified
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
-              <input 
-                type="checkbox" 
-                checked={newProject.bankLoan} 
-                onChange={(e) => setNewProject({ ...newProject, bankLoan: e.target.checked })}
-              />
-              Bank Loan pre-approved
-            </label>
+          <div className="seller-form-section">
+            <h4>Location and pricing</h4>
+            <div className="seller-form-grid">
+              <label className="seller-field">
+                <span>Latitude</span>
+                <input type="number" step="0.0001" className="form-input" value={newProject.latitude} onChange={(e) => setNewProject({ ...newProject, latitude: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Longitude</span>
+                <input type="number" step="0.0001" className="form-input" value={newProject.longitude} onChange={(e) => setNewProject({ ...newProject, longitude: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Starting price (INR)</span>
+                <input type="number" className="form-input" value={newProject.startingPrice} onChange={(e) => setNewProject({ ...newProject, startingPrice: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Price per sq.ft</span>
+                <input type="number" className="form-input" value={newProject.pricePerSqFt} onChange={(e) => setNewProject({ ...newProject, pricePerSqFt: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Distance from Chakan circle</span>
+                <input type="number" step="0.1" className="form-input" value={newProject.distance} onChange={(e) => setNewProject({ ...newProject, distance: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Facing options</span>
+                <input type="text" className="form-input" value={newProject.facing} onChange={(e) => setNewProject({ ...newProject, facing: e.target.value })} />
+              </label>
+            </div>
           </div>
 
-          <button type="submit" className="btn-primary" style={{ width: '200px', marginTop: '10px' }}>
-            <Plus size={16} /> Create & Publish
-          </button>
+          <div className="seller-form-section">
+            <h4>Inventory and media</h4>
+            <div className="seller-form-grid">
+              <label className="seller-field">
+                <span>Total plots</span>
+                <input type="number" className="form-input" value={newProject.totalPlots} onChange={(e) => setNewProject({ ...newProject, totalPlots: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Remaining plots</span>
+                <input type="number" className="form-input" value={newProject.remainingPlots} onChange={(e) => setNewProject({ ...newProject, remainingPlots: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Hero image URL</span>
+                <input type="url" className="form-input" value={newProject.heroImage} onChange={(e) => setNewProject({ ...newProject, heroImage: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Layout plan URL</span>
+                <input type="url" className="form-input" value={newProject.layoutPlanUrl} onChange={(e) => setNewProject({ ...newProject, layoutPlanUrl: e.target.value })} />
+              </label>
+              <label className="seller-field seller-field-full">
+                <span>Amenities</span>
+                <input type="text" className="form-input" value={newProject.amenities} onChange={(e) => setNewProject({ ...newProject, amenities: e.target.value })} />
+              </label>
+              <label className="seller-field seller-field-full">
+                <span>Short description</span>
+                <textarea className="form-input seller-textarea" value={newProject.description} onChange={(e) => setNewProject({ ...newProject, description: e.target.value })} />
+              </label>
+            </div>
+          </div>
+
+          <div className="seller-toggle-row">
+            <label><input type="checkbox" checked={newProject.naPlot} onChange={(e) => setNewProject({ ...newProject, naPlot: e.target.checked })} /> Collector NA certified</label>
+            <label><input type="checkbox" checked={newProject.bankLoan} onChange={(e) => setNewProject({ ...newProject, bankLoan: e.target.checked })} /> Bank loan pre-approved</label>
+            <label><input type="checkbox" checked={newProject.verified} onChange={(e) => setNewProject({ ...newProject, verified: e.target.checked })} /> Mark as verified</label>
+          </div>
+
+          <div className="seller-form-actions">
+            <button type="submit" className="btn-primary"><Plus size={16} /> Create and publish</button>
+            <button type="button" className="btn-secondary" onClick={() => setNewProject(createProjectDraft(developerName))}>Reset</button>
+          </div>
         </form>
       ) : activeTab === 'leads' ? (
-        // LEADS TAB
-        <div className="table-container">
-          <table className="dash-table">
-            <thead>
-              <tr>
-                <th>Lead Name</th>
-                <th>Phone</th>
-                <th>Desired Budget</th>
-                <th>Interested Project</th>
-                <th>Funnel Stage</th>
-                <th>Last Update</th>
-              </tr>
-            </thead>
-            <tbody>
-              {myLeads.map(lead => (
-                <tr key={lead.id}>
-                  <td><strong>{lead.name}</strong></td>
-                  <td>{lead.phone}</td>
-                  <td>{lead.budget}</td>
-                  <td>{lead.project}</td>
-                  <td>
-                    <span className={`badge ${
-                      lead.stage === "Purchased" ? "badge-success" : 
-                      lead.stage === "Visit Done" ? "badge-info" : 
-                      lead.stage === "Book Visit" ? "badge-warning" : "badge-danger"
-                    }`}>
-                      {lead.stage}
-                    </span>
-                  </td>
-                  <td>{lead.date}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <section className="seller-panel seller-content-panel">
+          <div className="seller-panel-heading">
+            <div>
+              <span className="seller-section-kicker">Lead pipeline</span>
+              <h3>Buyer leads</h3>
+            </div>
+            <span className="seller-muted-chip">{totalLeads} active records</span>
+          </div>
+
+          {myLeads.length === 0 ? (
+            <div className="seller-empty-state compact">
+              <div className="seller-empty-icon"><PhoneCall size={22} /></div>
+              <h4>No leads yet</h4>
+              <p>Once buyers enquire or book visits, their details will appear here for quick follow-up.</p>
+            </div>
+          ) : (
+            <div className="table-container">
+              <table className="dash-table">
+                <thead>
+                  <tr>
+                    <th>Lead name</th>
+                    <th>Phone</th>
+                    <th>Budget</th>
+                    <th>Interested project</th>
+                    <th>Stage</th>
+                    <th>Last update</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {myLeads.map((lead) => (
+                    <tr key={lead.id}>
+                      <td><strong>{lead.name}</strong></td>
+                      <td>{lead.phone}</td>
+                      <td>{lead.budget || 'Not shared'}</td>
+                      <td>{lead.project}</td>
+                      <td><span className={`badge ${stageClassName(lead.stage)}`}>{lead.stage}</span></td>
+                      <td>{lead.date || 'Recently'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       ) : (
-        // VISITS LOG TAB
-        <div className="table-container">
-          <table className="dash-table">
-            <thead>
-              <tr>
-                <th>Visitor Name</th>
-                <th>Visitor Phone</th>
-                <th>Project Target</th>
-                <th>Scheduled Date</th>
-                <th>Scheduled Time</th>
-                <th>Visit Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {myVisits.map(v => (
-                <tr key={v.id}>
-                  <td><strong>{v.buyerName}</strong></td>
-                  <td>{v.buyerPhone}</td>
-                  <td>{v.project}</td>
-                  <td>{v.date}</td>
-                  <td>{v.time}</td>
-                  <td>
-                    <span className="badge badge-warning">{v.status}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <section className="seller-panel seller-content-panel">
+          <div className="seller-panel-heading">
+            <div>
+              <span className="seller-section-kicker">Visit schedule</span>
+              <h3>Site visits</h3>
+            </div>
+            <span className="seller-muted-chip">{pendingVisits} upcoming</span>
+          </div>
+
+          {myVisits.length === 0 ? (
+            <div className="seller-empty-state compact">
+              <div className="seller-empty-icon"><Calendar size={22} /></div>
+              <h4>No site visits scheduled</h4>
+              <p>Booked visits will land here with date, time, and buyer contact details.</p>
+            </div>
+          ) : (
+            <div className="table-container">
+              <table className="dash-table">
+                <thead>
+                  <tr>
+                    <th>Visitor name</th>
+                    <th>Phone</th>
+                    <th>Project target</th>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {myVisits.map((visit) => (
+                    <tr key={visit.id}>
+                      <td><strong>{visit.buyerName}</strong></td>
+                      <td>{visit.buyerPhone}</td>
+                      <td>{visit.project}</td>
+                      <td>{visit.date}</td>
+                      <td>{visit.time}</td>
+                      <td><span className={`badge ${stageClassName(visit.status)}`}>{visit.status}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
+
+      {showSellerProfileEditor && selectedSeller && (
+        <EditProfileModal
+          user={selectedSeller}
+          allowAuthUpdate={false}
+          title="Edit Seller Profile"
+          successMessage="Seller profile updated successfully!"
+          onSave={onSelectedSellerChange}
+          onClose={() => setShowSellerProfileEditor(false)}
+        />
+      )}
+      </main>
     </div>
   );
 }

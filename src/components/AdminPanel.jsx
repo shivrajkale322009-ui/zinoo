@@ -1,297 +1,765 @@
-import React, { useState } from 'react';
-import { 
-  ShieldAlert, ShieldCheck, TrendingUp, IndianRupee, Percent, 
-  Check, X, FileText, Smartphone, AlertCircle 
+import React, { useEffect, useMemo, useState } from 'react';
+import { signOut } from 'firebase/auth';
+import {
+  Building,
+  ClipboardList,
+  Home,
+  LayoutDashboard,
+  LogOut,
+  Moon,
+  Settings,
+  ShieldCheck,
+  ShieldX,
+  Store,
+  Sun,
+  User,
+  Users
 } from 'lucide-react';
+import {
+  collection,
+  doc,
+  getDoc,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
+  updateDoc
+} from 'firebase/firestore';
+import EditProfileModal from './EditProfileModal';
+import { auth, db } from '../firebaseConfig';
 
-function AdminPanel({ projects, leads, cashbacks, updateCashbackStatus, addProject }) {
-  const [activeTab, setActiveTab] = useState('cashbacks'); // 'cashbacks', 'listings', 'pipeline'
+const getName = (account) => account?.displayName || account?.name || account?.businessName || account?.userName || account?.email || 'Unknown';
 
-  // Calculate platform statistics
-  const activeListingsCount = projects.filter(p => p.status === 'Active').length;
-  const verifiedListingsCount = projects.filter(p => p.verified).length;
-  
-  // Total sales and revenue (based on approved cashback purchases)
-  const approvedCashbacks = cashbacks.filter(c => c.status === 'Approved');
-  const totalPurchaseValue = approvedCashbacks.reduce((acc, c) => acc + c.purchasePrice, 0);
-  
-  // PlotIt keeps 1% commission, buyer gets 1% cashback (total dev commission is 2%)
-  const plotItRevenue = approvedCashbacks.reduce((acc, c) => acc + c.commissionAmount, 0);
-  const disbursedCashbacks = approvedCashbacks.reduce((acc, c) => acc + c.cashbackAmount, 0);
-
-  const totalBookedVisits = leads.filter(l => l.stage === "Book Visit" || l.stage === "Visit Done" || l.stage === "Negotiation" || l.stage === "Purchased").length;
-
-  // Format currency
-  const formatCurrency = (val) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      maximumFractionDigits: 0
-    }).format(val);
+const normalizePermissions = (permissions = {}) => {
+  const normalized = {
+    buyer: Boolean(permissions?.buyer),
+    seller: Boolean(permissions?.seller),
+    admin: Boolean(permissions?.admin)
   };
 
-  const handleApproveCashback = (id) => {
-    updateCashbackStatus(id, 'Approved');
+  if (normalized.admin) {
+    normalized.buyer = true;
+    normalized.seller = true;
+  }
+
+  return normalized;
+};
+
+const getProjectOwnerName = (project, sellers) => {
+  const owner = sellers.find((item) => item.id === project.ownerId);
+  return owner ? getName(owner) : (project.developer || 'Unknown seller');
+};
+
+function AdminPanel({
+  projects,
+  user,
+  isDarkMode,
+  onThemeToggle,
+  onSwitchToAdmin,
+  onSwitchToBuyer,
+  onSwitchToSeller,
+  onSelectSeller,
+  initialTab = 'home'
+}) {
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [sellerRequests, setSellerRequests] = useState([]);
+  const [buyers, setBuyers] = useState([]);
+  const [sellers, setSellers] = useState([]);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [workingKey, setWorkingKey] = useState('');
+  const [showProfileModal, setShowProfileModal] = useState(false);
+
+  useEffect(() => {
+    setActiveTab(initialTab === 'seller_selection' ? 'sellers' : initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'sellerRequests'), (snapshot) => {
+      const requests = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      setSellerRequests(requests);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const accounts = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+
+      const sellerList = accounts.filter((account) => {
+        const permissions = normalizePermissions(account.permissions);
+        return permissions.seller && !permissions.admin;
+      });
+
+      const buyerList = accounts.filter((account) => {
+        const permissions = normalizePermissions(account.permissions);
+        return permissions.buyer && !permissions.seller && !permissions.admin;
+      });
+
+      setSellers(sellerList);
+      setBuyers(buyerList);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!statusMessage && !errorMessage) return undefined;
+    const timeout = setTimeout(() => {
+      setStatusMessage('');
+      setErrorMessage('');
+    }, 3000);
+    return () => clearTimeout(timeout);
+  }, [statusMessage, errorMessage]);
+
+  const approvedProjects = useMemo(
+    () => projects.filter((project) => project.status === 'approved').length,
+    [projects]
+  );
+  const pendingProjects = useMemo(
+    () => projects.filter((project) => project.status === 'pending_review'),
+    [projects]
+  );
+  const pendingSellerRequests = useMemo(
+    () => sellerRequests.filter((request) => request.status === 'pending').length,
+    [sellerRequests]
+  );
+  const sortedBuyers = useMemo(
+    () => [...buyers].sort((left, right) => getName(left).localeCompare(getName(right))),
+    [buyers]
+  );
+  const sortedSellers = useMemo(
+    () => [...sellers].sort((left, right) => getName(left).localeCompare(getName(right))),
+    [sellers]
+  );
+  const pendingRequests = useMemo(
+    () => sellerRequests
+      .filter((request) => request.status === 'pending')
+      .sort((left, right) => getName(left).localeCompare(getName(right))),
+    [sellerRequests]
+  );
+
+  const resetFeedback = () => {
+    setStatusMessage('');
+    setErrorMessage('');
   };
 
-  const handleRejectCashback = (id) => {
-    updateCashbackStatus(id, 'Rejected');
+  const handleApproveSellerRequest = async (request) => {
+    const actionKey = `approve-request-${request.id}`;
+    setWorkingKey(actionKey);
+    resetFeedback();
+
+    try {
+      const userRef = doc(db, 'users', request.userId);
+      const userSnap = await getDoc(userRef);
+      const existingData = userSnap.exists() ? userSnap.data() : {};
+      const existingPermissions = normalizePermissions(existingData.permissions);
+
+      const sellerProfile = {
+        uid: request.userId,
+        displayName: existingData.displayName || request.userName || request.contactPerson || request.businessName || '',
+        email: existingData.email || request.userEmail || request.contactEmail || '',
+        phoneNumber: existingData.phoneNumber || request.userPhone || request.contactPhone || '',
+        businessName: request.businessName || existingData.businessName || '',
+        businessType: request.businessType || existingData.businessType || '',
+        businessAddress: request.businessAddress || existingData.businessAddress || '',
+        updatedAt: serverTimestamp(),
+        permissions: {
+          buyer: true,
+          seller: true,
+          admin: Boolean(existingPermissions.admin)
+        }
+      };
+
+      if (userSnap.exists()) {
+        await updateDoc(userRef, sellerProfile);
+      } else {
+        await setDoc(userRef, {
+          createdAt: serverTimestamp(),
+          ...sellerProfile
+        });
+      }
+
+      await updateDoc(doc(db, 'sellerRequests', request.id), {
+        status: 'approved',
+        reviewedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      setStatusMessage(`${getName(request)} has been approved as a seller.`);
+    } catch (error) {
+      console.error('Failed to approve seller request:', error);
+      setErrorMessage('Unable to approve the seller request right now.');
+    } finally {
+      setWorkingKey('');
+    }
   };
+
+  const handleRejectSellerRequest = async (request) => {
+    const actionKey = `reject-request-${request.id}`;
+    setWorkingKey(actionKey);
+    resetFeedback();
+
+    try {
+      await updateDoc(doc(db, 'sellerRequests', request.id), {
+        status: 'rejected',
+        reviewedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      setStatusMessage(`${getName(request)} has been marked as rejected.`);
+    } catch (error) {
+      console.error('Failed to reject seller request:', error);
+      setErrorMessage('Unable to reject the seller request right now.');
+    } finally {
+      setWorkingKey('');
+    }
+  };
+
+  const handleApproveProject = async (projectId) => {
+    const actionKey = `approve-project-${projectId}`;
+    setWorkingKey(actionKey);
+    resetFeedback();
+
+    try {
+      await updateDoc(doc(db, 'projects', projectId), {
+        status: 'approved',
+        reviewedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      setStatusMessage('Property listing approved successfully.');
+    } catch (error) {
+      console.error('Failed to approve property:', error);
+      setErrorMessage('Unable to approve this property right now.');
+    } finally {
+      setWorkingKey('');
+    }
+  };
+
+  const handleRejectProject = async (projectId) => {
+    const actionKey = `reject-project-${projectId}`;
+    setWorkingKey(actionKey);
+    resetFeedback();
+
+    try {
+      await updateDoc(doc(db, 'projects', projectId), {
+        status: 'rejected',
+        reviewedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      setStatusMessage('Property listing rejected successfully.');
+    } catch (error) {
+      console.error('Failed to reject property:', error);
+      setErrorMessage('Unable to reject this property right now.');
+    } finally {
+      setWorkingKey('');
+    }
+  };
+
+  const openSellerWorkspace = (seller) => {
+    resetFeedback();
+    onSelectSeller(seller);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('Logout error:', error);
+      setErrorMessage('Unable to log out right now.');
+    }
+  };
+
+  const handleSupport = () => {
+    window.open('mailto:support@druvio.com?subject=Admin Support Request', '_blank');
+  };
+
+  const sidebarGroups = [
+    {
+      label: 'Main',
+      items: [
+        { key: 'home', label: 'Dashboard', icon: LayoutDashboard, count: null },
+        { key: 'buyers', label: 'Buyers', icon: Users, count: buyers.length },
+        { key: 'sellers', label: 'Sellers', icon: Store, count: sellers.length },
+        { key: 'requests', label: 'Seller Requests', icon: ClipboardList, count: pendingSellerRequests },
+        { key: 'listings', label: 'Property Reviews', icon: Building, count: pendingProjects.length }
+      ]
+    },
+    {
+      label: 'Account',
+      items: [
+        { key: 'profile', label: 'Profile', icon: User, count: null },
+        { key: 'settings', label: 'Settings', icon: Settings, count: null },
+        { key: 'logout', label: 'Logout', icon: LogOut, count: null, tone: 'danger' }
+      ]
+    }
+  ];
+
+  const handleSidebarAction = (key) => {
+    resetFeedback();
+
+    if (key === 'buyer_mode') {
+      onSwitchToBuyer();
+      return;
+    }
+
+    if (key === 'seller_mode') {
+      setActiveTab('sellers');
+      onSwitchToAdmin();
+      return;
+    }
+
+    if (key === 'logout') {
+      handleLogout();
+      return;
+    }
+
+    setActiveTab(key);
+  };
+
+  const dashboardRequestsPreview = pendingRequests.slice(0, 4);
+  const dashboardListingPreview = pendingProjects.slice(0, 4);
+  const profileName = user?.displayName || user?.phoneNumber || user?.email || 'Admin User';
+  const profileEmail = user?.email || user?.phoneNumber || 'No contact info';
+
+  const viewMeta = {
+    home: {
+      title: 'Dashboard',
+      description: 'Monitor buyers, sellers, approvals, and review queues from one primary admin workspace.'
+    },
+    buyers: {
+      title: 'Buyer Accounts',
+      description: 'Review buyer accounts while keeping the existing buyer application unchanged.'
+    },
+    sellers: {
+      title: 'Seller Accounts',
+      description: 'Select a seller to open the current seller dashboard and manage that seller with existing components.'
+    },
+    requests: {
+      title: 'Seller Requests',
+      description: 'Approve or reject incoming seller applications from the primary admin interface.'
+    },
+    listings: {
+      title: 'Property Review Queue',
+      description: 'Approve pending property submissions or jump into the seller workspace for deeper edits.'
+    },
+    profile: {
+      title: 'Profile',
+      description: 'Review your admin account details and open the existing profile editor when needed.'
+    },
+    settings: {
+      title: 'Settings',
+      description: 'Adjust interface preferences for the admin workspace without leaving the dashboard.'
+    }
+  };
+
+  const currentMeta = viewMeta[activeTab] || viewMeta.home;
 
   return (
-    <div>
-      {/* Admin metrics row */}
-      <div className="metric-grid">
-        <div className="metric-card" style={{ borderLeft: '4px solid var(--brand-primary)' }}>
-          <div className="metric-title">PlotIt Net Revenue (1% Commission)</div>
-          <div className="metric-value" style={{ color: 'var(--brand-primary)' }}>
-            {formatCurrency(plotItRevenue)}
-          </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>From {approvedCashbacks.length} sales</span>
-        </div>
-        <div className="metric-card" style={{ borderLeft: '4px solid #3b82f6' }}>
-          <div className="metric-title">Cashbacks Disbursed (1%)</div>
-          <div className="metric-value" style={{ color: '#3b82f6' }}>
-            {formatCurrency(disbursedCashbacks)}
-          </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Paid out to buyers</span>
-        </div>
-        <div className="metric-card" style={{ borderLeft: '4px solid var(--accent-gold)' }}>
-          <div className="metric-title">Active Projects</div>
-          <div className="metric-value">
-            {activeListingsCount} / {projects.length}
-          </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{verifiedListingsCount} GPS-Verified</span>
-        </div>
-        <div className="metric-card" style={{ borderLeft: '4px solid #a855f7' }}>
-          <div className="metric-title">Total Bookings</div>
-          <div className="metric-value">
-            {totalBookedVisits}
-          </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Qualified Buyers</span>
-        </div>
-      </div>
+    <div className="admin-shell">
+      <aside className="admin-sidebar">
+        <nav className="admin-sidebar-nav" aria-label="Admin navigation">
+          {sidebarGroups.map((group) => (
+            <div key={group.label} className="admin-sidebar-group">
+              <div className="admin-sidebar-group-label">{group.label}</div>
+              <div className="admin-sidebar-group-items">
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.key;
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
-        <button 
-          onClick={() => setActiveTab('cashbacks')}
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'cashbacks' ? 'var(--brand-primary)' : 'var(--text-secondary)', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer' }}
-        >
-          Cashback Queue ({cashbacks.filter(c => c.status === 'Pending Verification').length} pending)
-        </button>
-        <button 
-          onClick={() => setActiveTab('listings')}
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'listings' ? 'var(--brand-primary)' : 'var(--text-secondary)', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer' }}
-        >
-          Listing Moderation
-        </button>
-        <button 
-          onClick={() => setActiveTab('pipeline')}
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'pipeline' ? 'var(--brand-primary)' : 'var(--text-secondary)', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer' }}
-        >
-          Lead Pipeline (Funnel Tracker)
-        </button>
-      </div>
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      className={`admin-sidebar-link ${isActive ? 'active' : ''} ${item.tone === 'danger' ? 'danger' : ''}`}
+                      onClick={() => handleSidebarAction(item.key)}
+                    >
+                      <span className="admin-sidebar-link-main">
+                        <Icon size={16} />
+                        <span>{item.label}</span>
+                      </span>
+                      {typeof item.count === 'number' && (
+                        <span className="admin-sidebar-badge">{item.count}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
+      </aside>
 
-      {/* Content */}
-      {activeTab === 'cashbacks' ? (
-        // CASHBACK QUEUE
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-            <AlertCircle size={16} color="var(--brand-primary)" />
-            <span>Admins verify the uploaded purchase agreement with the developer before approving the 1% cashback payout.</span>
+      <section className="admin-content">
+        <div className="admin-content-header">
+          <div>
+            <h2>{currentMeta.title}</h2>
+            <p>{currentMeta.description}</p>
           </div>
+        </div>
 
-          <div className="table-container">
-            <table className="dash-table">
-              <thead>
-                <tr>
-                  <th>Purchaser Name</th>
-                  <th>Mobile</th>
-                  <th>Plot Name</th>
-                  <th>Plot Price</th>
-                  <th>1% Cashback Amt</th>
-                  <th>Agreement Doc</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cashbacks.length === 0 ? (
-                  <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No cashback requests submitted yet.</td>
-                  </tr>
+        {statusMessage && <div className="app-success" role="status">{statusMessage}</div>}
+        {errorMessage && <div className="app-error" role="alert">{errorMessage}</div>}
+
+        {activeTab === 'home' && (
+          <div className="admin-panel-stack">
+            <div className="admin-metric-grid">
+              <article className="admin-metric-card">
+                <span>Active sellers</span>
+                <strong>{sellers.length}</strong>
+              </article>
+              <article className="admin-metric-card">
+                <span>Buyer accounts</span>
+                <strong>{buyers.length}</strong>
+              </article>
+              <article className="admin-metric-card">
+                <span>Approved properties</span>
+                <strong>{approvedProjects}</strong>
+              </article>
+              <article className="admin-metric-card">
+                <span>Pending requests</span>
+                <strong>{pendingSellerRequests}</strong>
+              </article>
+              <article className="admin-metric-card">
+                <span>Pending listings</span>
+                <strong>{pendingProjects.length}</strong>
+              </article>
+            </div>
+
+            <div className="admin-dashboard-grid">
+              <section className="admin-panel-section">
+                <div className="admin-panel-section-head">
+                  <div>
+                    <span className="admin-panel-kicker">Approval Queue</span>
+                    <h3>Seller requests</h3>
+                  </div>
+                  <button type="button" className="btn-secondary" onClick={() => setActiveTab('requests')}>
+                    Open queue
+                  </button>
+                </div>
+
+                {dashboardRequestsPreview.length === 0 ? (
+                  <div className="admin-empty-state">No pending seller requests right now.</div>
                 ) : (
-                  cashbacks.map(claim => (
-                    <tr key={claim.id}>
-                      <td><strong>{claim.buyerName}</strong></td>
-                      <td>{claim.buyerPhone}</td>
-                      <td>{claim.project}</td>
-                      <td>{formatCurrency(claim.purchasePrice)}</td>
-                      <td><strong style={{ color: 'var(--brand-primary)' }}>{formatCurrency(claim.cashbackAmount)}</strong></td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#3b82f6', fontSize: '11px', cursor: 'pointer' }} onClick={() => alert(`Simulating PDF Viewer: Opening ${claim.documentName}...`)}>
-                          <FileText size={12} />
-                          {claim.documentName}
+                  <div className="admin-list-preview">
+                    {dashboardRequestsPreview.map((request) => (
+                      <div key={request.id} className="admin-list-preview-row">
+                        <div>
+                          <strong>{getName(request)}</strong>
+                          <span>{request.businessName || 'Business not provided'}</span>
                         </div>
-                      </td>
-                      <td>
-                        <span className={`badge ${
-                          claim.status === "Approved" ? "badge-success" : 
-                          claim.status === "Rejected" ? "badge-danger" : "badge-warning"
-                        }`}>
-                          {claim.status}
-                        </span>
-                      </td>
-                      <td>
-                        {claim.status === "Pending Verification" ? (
-                          <div style={{ display: 'flex', gap: '6px' }}>
-                            <button 
-                              onClick={() => handleApproveCashback(claim.id)}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '2px',
-                                background: 'rgba(16, 185, 129, 0.15)',
-                                border: '1px solid var(--color-active)',
-                                color: 'var(--color-active)',
-                                padding: '4px 8px',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '11px',
-                                fontWeight: '600'
-                              }}
+                        <button type="button" className="btn-secondary seller-inline-button" onClick={() => setActiveTab('requests')}>
+                          Review
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="admin-panel-section">
+                <div className="admin-panel-section-head">
+                  <div>
+                    <span className="admin-panel-kicker">Property Queue</span>
+                    <h3>Listings under review</h3>
+                  </div>
+                  <button type="button" className="btn-secondary" onClick={() => setActiveTab('listings')}>
+                    Open reviews
+                  </button>
+                </div>
+
+                {dashboardListingPreview.length === 0 ? (
+                  <div className="admin-empty-state">No property listings are waiting for approval.</div>
+                ) : (
+                  <div className="admin-list-preview">
+                    {dashboardListingPreview.map((project) => (
+                      <div key={project.id} className="admin-list-preview-row">
+                        <div>
+                          <strong>{project.name}</strong>
+                          <span>{getProjectOwnerName(project, sellers)}</span>
+                        </div>
+                        <button type="button" className="btn-secondary seller-inline-button" onClick={() => setActiveTab('listings')}>
+                          Review
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'buyers' && (
+          <div className="admin-panel-section">
+            <div className="table-container">
+              <table className="dash-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Role</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedBuyers.length === 0 ? (
+                    <tr>
+                      <td colSpan="4" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No buyer-only accounts found.</td>
+                    </tr>
+                  ) : (
+                    sortedBuyers.map((buyer) => (
+                      <tr key={buyer.id}>
+                        <td><strong>{getName(buyer)}</strong></td>
+                        <td>{buyer.email || 'N/A'}</td>
+                        <td>{buyer.phoneNumber || buyer.phone || 'N/A'}</td>
+                        <td><span className="badge badge-info">Buyer</span></td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'sellers' && (
+          <div className="admin-panel-section">
+            <div className="table-container">
+              <table className="dash-table">
+                <thead>
+                  <tr>
+                    <th>Seller Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Business Name</th>
+                    <th>Properties</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedSellers.length === 0 ? (
+                    <tr>
+                      <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No approved sellers found.</td>
+                    </tr>
+                  ) : (
+                    sortedSellers.map((seller) => {
+                      const sellerProjects = projects.filter((project) => project.ownerId === seller.id);
+                      return (
+                        <tr key={seller.id}>
+                          <td><strong>{seller.displayName || seller.name || seller.businessName || 'Unknown'}</strong></td>
+                          <td>{seller.email || 'N/A'}</td>
+                          <td>{seller.phoneNumber || seller.phone || 'N/A'}</td>
+                          <td>{seller.businessName || 'N/A'}</td>
+                          <td>{sellerProjects.length}</td>
+                          <td>
+                            <span className="badge badge-success">Active</span>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="btn-secondary seller-inline-button"
+                              onClick={() => openSellerWorkspace(seller)}
                             >
-                              <Check size={12} /> Approve
+                              <Users size={14} /> Open Seller Side
                             </button>
-                            <button 
-                              onClick={() => handleRejectCashback(claim.id)}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '2px',
-                                background: 'rgba(239, 68, 68, 0.15)',
-                                border: '1px solid #ef4444',
-                                color: '#ef4444',
-                                padding: '4px 8px',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '11px',
-                                fontWeight: '600'
-                              }}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {pendingSellerRequests > 0 && (
+              <div className="admin-inline-note">
+                <ClipboardList size={16} />
+                <span>{pendingSellerRequests} seller request{pendingSellerRequests === 1 ? '' : 's'} still pending in Firestore.</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'requests' && (
+          <div className="admin-panel-section">
+            <div className="table-container">
+              <table className="dash-table">
+                <thead>
+                  <tr>
+                    <th>Applicant</th>
+                    <th>Business</th>
+                    <th>Contact</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingRequests.length === 0 ? (
+                    <tr>
+                      <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No pending seller requests.</td>
+                    </tr>
+                  ) : (
+                    pendingRequests.map((request) => (
+                      <tr key={request.id}>
+                        <td>
+                          <strong>{getName(request)}</strong>
+                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>{request.userEmail || request.contactEmail || 'No email'}</div>
+                        </td>
+                        <td>{request.businessName || 'N/A'}</td>
+                        <td>{request.contactPhone || request.userPhone || 'N/A'}</td>
+                        <td><span className="badge badge-warning">Pending</span></td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="btn-primary seller-inline-button"
+                              disabled={workingKey === `approve-request-${request.id}`}
+                              onClick={() => handleApproveSellerRequest(request)}
                             >
-                              <X size={12} /> Reject
+                              <ShieldCheck size={14} /> Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-secondary seller-inline-button"
+                              disabled={workingKey === `reject-request-${request.id}`}
+                              onClick={() => handleRejectSellerRequest(request)}
+                            >
+                              <ShieldX size={14} /> Reject
                             </button>
                           </div>
-                        ) : (
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No actions</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : activeTab === 'listings' ? (
-        // LISTINGS MODERATION
-        <div className="table-container">
-          <table className="dash-table">
-            <thead>
-              <tr>
-                <th>Project Name</th>
-                <th>Developer</th>
-                <th>Village</th>
-                <th>Starting Price</th>
-                <th>Verified?</th>
-                <th>PlotIt Score</th>
-                <th>Listing Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {projects.map(proj => (
-                <tr key={proj.id}>
-                  <td><strong>{proj.name}</strong></td>
-                  <td>{proj.developer}</td>
-                  <td>{proj.village}</td>
-                  <td>{formatCurrency(proj.startingPrice)}</td>
-                  <td>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: proj.verified ? 'var(--color-active)' : 'var(--text-muted)' }}>
-                      {proj.verified ? <ShieldCheck size={16} color="var(--brand-primary)" /> : <ShieldAlert size={16} />}
-                      {proj.verified ? 'GPS-Verified' : 'Pending Verification'}
-                    </span>
-                  </td>
-                  <td>
-                    <strong style={{ color: 'var(--accent-gold)' }}>★ {proj.plotItScore}</strong>
-                  </td>
-                  <td>
-                    <span className={`badge ${proj.status === 'Active' ? 'badge-success' : 'badge-danger'}`}>
-                      {proj.status === 'Active' ? 'Live' : 'Sold Out'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        // PIPELINE FUNNEL TRACKING
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <h3 style={{ fontSize: '14px', marginBottom: '-8px' }}>User Acquisition Funnel Metrics</h3>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '10px', textAlign: 'center' }}>
-            <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-              <span style={{ fontSize: '20px' }}>📱</span>
-              <strong style={{ display: 'block', fontSize: '16px', margin: '4px 0' }}>14,200</strong>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Meta Ads Clicks</span>
-            </div>
-            <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)', borderLeft: '2px solid var(--brand-primary)' }}>
-              <span style={{ fontSize: '20px' }}>📥</span>
-              <strong style={{ display: 'block', fontSize: '16px', margin: '4px 0' }}>2,450</strong>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>App Installs</span>
-            </div>
-            <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-              <span style={{ fontSize: '20px' }}>👤</span>
-              <strong style={{ display: 'block', fontSize: '16px', margin: '4px 0' }}>850</strong>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Signups (OTP)</span>
-            </div>
-            <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-              <span style={{ fontSize: '20px' }}>🗓️</span>
-              <strong style={{ display: 'block', fontSize: '16px', margin: '4px 0' }}>{totalBookedVisits}</strong>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Site Visits Booked</span>
-            </div>
-            <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-              <span style={{ fontSize: '20px' }}>🤝</span>
-              <strong style={{ display: 'block', fontSize: '16px', margin: '4px 0' }}>{approvedCashbacks.length + cashbacks.filter(c => c.status === 'Pending Verification').length}</strong>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Purchase Deeds</span>
-            </div>
-            <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-              <span style={{ fontSize: '20px' }}>🎁</span>
-              <strong style={{ display: 'block', fontSize: '16px', margin: '4px 0' }}>{approvedCashbacks.length}</strong>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Cashbacks Payout</span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
+        )}
 
-          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', padding: '16px', borderRadius: '12px' }}>
-            <h4 style={{ fontSize: '13px', marginBottom: '10px' }}>Platform Conversions & CAC</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', fontSize: '12px' }}>
-              <div>
-                <span style={{ color: 'var(--text-secondary)' }}>Visitor-to-Lead Rate</span>
-                <strong style={{ display: 'block', fontSize: '16px', marginTop: '4px', color: 'var(--brand-primary)' }}>17.4%</strong>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)' }}>Meta Ad CAC (Est)</span>
-                <strong style={{ display: 'block', fontSize: '16px', marginTop: '4px', color: 'var(--brand-primary)' }}>₹350 / lead</strong>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)' }}>Platform Net Commission</span>
-                <strong style={{ display: 'block', fontSize: '16px', marginTop: '4px', color: 'var(--brand-primary)' }}>1.0% per Transaction</strong>
-              </div>
+        {activeTab === 'listings' && (
+          <div className="admin-panel-section">
+            <div className="table-container">
+              <table className="dash-table">
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    <th>Seller</th>
+                    <th>Village</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingProjects.length === 0 ? (
+                    <tr>
+                      <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No property listings are waiting for approval.</td>
+                    </tr>
+                  ) : (
+                    pendingProjects.map((project) => {
+                      const seller = sellers.find((item) => item.id === project.ownerId);
+
+                      return (
+                        <tr key={project.id}>
+                          <td>
+                            <strong>{project.name}</strong>
+                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>{project.area || 'Area not provided'}</div>
+                          </td>
+                          <td>{getProjectOwnerName(project, sellers)}</td>
+                          <td>{project.village || 'N/A'}</td>
+                          <td><span className="badge badge-warning">Pending Review</span></td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                className="btn-primary seller-inline-button"
+                                disabled={workingKey === `approve-project-${project.id}`}
+                                onClick={() => handleApproveProject(project.id)}
+                              >
+                                <ShieldCheck size={14} /> Approve
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-secondary seller-inline-button"
+                                disabled={workingKey === `reject-project-${project.id}`}
+                                onClick={() => handleRejectProject(project.id)}
+                              >
+                                <ShieldX size={14} /> Reject
+                              </button>
+                              {seller && (
+                                <button
+                                  type="button"
+                                  className="btn-secondary seller-inline-button"
+                                  onClick={() => openSellerWorkspace(seller)}
+                                >
+                                  <Store size={14} /> Open Seller Side
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
-        </div>
+        )}
+
+        {activeTab === 'profile' && (
+          <section className="admin-panel-section admin-profile-panel">
+            <div className="admin-profile-card">
+              <span className="admin-panel-kicker">Admin Account</span>
+              <h3>{profileName}</h3>
+              <p>{profileEmail}</p>
+              <div className="admin-profile-actions">
+                <button type="button" className="btn-primary" onClick={() => setShowProfileModal(true)}>
+                  <User size={16} /> Edit profile
+                </button>
+                <button type="button" className="btn-secondary" onClick={() => setActiveTab('settings')}>
+                  <Settings size={16} /> Open settings
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'settings' && (
+          <section className="admin-settings-panel">
+            <div className="admin-settings-card">
+              <div>
+                <span className="admin-panel-kicker">Appearance</span>
+                <h3>Workspace preferences</h3>
+                <p>Use the existing theme toggle to switch the admin interface between light and dark mode.</p>
+              </div>
+              <button type="button" className="btn-secondary" onClick={onThemeToggle}>
+                {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
+                {isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              </button>
+            </div>
+
+            <div className="admin-settings-card">
+              <div>
+                <span className="admin-panel-kicker">Support</span>
+                <h3>Need help?</h3>
+                <p>Open your mail client with the existing support address for admin-side questions.</p>
+              </div>
+              <button type="button" className="btn-secondary" onClick={handleSupport}>
+                Contact support
+              </button>
+            </div>
+          </section>
+        )}
+      </section>
+
+      {showProfileModal && user && (
+        <EditProfileModal
+          user={user}
+          title="Edit Admin Profile"
+          successMessage="Admin profile updated successfully!"
+          onClose={() => setShowProfileModal(false)}
+        />
       )}
     </div>
   );

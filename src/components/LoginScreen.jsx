@@ -5,11 +5,11 @@ import {
   RecaptchaVerifier,
   signInWithPhoneNumber
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
-import { Smartphone, MapPin, ArrowRight, ChevronLeft, Loader } from 'lucide-react';
+import { Smartphone, MapPin, ArrowRight, ChevronLeft, Loader, User, Store } from 'lucide-react';
 
-// Ensure user document exists in Firestore with a default role
+// Ensure user document exists in Firestore with permissions
 const ensureUserDoc = async (user) => {
   const ref = doc(db, 'users', user.uid);
   const snap = await getDoc(ref);
@@ -19,7 +19,11 @@ const ensureUserDoc = async (user) => {
       name: user.displayName || '',
       email: user.email || '',
       phone: user.phoneNumber || '',
-      role: 'buyer', // Default role — upgrade to 'seller' or 'admin' manually in Firestore
+      permissions: {
+        buyer: true,
+        seller: false,
+        admin: false
+      },
       createdAt: serverTimestamp()
     });
   }
@@ -34,6 +38,45 @@ function LoginScreen({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Development-only admin login
+  const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+  const handleDevAdminLogin = () => {
+    // Create a mock admin user for development
+    const devAdminUser = {
+      uid: 'dev-admin-123',
+      displayName: 'Development Admin',
+      email: 'admin@localhost.dev',
+      phoneNumber: '+919999999999'
+    };
+    
+    // Grant full admin permissions
+    const devAdminPermissions = {
+      buyer: true,
+      seller: true,
+      admin: true
+    };
+    
+    onLogin(devAdminUser, devAdminPermissions);
+  };
+
+  const getGoogleSignInError = (err) => {
+    switch (err?.code) {
+      case 'auth/operation-not-allowed':
+        return 'Google sign-in is not enabled yet. Enable Google in Firebase Console → Authentication → Sign-in method.';
+      case 'auth/unauthorized-domain':
+        return `This address is not authorized for Google sign-in (${window.location.hostname}). Add it in Firebase Console → Authentication → Settings → Authorized domains.`;
+      case 'auth/popup-blocked':
+        return 'Your browser blocked the Google sign-in window. Allow pop-ups for this site and try again.';
+      case 'auth/popup-closed-by-user':
+        return 'Google sign-in was cancelled before it finished. Please try again.';
+      case 'auth/network-request-failed':
+        return 'Network error while contacting Google. Check your connection and try again.';
+      default:
+        return `Google sign-in failed${err?.code ? ` (${err.code})` : ''}. Please try again.`;
+    }
+  };
+
   // ─── Google Sign-In ───────────────────────────────────────────────
   const handleGoogleLogin = async () => {
     setLoading(true);
@@ -42,10 +85,10 @@ function LoginScreen({ onLogin }) {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
       const userData = await ensureUserDoc(result.user);
-      onLogin(result.user, userData.role);
+      onLogin(result.user, userData.permissions);
     } catch (err) {
-      setError('Google sign-in failed. Please try again.');
-      console.error(err);
+      setError(getGoogleSignInError(err));
+      console.error('Google sign-in error:', err);
     } finally {
       setLoading(false);
     }
@@ -88,7 +131,7 @@ function LoginScreen({ onLogin }) {
     try {
       const result = await confirmationResult.confirm(otp);
       const userData = await ensureUserDoc(result.user);
-      onLogin(result.user, userData.role);
+      onLogin(result.user, userData.permissions);
     } catch (err) {
       setError('Invalid OTP. Please check the code and try again.');
       console.error(err);
@@ -254,6 +297,34 @@ function LoginScreen({ onLogin }) {
               </svg>
               {loading ? 'Signing in...' : 'Continue with Google'}
             </button>
+
+            {/* Development-only admin login button */}
+            {isDevelopment && (
+              <button
+                onClick={handleDevAdminLogin}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 10,
+                  padding: '13px 20px',
+                  background: 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)',
+                  border: '2px dashed #3b82f6',
+                  borderRadius: 12,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  color: '#ffffff',
+                  cursor: 'pointer',
+                  marginBottom: 12,
+                  transition: 'all 0.2s',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}
+              >
+                🔧 Login as Admin (Development)
+              </button>
+            )}
 
             {/* Divider */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>

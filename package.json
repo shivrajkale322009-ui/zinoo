@@ -1,12 +1,15 @@
 {
-  "name": "plotit-pwa",
+  "name": "Druvio-pwa",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "firebase deploy",
+    "deploy:rules": "firebase deploy --only firestore:rules",
+    "deploy:hosting": "firebase deploy --only hosting"
   },
   "dependencies": {
     "firebase": "^12.16.0",

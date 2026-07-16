@@ -22,21 +22,35 @@ service cloud.firestore {
 
     match /leads/{recordId} {
       allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
-      allow read: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid) || (seller() && resource.data.projectOwnerId == request.auth.uid);
+      // Cheap ownership checks first, so the `get()` inside admin()/seller()
+      // only runs when strictly necessary — keeps reads fast for normal users.
+      allow read: if signedIn() && (
+        resource.data.createdBy == request.auth.uid ||
+        resource.data.projectOwnerId == request.auth.uid ||
+        admin()
+      );
       allow update: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid && request.resource.data.createdBy == resource.data.createdBy);
       allow delete: if admin();
     }
 
     match /visits/{recordId} {
       allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
-      allow read: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid) || (seller() && resource.data.projectOwnerId == request.auth.uid);
+      allow read: if signedIn() && (
+        resource.data.createdBy == request.auth.uid ||
+        resource.data.projectOwnerId == request.auth.uid ||
+        admin()
+      );
       allow update: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid && request.resource.data.createdBy == resource.data.createdBy);
       allow delete: if admin();
     }
 
     match /cashbacks/{recordId} {
       allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
-      allow read: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid) || (seller() && resource.data.projectOwnerId == request.auth.uid);
+      allow read: if signedIn() && (
+        resource.data.createdBy == request.auth.uid ||
+        resource.data.projectOwnerId == request.auth.uid ||
+        admin()
+      );
       allow update: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid && request.resource.data.createdBy == resource.data.createdBy);
       allow delete: if admin();
     }

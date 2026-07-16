@@ -1,0 +1,28 @@
+src/App.jsx:24: leftover conflict marker
+src/App.jsx:89: leftover conflict marker
+src/App.jsx:144: leftover conflict marker
+src/App.jsx:214: trailing whitespace.
+[32m+[m[41m      [m
+src/App.jsx:221: trailing whitespace.
+[32m+[m[41m      [m
+src/App.jsx:224: trailing whitespace.
+[32m+[m[41m      [m
+src/App.jsx:234: trailing whitespace.
+[32m+[m[41m      [m
+src/App.jsx:330: trailing whitespace.
+[32m+[m[41m  [m
+src/App.jsx:381: leftover conflict marker
+src/App.jsx:384: leftover conflict marker
+src/App.jsx:386: trailing whitespace.
+[32m+[m[32m        <ProfileDropdown[m[41m [m
+src/App.jsx:387: trailing whitespace.
+[32m+[m[32m          user={user}[m[41m [m
+src/App.jsx:388: trailing whitespace.
+[32m+[m[32m          onThemeToggle={toggleTheme}[m[41m [m
+src/App.jsx:389: trailing whitespace.
+[32m+[m[32m          isDarkMode={isDarkMode}[m[41m [m
+src/App.jsx:396: leftover conflict marker
+src/index.css:1030: leftover conflict marker
+src/index.css:1037: leftover conflict marker
+src/index.css:1039: leftover conflict marker
+src/index.css:1867: leftover conflict marker

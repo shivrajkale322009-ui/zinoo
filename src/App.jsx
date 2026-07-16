@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import React, { useEffect, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import {
   addDoc,
   collection,
@@ -16,108 +16,101 @@ import BuyerApp from './components/BuyerApp';
 import SellerDashboard from './components/SellerDashboard';
 import AdminPanel from './components/AdminPanel';
 import LoginScreen from './components/LoginScreen';
+import ProfileDropdown from './components/ProfileDropdown';
 import { auth, db } from './firebaseConfig';
 
 const collections = ['projects', 'leads', 'visits', 'cashbacks'];
 
-function Avatar({ user, size = 36 }) {
-  const [failed, setFailed] = useState(false);
-  const label = user.displayName || user.phoneNumber || user.email || 'Account';
-  const initials = (user.displayName || user.email || user.phoneNumber || '?').trim().charAt(0).toUpperCase();
-  const sizing = { width: size, height: size, fontSize: Math.round(size * 0.42) };
-
-  if (user.photoURL && !failed) {
-    return (
-      <img
-        className="avatar-img"
-        style={sizing}
-        src={user.photoURL}
-        alt={label}
-        referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
-      />
-    );
-  }
-  return <span className="avatar-fallback" style={sizing}>{initials}</span>;
-}
-
-function AccountMenu({ user }) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef(null);
-  const label = user.displayName || user.phoneNumber || user.email || 'Account';
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleClick = (event) => {
-      if (menuRef.current && !menuRef.current.contains(event.target)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [open]);
-
-  return (
-    <div className="account-menu" ref={menuRef}>
-      <button
-        type="button"
-        className="avatar-button"
-        onClick={() => setOpen((value) => !value)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="Account menu"
-      >
-        <Avatar user={user} size={38} />
-      </button>
-      {open && (
-        <div className="account-dropdown" role="menu">
-          <div className="account-dropdown-header">
-            <Avatar user={user} size={42} />
-            <div className="account-dropdown-meta">
-              <strong>{label}</strong>
-              {user.email && <span>{user.email}</span>}
-            </div>
-          </div>
-          <button type="button" className="account-dropdown-action" role="menuitem" onClick={() => signOut(auth)}>
-            <LogOut size={16} /> Sign out
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function App() {
   const [user, setUser] = useState(null);
-  const [role, setRole] = useState(null);
+  const [permissions, setPermissions] = useState(null);
+  const [currentView, setCurrentView] = useState('buyer'); // 'buyer', 'seller', 'admin'
+  const [selectedSeller, setSelectedSeller] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [data, setData] = useState({ projects: [], leads: [], visits: [], cashbacks: [] });
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    return saved ? saved === 'dark' : false;
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark-mode', isDarkMode);
+    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
+  const toggleTheme = () => {
+    setIsDarkMode(!isDarkMode);
+  };
+
+  const handleViewChange = (nextView) => {
+    if (!permissions) return;
+    const resolvedView = canAccessView(permissions, nextView)
+      ? nextView
+      : getDefaultView(permissions);
+
+    setCurrentView(resolvedView);
+    if (resolvedView !== 'seller') {
+      setSelectedSeller(null);
+    }
+  };
 
   useEffect(() => onAuthStateChanged(auth, async (nextUser) => {
     setUser(nextUser);
     if (!nextUser) {
-      setRole(null);
+      setPermissions(null);
+      setCurrentView('buyer');
+      setSelectedSeller(null);
       setLoading(false);
       return;
     }
 
     try {
-      const profile = await getDoc(doc(db, 'users', nextUser.uid));
-      setRole(profile.data()?.role || 'buyer');
-    } catch {
-      setError('Unable to load your account profile. Please try again.');
+      // 10s safeguard so a slow/unreachable Firestore never blocks the app.
+      const profile = await withTimeout(getDoc(doc(db, 'users', nextUser.uid)), 10000);
+      const userPermissions = normalizePermissions(profile.data());
+      setPermissions(userPermissions);
+      setCurrentView(getDefaultView(userPermissions));
+      if (userPermissions.admin) setSelectedSeller(null);
+    } catch (err) {
+      // CRITICAL: we must still assign permissions here. Default to buyer.
+      console.error('Unable to load account profile:', err);
+      setPermissions(DEFAULT_PERMISSIONS);
+      setCurrentView('buyer');
+      setSelectedSeller(null);
+      setError('We could not load your profile, so you have been signed in as a buyer. Please refresh if this looks wrong.');
     } finally {
       setLoading(false);
     }
   }), []);
 
   useEffect(() => {
-    if (!user || !role) return undefined;
+    if (!user || !permissions) return undefined;
 
     const sourceFor = (name) => {
       const ref = collection(db, name);
-      if (role === 'admin' || name === 'projects' && role === 'buyer') return ref;
-      if (role === 'seller') return query(ref, where(name === 'projects' ? 'ownerId' : 'projectOwnerId', '==', user.uid));
-      return query(ref, where('createdBy', '==', user.uid));
+
+      // Admin inspecting an existing seller workspace.
+      if (permissions.admin && currentView === 'seller' && selectedSeller) {
+        if (name === 'projects') return query(ref, where('ownerId', '==', selectedSeller.id));
+        if (name === 'leads' || name === 'visits') return query(ref, where('projectOwnerId', '==', selectedSeller.id));
+        return ref;
+      }
+
+      // Primary admin view keeps global access.
+      if (permissions.admin && currentView === 'admin') return ref;
+
+      // Buyer mode reuses the existing buyer app with approved listings plus the
+      // signed-in account's own activity records.
+      if (currentView === 'buyer') {
+        if (name === 'projects') return ref;
+        return query(ref, where('createdBy', '==', user.uid));
+      }
+
+      // Seller view
+      if (currentView === 'seller') return query(ref, where(name === 'projects' ? 'ownerId' : 'projectOwnerId', '==', user.uid));
+
+      return ref;
     };
 
     const unsubscribers = collections.map((name) => onSnapshot(
@@ -130,7 +123,7 @@ function App() {
     ));
 
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [user, role]);
+  }, [user, permissions, currentView, selectedSeller]);
 
   const createRecord = async (name, record) => {
     try {
@@ -152,7 +145,12 @@ function App() {
   const updateLead = (lead) => updateRecord('leads', lead.id, lead);
   const addVisit = (visit) => createRecord('visits', visit);
   const addCashback = (cashback) => createRecord('cashbacks', cashback);
-  const addProject = (project) => createRecord('projects', { ...project, ownerId: user.uid });
+  const addProject = (project) => createRecord('projects', {
+    ...project,
+    ownerId: selectedSeller?.id || user.uid,
+    status: permissions?.admin && currentView === 'seller' && selectedSeller ? 'approved' : 'pending_review',
+    createdByAdmin: Boolean(permissions?.admin && currentView === 'seller' && selectedSeller)
+  });
   const updateProject = (project) => updateRecord('projects', project.id, project);
   const updateCashbackStatus = async (id, status) => {
     await updateRecord('cashbacks', id, { status });
@@ -163,23 +161,112 @@ function App() {
     }
   };
 
+  const handleAdminSwitchToBuyer = () => {
+    handleViewChange('buyer');
+  };
+
+  const handleAdminSwitchToSeller = () => {
+    handleViewChange('seller');
+  };
+
+  const handleAdminSwitchToAdmin = () => {
+    handleViewChange('admin');
+  };
+
+  const handleAdminSelectSeller = (seller) => {
+    setSelectedSeller({ ...seller, uid: seller.uid || seller.id });
+    setCurrentView('seller');
+  };
+
+  const handleBackToAdmin = () => {
+    handleAdminSwitchToAdmin();
+  };
+
+  const handleSelectedSellerChange = (changes) => {
+    setSelectedSeller((current) => (current ? { ...current, ...changes } : current));
+  };
+
   if (loading) return <div className="app-loading">Loading Druvio…</div>;
-  if (user && !role) return <div className="app-loading">Loading account…</div>;
-  if (!user) return <LoginScreen onLogin={(signedInUser, signedInRole) => { setUser(signedInUser); setRole(signedInRole); }} />;
+  if (user && !permissions) return <div className="app-loading">Loading account…</div>;
+  if (!user) {
+    return (
+      <LoginScreen
+        onLogin={(signedInUser, signedInPermissions) => {
+          const normalizedPermissions = normalizePermissions(signedInPermissions);
+          setUser(signedInUser);
+          setPermissions(normalizedPermissions);
+          setCurrentView(getDefaultView(normalizedPermissions));
+          setSelectedSeller(null);
+          setLoading(false);
+        }}
+      />
+    );
+  }
 
   const profileName = user.displayName || user.phoneNumber || user.email || 'User';
   const profileInitial = profileName.trim().charAt(0).toUpperCase() || 'U';
-  const content = role === 'admin'
-    ? <AdminPanel {...data} updateCashbackStatus={updateCashbackStatus} addProject={addProject} />
-    : role === 'seller'
-      ? <SellerDashboard {...data} updateProject={updateProject} addProject={addProject} />
+
+  const content = currentView === 'admin'
+    ? (
+      <AdminPanel
+        projects={data.projects}
+        user={user}
+        isDarkMode={isDarkMode}
+        onThemeToggle={toggleTheme}
+        onSwitchToAdmin={handleAdminSwitchToAdmin}
+        onSwitchToBuyer={handleAdminSwitchToBuyer}
+        onSwitchToSeller={handleAdminSwitchToSeller}
+        onSelectSeller={handleAdminSelectSeller}
+      />
+    )
+    : currentView === 'seller'
+      ? (
+        permissions?.admin && !selectedSeller
+          ? (
+            <AdminPanel
+              projects={data.projects}
+              user={user}
+              initialTab="seller_selection"
+              isDarkMode={isDarkMode}
+              onThemeToggle={toggleTheme}
+              onSwitchToAdmin={handleAdminSwitchToAdmin}
+              onSwitchToBuyer={handleAdminSwitchToBuyer}
+              onSwitchToSeller={handleAdminSwitchToSeller}
+              onSelectSeller={handleAdminSelectSeller}
+            />
+          )
+          : (
+            <SellerDashboard
+              {...data}
+              updateProject={updateProject}
+              addProject={addProject}
+              isAdminView={Boolean(permissions?.admin && selectedSeller)}
+              selectedSeller={selectedSeller}
+              onBackToAdmin={handleBackToAdmin}
+              onSelectedSellerChange={handleSelectedSellerChange}
+            />
+          )
+      )
       : <BuyerApp {...data} addLead={addLead} updateLead={updateLead} addVisit={addVisit} addCashback={addCashback} />;
 
+  const headerViewLabel = permissions?.admin && currentView === 'seller' && selectedSeller
+    ? `${selectedSeller.displayName || selectedSeller.name || selectedSeller.businessName || 'seller'}`
+    : currentView;
+
   return (
-    <main className={`live-app ${role === 'buyer' ? 'buyer-experience' : 'backoffice-experience'}`}>
+    <main className={`live-app ${currentView === 'buyer' ? 'buyer-experience' : 'backoffice-experience'}`}>
       <header className="live-app-header">
-        <div className="brand-lockup"><MapPin size={21} /><strong>Druvio</strong><span>{role}</span></div>
-        <AccountMenu user={user} />
+        <div className="brand-lockup"><MapPin size={21} /><strong>Druvio</strong><span>{headerViewLabel}</span></div>
+        <ProfileDropdown
+          user={user}
+          onThemeToggle={toggleTheme}
+          isDarkMode={isDarkMode}
+          permissions={permissions}
+          currentView={currentView}
+          onViewChange={handleViewChange}
+          onBackToAdmin={handleBackToAdmin}
+          selectedSeller={selectedSeller}
+        />
       </header>
       {error && <div className="app-error" role="alert">{error}</div>}
       <section className="live-app-content">{content}</section>
