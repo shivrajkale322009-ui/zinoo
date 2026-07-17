@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   addDoc,
   collection,
   doc,
   getDoc,
+  limit,
   onSnapshot,
   query,
   serverTimestamp,
@@ -46,11 +47,11 @@ function App() {
     localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
 
-  const toggleTheme = () => {
-    setIsDarkMode(!isDarkMode);
-  };
+  const toggleTheme = useCallback(() => {
+    setIsDarkMode((prev) => !prev);
+  }, []);
 
-  const handleViewChange = (nextView) => {
+  const handleViewChange = useCallback((nextView) => {
     if (!permissions) return;
     const resolvedView = canAccessView(permissions, nextView)
       ? nextView
@@ -60,63 +61,71 @@ function App() {
     if (resolvedView !== 'seller') {
       setSelectedSeller(null);
     }
-  };
+  }, [permissions]);
 
-  useEffect(() => onAuthStateChanged(auth, async (nextUser) => {
-    setUser(nextUser);
-    if (!nextUser) {
-      setPermissions(null);
-      setCurrentView('buyer');
-      setSelectedSeller(null);
-      setLoading(false);
-      return;
-    }
+  useEffect(() => {
+    let unsubscribeProfile = null;
 
-    try {
-      // Wait for Firestore to return the user profile
-      const profile = await withTimeout(
-        getDoc(doc(db, "users", nextUser.uid)),
-        10000,
-        "Timed out loading user profile"
-      );
-
-      if (!profile.exists()) {
-        throw new Error(`User profile not found for UID: ${nextUser.uid}`);
-      }
-
-      const profileData = profile.data();
-      console.log("UID:", nextUser.uid);
-      console.log("Firestore profile:", profileData);
-      console.log("Firestore profile:", profileData);
-
-
-      const userPermissions = normalizePermissions(
-        profileData.permissions ?? profileData
-      );
-
-      console.log("Normalized permissions:", userPermissions);
-      console.log("Default view:", getDefaultView(userPermissions));
-      setPermissions(userPermissions);
-      setCurrentView(getDefaultView(userPermissions));
-
-      if (userPermissions.admin) {
+    const unsubscribeAuth = onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+      if (!nextUser) {
+        setPermissions(null);
+        setCurrentView('buyer');
         setSelectedSeller(null);
+        setLoading(false);
+        if (unsubscribeProfile) {
+          unsubscribeProfile();
+          unsubscribeProfile = null;
+        }
+        return;
       }
-    } catch (err) {
-      console.error("PROFILE LOAD FAILED");
-      console.error(err);
-      console.error(err.stack);
 
-      alert(err?.message);
+      unsubscribeProfile = onSnapshot(
+        doc(db, 'users', nextUser.uid),
+        (profile) => {
+          if (!profile.exists()) {
+            console.error(`User profile not found for UID: ${nextUser.uid}`);
+            setPermissions(DEFAULT_PERMISSIONS);
+            setCurrentView('buyer');
+            setSelectedSeller(null);
+            setError('We could not load your profile, so you have been signed in as a buyer.');
+            setLoading(false);
+            return;
+          }
 
-      setPermissions(DEFAULT_PERMISSIONS);
-      setCurrentView("buyer");
-      setSelectedSeller(null);
-      setError(
-        "We could not load your profile, so you have been signed in as a buyer."
+          const profileData = profile.data();
+          const userPermissions = normalizePermissions(profileData.permissions ?? profileData);
+
+          setPermissions(userPermissions);
+          setCurrentView((current) => {
+            if (canAccessView(userPermissions, current)) {
+              return current;
+            }
+            return getDefaultView(userPermissions);
+          });
+          
+          if (!userPermissions.admin && !userPermissions.seller) {
+            setSelectedSeller(null);
+          }
+          setLoading(false);
+        },
+        (err) => {
+          console.error('PROFILE LOAD FAILED', err);
+          alert(err?.message);
+          setPermissions(DEFAULT_PERMISSIONS);
+          setCurrentView('buyer');
+          setSelectedSeller(null);
+          setError('We could not load your profile, so you have been signed in as a buyer.');
+          setLoading(false);
+        }
       );
-    }
-  }), []);
+    });
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeProfile) unsubscribeProfile();
+    };
+  }, []);
 
   useEffect(() => {
     if (!user || !permissions) return undefined;
@@ -132,7 +141,7 @@ function App() {
       }
 
       // Primary admin view keeps global access.
-      if (permissions.admin && currentView === 'admin') return ref;
+      if (permissions.admin && currentView === 'admin') return query(ref, limit(500));
 
       // Buyer mode reuses the existing buyer app with approved listings plus the
       // signed-in account's own activity records.
@@ -195,30 +204,30 @@ function App() {
     }
   };
 
-  const handleAdminSwitchToBuyer = () => {
+  const handleAdminSwitchToBuyer = useCallback(() => {
     handleViewChange('buyer');
-  };
+  }, [handleViewChange]);
 
-  const handleAdminSwitchToSeller = () => {
+  const handleAdminSwitchToSeller = useCallback(() => {
     handleViewChange('seller');
-  };
+  }, [handleViewChange]);
 
-  const handleAdminSwitchToAdmin = () => {
+  const handleAdminSwitchToAdmin = useCallback(() => {
     handleViewChange('admin');
-  };
+  }, [handleViewChange]);
 
-  const handleAdminSelectSeller = (seller) => {
+  const handleAdminSelectSeller = useCallback((seller) => {
     setSelectedSeller({ ...seller, uid: seller.uid || seller.id });
     setCurrentView('seller');
-  };
+  }, []);
 
-  const handleBackToAdmin = () => {
-    handleAdminSwitchToAdmin();
-  };
+  const handleBackToAdmin = useCallback(() => {
+    handleViewChange('admin');
+  }, [handleViewChange]);
 
-  const handleSelectedSellerChange = (changes) => {
+  const handleSelectedSellerChange = useCallback((changes) => {
     setSelectedSeller((current) => (current ? { ...current, ...changes } : current));
-  };
+  }, []);
 
   if (loading) return <div className="app-loading">Loading Druvio…</div>;
   if (user && !permissions) return <div className="app-loading">Loading account…</div>;
@@ -281,7 +290,7 @@ function App() {
             />
           )
       )
-      : <BuyerApp {...data} addLead={addLead} updateLead={updateLead} addVisit={addVisit} addCashback={addCashback} />;
+      : <BuyerApp {...data} addLead={addLead} updateLead={updateLead} addVisit={addVisit} addCashback={addCashback} isAdmin={Boolean(permissions?.admin)} />;
 
   const headerViewLabel = permissions?.admin && currentView === 'seller' && selectedSeller
     ? `${selectedSeller.displayName || selectedSeller.name || selectedSeller.businessName || 'seller'}`

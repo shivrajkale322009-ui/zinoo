@@ -29,7 +29,7 @@ import EditProfileModal from './EditProfileModal';
 const createProjectDraft = (developer) => ({
   name: '',
   developer: developer || 'Shivraj Land Developers',
-  village: 'Chakan',
+  village: '',
   area: '',
   latitude: 18.7889,
   longitude: 73.8568,
@@ -50,6 +50,14 @@ const createProjectDraft = (developer) => ({
   nearbyMIDC: '',
   nearbyHighway: '',
   description: '',
+  thumbnail: '',
+  cashbackPercentage: '',
+  cashbackAmount: '',
+  whatsappNumber: '',
+  siteVisitContact: '',
+  googleMapsLink: '',
+  website: '',
+  reraNumber: '',
   heroImage: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80',
   layoutPlanUrl: 'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=800&q=80'
 });
@@ -60,6 +68,18 @@ const toNumber = (value, fallback = 0) => {
 };
 
 const formatLakhs = (value) => `₹${(toNumber(value) / 100000).toFixed(1)}L`;
+
+const normalizeAmenities = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') return value.split(',').map((item) => item.trim()).filter(Boolean);
+  return [];
+};
+
+const formatCashback = (project) => {
+  if (project.cashbackPercentage) return `${project.cashbackPercentage}% Cashback`;
+  if (project.cashbackAmount) return `₹${new Intl.NumberFormat('en-IN').format(project.cashbackAmount)} Cashback`;
+  return '';
+};
 
 const stageClassName = (stage) => {
   if (stage === 'Purchased') return 'badge-success';
@@ -161,7 +181,7 @@ function SellerDashboard({
 
   const handleAddProject = (e) => {
     e.preventDefault();
-    if (!newProject.name.trim() || !newProject.area.trim()) return;
+    if (!newProject.name.trim()) return;
 
     const createdProject = {
       name: newProject.name.trim(),
@@ -189,8 +209,16 @@ function SellerDashboard({
       },
       updated: 'Just now',
       status: isAdminView ? 'approved' : 'pending_review',
+      thumbnail: newProject.thumbnail || newProject.heroImage,
       heroImage: newProject.heroImage,
       description: newProject.description || 'Freshly listed residential plotting development near Chakan.',
+      cashbackPercentage: toNumber(newProject.cashbackPercentage),
+      cashbackAmount: toNumber(newProject.cashbackAmount),
+      whatsappNumber: newProject.whatsappNumber,
+      siteVisitContact: newProject.siteVisitContact,
+      googleMapsLink: newProject.googleMapsLink,
+      website: newProject.website,
+      reraNumber: newProject.reraNumber,
       layoutPlanUrl: newProject.layoutPlanUrl,
       DruvioScore: 4.6
     };
@@ -548,7 +576,8 @@ function SellerDashboard({
                   <div className="seller-project-tags">
                     {project.naPlot && <span>NA Certified</span>}
                     {project.bankLoan && <span>Bank Loan Ready</span>}
-                    {(project.amenities || []).slice(0, 2).map((item) => <span key={item}>{item}</span>)}
+                    {formatCashback(project) && <span>{formatCashback(project)}</span>}
+                    {normalizeAmenities(project.amenities).slice(0, 2).map((item) => <span key={item}>{item}</span>)}
                   </div>
 
                   <div className="seller-project-footer">
@@ -593,11 +622,11 @@ function SellerDashboard({
               </label>
               <label className="seller-field">
                 <span>Village</span>
-                <input type="text" className="form-input" required value={newProject.village} onChange={(e) => setNewProject({ ...newProject, village: e.target.value })} />
+                <input type="text" className="form-input" value={newProject.village} onChange={(e) => setNewProject({ ...newProject, village: e.target.value })} />
               </label>
               <label className="seller-field">
                 <span>Micro-area / landmark</span>
-                <input type="text" className="form-input" placeholder="Near Mercedes Benz Junction" required value={newProject.area} onChange={(e) => setNewProject({ ...newProject, area: e.target.value })} />
+                <input type="text" className="form-input" placeholder="Near Mercedes Benz Junction" value={newProject.area} onChange={(e) => setNewProject({ ...newProject, area: e.target.value })} />
               </label>
               <label className="seller-field">
                 <span>Developer identity</span>
@@ -652,6 +681,10 @@ function SellerDashboard({
                 <input type="url" className="form-input" value={newProject.heroImage} onChange={(e) => setNewProject({ ...newProject, heroImage: e.target.value })} />
               </label>
               <label className="seller-field">
+                <span>Thumbnail URL</span>
+                <input type="url" className="form-input" value={newProject.thumbnail} onChange={(e) => setNewProject({ ...newProject, thumbnail: e.target.value })} />
+              </label>
+              <label className="seller-field">
                 <span>Layout plan URL</span>
                 <input type="url" className="form-input" value={newProject.layoutPlanUrl} onChange={(e) => setNewProject({ ...newProject, layoutPlanUrl: e.target.value })} />
               </label>
@@ -662,6 +695,40 @@ function SellerDashboard({
               <label className="seller-field seller-field-full">
                 <span>Short description</span>
                 <textarea className="form-input seller-textarea" value={newProject.description} onChange={(e) => setNewProject({ ...newProject, description: e.target.value })} />
+              </label>
+            </div>
+          </div>
+
+          <div className="seller-form-section">
+            <h4>Business details</h4>
+            <div className="seller-form-grid">
+              <label className="seller-field">
+                <span>Cashback percentage</span>
+                <input type="number" className="form-input" value={newProject.cashbackPercentage} onChange={(e) => setNewProject({ ...newProject, cashbackPercentage: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Cashback amount</span>
+                <input type="number" className="form-input" value={newProject.cashbackAmount} onChange={(e) => setNewProject({ ...newProject, cashbackAmount: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>WhatsApp number</span>
+                <input type="text" className="form-input" value={newProject.whatsappNumber} onChange={(e) => setNewProject({ ...newProject, whatsappNumber: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Site visit contact</span>
+                <input type="text" className="form-input" value={newProject.siteVisitContact} onChange={(e) => setNewProject({ ...newProject, siteVisitContact: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Google Maps link</span>
+                <input type="url" className="form-input" value={newProject.googleMapsLink} onChange={(e) => setNewProject({ ...newProject, googleMapsLink: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>Website</span>
+                <input type="url" className="form-input" value={newProject.website} onChange={(e) => setNewProject({ ...newProject, website: e.target.value })} />
+              </label>
+              <label className="seller-field">
+                <span>RERA number</span>
+                <input type="text" className="form-input" value={newProject.reraNumber} onChange={(e) => setNewProject({ ...newProject, reraNumber: e.target.value })} />
               </label>
             </div>
           </div>

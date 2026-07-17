@@ -20,6 +20,8 @@ import {
   doc,
   getDoc,
   onSnapshot,
+  query,
+  limit,
   serverTimestamp,
   setDoc,
   updateDoc

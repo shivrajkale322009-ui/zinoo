@@ -1,74 +1,247 @@
-import React, { useState } from 'react';
-import BuyerMap from './BuyerMap';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import MapScreen from '../maps/MapScreen';
 import {
-  Search, Filter, Map, List, Compass, Star, ChevronLeft, Calendar,
-  MapPin, Gift, Phone, Check, RefreshCw, X, Download, ZoomIn, MessageSquare
+  Home,
+  Gift,
+  Heart,
+  MapPin,
+  Settings,
+  Search,
+  SlidersHorizontal,
+  Star,
+  ChevronLeft,
+  MessageSquare,
+  Check,
+  X,
+  Plus,
+  Trash2,
+  Copy,
+  LayoutGrid,
+  Image as ImageIcon,
+  Globe,
+  ExternalLink,
+  Building2,
+  Compass
 } from 'lucide-react';
+import {
+  loadProjectLayouts,
+  deleteProjectLayout,
+  duplicateProjectLayout,
+  deleteProject,
+  updateProjectDetails
+} from '../maps/projectMapService';
 
-function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, addVisit, addCashback }) {
-  const [activeTab, setActiveTab] = useState('feed'); // 'feed', 'map', 'cashback'
+const MANAGEMENT_TABS = [
+  { id: 'general', label: 'General Information' },
+  { id: 'layouts', label: 'Layouts' },
+  { id: 'media', label: 'Media' },
+  { id: 'settings', label: 'Settings' }
+];
+
+const createEmptyProjectForm = () => ({
+  name: '',
+  developer: '',
+  priceFrom: '',
+  remainingPlots: '',
+  village: '',
+  taluka: '',
+  area: '',
+  description: '',
+  thumbnail: '',
+  amenities: '',
+  status: 'approved',
+  cashbackPercentage: '',
+  cashbackAmount: '',
+  whatsappNumber: '',
+  siteVisitContact: '',
+  googleMapsLink: '',
+  website: '',
+  reraNumber: ''
+});
+
+const DEFAULT_FILTERS = {
+  budgetMax: 3000000,
+  distanceMax: 10,
+  naPlot: false,
+  bankLoan: false,
+  minScore: 0
+};
+
+const SIDEBAR_ITEMS = [
+  { id: 'home', label: 'Home', icon: Home },
+  { id: 'cashback', label: 'Cashback', icon: Gift },
+  { id: 'saved', label: 'Saved', icon: Heart, disabled: true },
+  { id: 'nearby', label: 'Nearby', icon: MapPin, disabled: true },
+  { id: 'settings', label: 'Settings', icon: Settings, disabled: true }
+];
+
+const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
+
+const normalizeAmenities = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value.split(',').map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+};
+
+const getProjectFormFromRecord = (project) => ({
+  name: project?.name || '',
+  developer: project?.developer || '',
+  priceFrom: project?.priceFrom ?? project?.startingPrice ?? '',
+  remainingPlots: project?.remainingPlots ?? '',
+  village: project?.village || '',
+  taluka: project?.taluka || '',
+  area: project?.area || '',
+  description: project?.description || '',
+  thumbnail: project?.thumbnail || project?.heroImage || '',
+  amenities: normalizeAmenities(project?.amenities).join(', '),
+  status: project?.status || 'approved',
+  cashbackPercentage: project?.cashbackPercentage ?? '',
+  cashbackAmount: project?.cashbackAmount ?? '',
+  whatsappNumber: project?.whatsappNumber || '',
+  siteVisitContact: project?.siteVisitContact || '',
+  googleMapsLink: project?.googleMapsLink || '',
+  website: project?.website || '',
+  reraNumber: project?.reraNumber || ''
+});
+
+const getDisplayLocation = (project) =>
+  [project?.village, project?.taluka, project?.area].filter((item) => hasValue(item)).join(' • ');
+
+const buildWhatsAppUrl = (project) => {
+  if (!hasValue(project?.whatsappNumber)) return '';
+  const phone = String(project.whatsappNumber).replace(/[^\d]/g, '');
+  if (!phone) return '';
+  const message = `Hi, I am interested in ${project.name || 'your project'} on Druvio.`;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+};
+
+const formatINR = (num) => {
+  if (!hasValue(num)) return 'Price on request';
+  const parsed = Number(num);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 'Price on request';
+  if (parsed >= 10000000) return `₹${(parsed / 10000000).toFixed(2)} Cr`;
+  return `₹${(parsed / 100000).toFixed(1)} Lakh`;
+};
+
+const formatCashbackLabel = (project) => {
+  if (hasValue(project?.cashbackPercentage)) return `${project.cashbackPercentage}% Cashback`;
+  if (hasValue(project?.cashbackAmount)) {
+    const amount = Number(project.cashbackAmount);
+    if (Number.isFinite(amount) && amount > 0) {
+      return `₹${new Intl.NumberFormat('en-IN').format(amount)} Cashback`;
+    }
+  }
+  return '';
+};
+
+const getNavigateUrl = (project) => {
+  if (hasValue(project?.googleMapsLink)) return project.googleMapsLink;
+  if (hasValue(project?.latitude) && hasValue(project?.longitude)) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${project.latitude},${project.longitude}`;
+  }
+  return '';
+};
+
+function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, addVisit, addCashback, isAdmin = false }) {
+  const [panelMode, setPanelMode] = useState(null);
   const [selectedProject, setSelectedProject] = useState(null);
-
-  // Filter Drawer & Search State
-  const [showFilters, setShowFilters] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filters, setFilters] = useState({
-    budgetMax: 3000000,
-    distanceMax: 10,
-    minSize: 0,
-    facing: 'Any',
-    bankLoan: false,
-    naPlot: false,
-    minScore: 0
-  });
-
-  // Modals
+  const [projectLayouts, setProjectLayouts] = useState([]);
+  const [activeLayout, setActiveLayout] = useState(null);
+  const [loadingLayouts, setLoadingLayouts] = useState(false);
+  const [projectManagerOpen, setProjectManagerOpen] = useState(false);
+  const [projectManagerTab, setProjectManagerTab] = useState('general');
+  const [layoutDraftName, setLayoutDraftName] = useState('');
+  const [editForm, setEditForm] = useState(() => createEmptyProjectForm());
+  const [visibleProjects, setVisibleProjects] = useState([]);
+  const [homeSearchQuery, setHomeSearchQuery] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [mapFilters, setMapFilters] = useState(DEFAULT_FILTERS);
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [bookingForm, setBookingForm] = useState({ name: '', phone: '', date: '', time: '11:00 AM' });
   const [bookingSuccess, setBookingSuccess] = useState(false);
-
   const [cashbackForm, setCashbackForm] = useState({ buyerName: '', buyerPhone: '', purchasePrice: '', documentName: '', projectId: '' });
   const [cashbackSuccess, setCashbackSuccess] = useState(false);
 
-  // Detail View State
-  const [layoutZoomed, setLayoutZoomed] = useState(false);
+  const approvedProjects = useMemo(
+    () => projects.filter((project) => project.status === 'approved' || project.status === 'Active'),
+    [projects]
+  );
 
-  // Filter Logic
-  const filteredProjects = projects.filter(p => {
-    // Only show approved properties
-    const isApproved = p.status === 'approved';
-    if (!isApproved) return false;
+  const refreshLayouts = useCallback(async (projectId, preservedLayoutId = activeLayout?.id) => {
+    if (!projectId) {
+      setProjectLayouts([]);
+      setActiveLayout(null);
+      return;
+    }
 
-    // Search query matches project name, village, area, developer
-    const q = searchQuery.toLowerCase();
-    const matchesSearch = !searchQuery ||
-      p.name.toLowerCase().includes(q) ||
-      p.village.toLowerCase().includes(q) ||
-      p.area.toLowerCase().includes(q) ||
-      p.developer.toLowerCase().includes(q);
+    const data = await loadProjectLayouts(projectId);
+    setProjectLayouts(data);
+    const nextActive = data.find((layout) => layout.id === preservedLayoutId)
+      || data.find((layout) => layout.name.toLowerCase().includes('master'))
+      || data[0]
+      || null;
+    setActiveLayout(nextActive);
+  }, [activeLayout?.id]);
 
-    // Budget
-    const matchesBudget = p.startingPrice <= filters.budgetMax;
+  useEffect(() => {
+    if (!selectedProject) {
+      setProjectLayouts([]);
+      setActiveLayout(null);
+      setProjectManagerOpen(false);
+      setProjectManagerTab('general');
+      setEditForm(createEmptyProjectForm());
+      if (panelMode === 'project') setPanelMode(null);
+      return;
+    }
 
-    // Distance
-    const matchesDistance = p.distance <= filters.distanceMax;
+    setLoadingLayouts(true);
+    setProjectManagerOpen(false);
+    setProjectManagerTab('general');
+    setEditForm(getProjectFormFromRecord(selectedProject));
+    refreshLayouts(selectedProject.id)
+      .then(() => setLoadingLayouts(false))
+      .catch((err) => {
+        console.error('[Druvio] Error loading layouts:', err);
+        setLoadingLayouts(false);
+      });
+  }, [panelMode, refreshLayouts, selectedProject]);
 
-    // Size
-    const matchesSize = p.sizeMin >= filters.minSize;
+  useEffect(() => {
+    const handleLayoutSaved = (event) => {
+      if (!selectedProject?.id || event.detail?.projectId !== selectedProject.id) return;
+      refreshLayouts(selectedProject.id, event.detail?.layoutId)
+        .catch((err) => console.error('[Druvio] Error refreshing layouts:', err));
+    };
 
-    // Status filters
-    const matchesBankLoan = !filters.bankLoan || p.bankLoan;
-    const matchesNaPlot = !filters.naPlot || p.naPlot;
-    const matchesScore = p.DruvioScore >= filters.minScore;
+    window.addEventListener('druvio-layout-saved', handleLayoutSaved);
+    return () => window.removeEventListener('druvio-layout-saved', handleLayoutSaved);
+  }, [refreshLayouts, selectedProject]);
 
-    return matchesSearch && matchesBudget && matchesDistance && matchesSize && matchesFacing && matchesBankLoan && matchesNaPlot && matchesScore;
-  });
+  const handleProjectSelect = useCallback((project) => {
+    setSelectedProject(project);
+    setPanelMode('project');
+    setProjectManagerOpen(false);
+  }, []);
 
-  // Handle booking form submission
+  const closePanel = useCallback(() => {
+    setProjectManagerOpen(false);
+    if (panelMode === 'project') setSelectedProject(null);
+    setPanelMode(null);
+  }, [panelMode]);
+
+  const openNavigationPanel = useCallback((mode) => {
+    setProjectManagerOpen(false);
+    setPanelMode(mode);
+  }, []);
+
   const handleBookVisit = (e) => {
     e.preventDefault();
-    if (!bookingForm.name || !bookingForm.phone || !bookingForm.date) {
-      alert("Please fill all details!");
+    if (!selectedProject || !bookingForm.name || !bookingForm.phone || !bookingForm.date) {
+      alert('Please fill all details!');
       return;
     }
 
@@ -80,28 +253,31 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
       project: selectedProject.name,
       projectId: selectedProject.id,
       projectOwnerId: selectedProject.ownerId || '',
-      status: "Scheduled"
+      status: 'Scheduled'
     };
 
     addVisit(newVisit);
 
-    // Also register or update Lead pipeline
-    const existingLead = leads.find(l => l.phone === bookingForm.phone);
+    const existingLead = leads.find((lead) => lead.phone === bookingForm.phone);
     if (!existingLead) {
-      const newLead = {
+      addLead({
         name: bookingForm.name,
         phone: bookingForm.phone,
-        budget: `₹${(selectedProject.startingPrice / 100000).toFixed(0)}L+`,
-        stage: "Book Visit",
+        budget: `₹${((selectedProject.priceFrom || selectedProject.startingPrice || 1000000) / 100000).toFixed(0)}L+`,
+        stage: 'Book Visit',
         date: new Date().toISOString().split('T')[0],
         project: selectedProject.name,
         projectId: selectedProject.id,
         projectOwnerId: selectedProject.ownerId || ''
-      };
-      addLead(newLead);
+      });
     } else {
-      // Update existing lead stage
-      updateLead({ ...existingLead, stage: "Book Visit", project: selectedProject.name, projectId: selectedProject.id, projectOwnerId: selectedProject.ownerId || '' });
+      updateLead({
+        ...existingLead,
+        stage: 'Book Visit',
+        project: selectedProject.name,
+        projectId: selectedProject.id,
+        projectOwnerId: selectedProject.ownerId || ''
+      });
     }
 
     setBookingSuccess(true);
@@ -112,46 +288,42 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
     }, 2000);
   };
 
-  // Handle cashback submission
   const handleCashbackSubmit = (e) => {
     e.preventDefault();
     if (!cashbackForm.buyerName || !cashbackForm.buyerPhone || !cashbackForm.purchasePrice || !cashbackForm.projectId || !cashbackForm.documentName) {
-      alert("Please fill all fields and select your agreement document!");
+      alert('Please fill all fields and select your agreement document!');
       return;
     }
 
-    const proj = projects.find(p => p.id === cashbackForm.projectId);
+    const project = projects.find((item) => item.id === cashbackForm.projectId);
     const purchaseVal = parseFloat(cashbackForm.purchasePrice);
     const cbVal = Math.round(purchaseVal * 0.01);
 
-    const newClaim = {
+    addCashback({
       buyerName: cashbackForm.buyerName,
       buyerPhone: cashbackForm.buyerPhone,
-      project: proj ? proj.name : "Custom Project",
-      projectId: proj?.id || '',
-      projectOwnerId: proj?.ownerId || '',
+      project: project ? project.name : 'Custom Project',
+      projectId: project?.id || '',
+      projectOwnerId: project?.ownerId || '',
       purchasePrice: purchaseVal,
       cashbackAmount: cbVal,
-      commissionAmount: cbVal, // Druvio keeps 1%
+      commissionAmount: cbVal,
       documentName: cashbackForm.documentName,
       submittedAt: new Date().toISOString().split('T')[0],
-      status: "Pending Verification"
-    };
+      status: 'Pending Verification'
+    });
 
-    addCashback(newClaim);
-
-    // Update lead stage to Purchased / Cashback Claimed
-    const existingLead = leads.find(l => l.phone === cashbackForm.buyerPhone);
+    const existingLead = leads.find((lead) => lead.phone === cashbackForm.buyerPhone);
     if (!existingLead) {
       addLead({
         name: cashbackForm.buyerName,
         phone: cashbackForm.buyerPhone,
         budget: `₹${(purchaseVal / 100000).toFixed(0)}L`,
-        stage: "Negotiation",
+        stage: 'Negotiation',
         date: new Date().toISOString().split('T')[0],
-        project: proj ? proj.name : "Druvio Verified",
-        projectId: proj?.id || '',
-        projectOwnerId: proj?.ownerId || ''
+        project: project ? project.name : 'Druvio Verified',
+        projectId: project?.id || '',
+        projectOwnerId: project?.ownerId || ''
       });
     }
 
@@ -159,930 +331,892 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
     setTimeout(() => {
       setCashbackSuccess(false);
       setCashbackForm({ buyerName: '', buyerPhone: '', purchasePrice: '', documentName: '', projectId: '' });
-      setActiveTab('feed');
+      setPanelMode(null);
     }, 2500);
   };
 
-  // Format currency in Indian Style (Lakh / Crore)
-  const formatINR = (num) => {
-    if (num >= 10000000) {
-      return `₹${(num / 10000000).toFixed(2)} Cr`;
-    }
-    return `₹${(num / 100000).toFixed(1)} Lakh`;
+  const openProjectManager = (tab = 'general') => {
+    if (!selectedProject) return;
+    setEditForm(getProjectFormFromRecord(selectedProject));
+    setProjectManagerTab(tab);
+    setProjectManagerOpen(true);
+    setPanelMode('project');
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', position: 'relative' }}>
+  const handleSaveProjectDetails = async (e) => {
+    e.preventDefault();
+    if (!selectedProject) return;
 
-      {/* PHONE STATUS BAR SPACE */}
-      <div style={{ height: '24px', background: '#0b0f19', flexShrink: 0 }} />
+    try {
+      await updateProjectDetails(selectedProject.id, editForm);
+      setSelectedProject((prev) => ({
+        ...prev,
+        ...editForm,
+        startingPrice: editForm.priceFrom,
+        heroImage: editForm.thumbnail || prev?.heroImage,
+        amenities: normalizeAmenities(editForm.amenities)
+      }));
+      alert('Project updated successfully.');
+    } catch (error) {
+      alert(`Failed to update project: ${error.message}`);
+    }
+  };
 
-      {/* HEADER */}
-      {selectedProject ? (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg-sidebar)', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
-          <button onClick={() => setSelectedProject(null)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-            <ChevronLeft size={20} />
-            <span style={{ fontSize: '14px', fontWeight: '600', marginLeft: '4px' }}>Back</span>
-          </button>
-          <div style={{ fontSize: '13px', fontWeight: '800', fontFamily: 'var(--font-title)', color: 'var(--brand-primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            Druvio
-          </div>
-          <a href={`https://wa.me/919999999999?text=Hi, I am interested in ${encodeURIComponent(selectedProject.name)}`} target="_blank" rel="noreferrer" style={{ display: 'flex', padding: '6px', background: '#128C7E', borderRadius: '50%', color: 'white' }}>
-            <MessageSquare size={16} />
-          </a>
-        </div>
-      ) : (
-        <div style={{ padding: '14px 16px 8px', background: 'var(--bg-sidebar)', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Compass size={22} style={{ color: 'var(--brand-primary)' }} />
+  const handleDeleteProject = async () => {
+    if (!selectedProject) return;
+    if (!window.confirm('Are you sure you want to delete this project? This cannot be undone.')) return;
+
+    try {
+      await deleteProject(selectedProject.id);
+      setSelectedProject(null);
+      setProjectManagerOpen(false);
+      setPanelMode(null);
+      alert('Project deleted successfully.');
+    } catch (error) {
+      alert(`Failed to delete project: ${error.message}`);
+    }
+  };
+
+  const handleDeleteLayout = async (layoutId) => {
+    if (!window.confirm('Delete this layout polygon?')) return;
+    try {
+      await deleteProjectLayout(layoutId);
+      const remaining = projectLayouts.filter((layout) => layout.id !== layoutId);
+      setProjectLayouts(remaining);
+      if (activeLayout?.id === layoutId) setActiveLayout(null);
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  };
+
+  const handleDuplicateLayout = async (layoutId) => {
+    try {
+      const duplicatedLayoutId = await duplicateProjectLayout(layoutId);
+      await refreshLayouts(selectedProject.id, duplicatedLayoutId);
+      alert('Layout duplicated.');
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  };
+
+  const handleStartAddLayout = () => {
+    if (!selectedProject) return;
+    if (!layoutDraftName.trim()) {
+      alert('Enter a layout name first.');
+      return;
+    }
+
+    setActiveLayout(null);
+    window.dispatchEvent(new CustomEvent('druvio-start-add-layout', {
+      detail: { projectId: selectedProject.id, layoutName: layoutDraftName.trim() }
+    }));
+    alert(`Drawing started for "${layoutDraftName.trim()}". Click points on the map, then Finish, Edit, and Save.`);
+    setLayoutDraftName('');
+  };
+
+  const handleEditLayout = (layout) => {
+    setActiveLayout(layout);
+    window.dispatchEvent(new CustomEvent('druvio-edit-layout', {
+      detail: { projectId: selectedProject?.id, layoutId: layout.id }
+    }));
+  };
+
+  const searchableProjects = useMemo(() => {
+    const query = homeSearchQuery.trim().toLowerCase();
+    if (!query) return [];
+    return approvedProjects
+      .filter((project) => {
+        const haystack = [project.name, project.village, project.taluka, project.developer]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(query);
+      })
+      .slice(0, 8);
+  }, [approvedProjects, homeSearchQuery]);
+
+  const cashbackProjects = useMemo(
+    () => approvedProjects.filter((project) => formatCashbackLabel(project)),
+    [approvedProjects]
+  );
+
+  const activeSidebarItem = panelMode === 'cashback' ? 'cashback' : 'home';
+  const selectedAmenities = normalizeAmenities(selectedProject?.amenities);
+  const selectedLocation = getDisplayLocation(selectedProject);
+  const selectedCashback = formatCashbackLabel(selectedProject);
+  const selectedWhatsAppUrl = buildWhatsAppUrl(selectedProject);
+  const selectedNavigateUrl = getNavigateUrl(selectedProject);
+  const panelOpen = Boolean(panelMode);
+  const panelTitle = panelMode === 'cashback'
+    ? 'Cashback'
+    : panelMode === 'project'
+      ? selectedProject?.name || 'Project'
+      : 'Home';
+
+  const renderProjectManagerContent = () => {
+    if (!selectedProject) return null;
+
+    if (projectManagerTab === 'layouts') {
+      return (
+        <div className="project-manager-panel">
+          <div className="project-manager-card">
+            <div className="project-manager-card-head">
               <div>
-                <h2 style={{ fontSize: '16px', fontFamily: 'var(--font-title)', fontWeight: '800', letterSpacing: '0.5px', color: 'var(--text-primary)' }}>
-                  Dru<span style={{ color: 'var(--brand-primary)' }}>vio</span>
-                </h2>
-                <p style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Hyperlocal Land Hub</p>
+                <span className="project-manager-kicker">Project layouts</span>
+                <h4>Manage layout polygons</h4>
+              </div>
+              <span className="project-manager-note">Unlimited layouts per project</span>
+            </div>
+            <p className="project-manager-copy">Workflow: Add Layout, enter a layout name, draw polygon on the map, finish, edit, and save.</p>
+            <div className="layout-add-row">
+              <input
+                type="text"
+                className="project-manager-input"
+                placeholder="Layout name"
+                value={layoutDraftName}
+                onChange={(event) => setLayoutDraftName(event.target.value)}
+              />
+              <button type="button" className="btn-primary compact-action-btn" onClick={handleStartAddLayout}>
+                <Plus size={14} /> Add Layout
+              </button>
+            </div>
+          </div>
+
+          <div className="project-manager-card">
+            <div className="project-manager-card-head">
+              <div>
+                <span className="project-manager-kicker">Saved layers</span>
+                <h4>{projectLayouts.length === 0 ? 'No layouts yet' : `${projectLayouts.length} layouts available`}</h4>
               </div>
             </div>
-            <button
-              onClick={() => setActiveTab(activeTab === 'map' ? 'feed' : 'map')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                background: 'var(--bg-input)',
-                border: '1px solid var(--border-color)',
-                padding: '6px 12px',
-                borderRadius: '20px',
-                fontSize: '11px',
-                color: 'var(--text-primary)',
-                fontWeight: '600',
-                cursor: 'pointer'
-              }}
-            >
-              {activeTab === 'map' ? <List size={12} /> : <Map size={12} />}
-              {activeTab === 'map' ? 'Feed' : 'Map View'}
-            </button>
-          </div>
 
-          {activeTab !== 'cashback' && (
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
-                <Search size={14} style={{ position: 'absolute', left: '10px', color: 'var(--text-muted)' }} />
-                <input
-                  type="text"
-                  placeholder="Search village, project, builder..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  style={{
-                    width: '100%',
-                    background: 'var(--bg-input)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '20px',
-                    padding: '6px 10px 6px 30px',
-                    color: 'white',
-                    fontSize: '12px',
-                    outline: 'none'
-                  }}
-                />
-                {searchQuery && (
-                  <X
-                    size={12}
-                    onClick={() => setSearchQuery('')}
-                    style={{ position: 'absolute', right: '10px', color: 'var(--text-muted)', cursor: 'pointer' }}
+            {loadingLayouts ? (
+              <p className="no-layouts-tag">Loading layouts...</p>
+            ) : projectLayouts.length === 0 ? (
+              <p className="no-layouts-tag">No layouts yet</p>
+            ) : (
+              <div className="project-layout-list">
+                {projectLayouts.map((layout) => {
+                  const isSelected = activeLayout?.id === layout.id;
+                  return (
+                    <div key={layout.id} className={`project-layout-card ${isSelected ? 'selected' : ''}`}>
+                      <div className="project-layout-info">
+                        <div className="layout-row-info">
+                          <span className="color-dot" style={{ backgroundColor: layout.color }} />
+                          <strong>{layout.name}</strong>
+                        </div>
+                        <span className="project-layout-subtitle">{isSelected ? 'Visible on map' : 'Tap edit to update polygon'}</span>
+                      </div>
+                      <div className="project-layout-actions">
+                        <button type="button" className="icon-btn" title="Edit Layout" onClick={() => handleEditLayout(layout)}>
+                          <LayoutGrid size={13} />
+                        </button>
+                        <button type="button" className="icon-btn" title="Duplicate Layout" onClick={() => handleDuplicateLayout(layout.id)}>
+                          <Copy size={13} />
+                        </button>
+                        <button type="button" className="icon-btn danger-hover" title="Delete Layout" onClick={() => handleDeleteLayout(layout.id)}>
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const field = (key, label, type = 'text', required = false, placeholder = '') => (
+      <label className="project-manager-field">
+        <span>{label}{required ? ' *' : ''}</span>
+        <input
+          required={required}
+          type={type}
+          className="project-manager-input"
+          placeholder={placeholder}
+          value={editForm[key]}
+          onChange={(event) => setEditForm({ ...editForm, [key]: event.target.value })}
+        />
+      </label>
+    );
+
+    return (
+      <form onSubmit={handleSaveProjectDetails} className="project-manager-form">
+        {projectManagerTab === 'general' && (
+          <div className="project-manager-panel">
+            <div className="project-manager-card">
+              <div className="project-manager-card-head">
+                <div>
+                  <span className="project-manager-kicker">Required fields</span>
+                  <h4>Core project information</h4>
+                </div>
+              </div>
+              <div className="project-manager-grid">
+                {field('name', 'Project Name', 'text', true, 'Project name')}
+                {field('developer', 'Developer Name', 'text', true, 'Developer name')}
+              </div>
+            </div>
+
+            <div className="project-manager-card">
+              <div className="project-manager-card-head">
+                <div>
+                  <span className="project-manager-kicker">Optional fields</span>
+                  <h4>Location, inventory, and business details</h4>
+                </div>
+              </div>
+              <div className="project-manager-grid">
+                {field('priceFrom', 'Price From', 'number')}
+                {field('remainingPlots', 'Remaining Plots', 'number')}
+                {field('village', 'Village')}
+                {field('taluka', 'Taluka')}
+                {field('area', 'Area')}
+                {field('cashbackPercentage', 'Cashback Percentage', 'number')}
+                {field('cashbackAmount', 'Cashback Amount', 'number')}
+                {field('whatsappNumber', 'WhatsApp Number')}
+                {field('siteVisitContact', 'Site Visit Contact')}
+                {field('googleMapsLink', 'Google Maps Link', 'url')}
+                {field('website', 'Website', 'url')}
+                {field('reraNumber', 'RERA Number')}
+                <label className="project-manager-field project-manager-field-wide">
+                  <span>Amenities</span>
+                  <input
+                    type="text"
+                    className="project-manager-input"
+                    placeholder="Roads, Electricity, Water"
+                    value={editForm.amenities}
+                    onChange={(event) => setEditForm({ ...editForm, amenities: event.target.value })}
                   />
+                </label>
+                <label className="project-manager-field project-manager-field-wide">
+                  <span>Description</span>
+                  <textarea
+                    className="project-manager-textarea"
+                    placeholder="Short project summary"
+                    value={editForm.description}
+                    onChange={(event) => setEditForm({ ...editForm, description: event.target.value })}
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {projectManagerTab === 'media' && (
+          <div className="project-manager-panel">
+            <div className="project-manager-card">
+              <div className="project-manager-card-head">
+                <div>
+                  <span className="project-manager-kicker">Project image</span>
+                  <h4>Thumbnail and preview</h4>
+                </div>
+              </div>
+              <div className="project-manager-grid">
+                {field('thumbnail', 'Thumbnail URL', 'url')}
+              </div>
+              <div className="project-media-preview">
+                {hasValue(editForm.thumbnail) ? (
+                  <img src={editForm.thumbnail} alt={`${editForm.name || 'Project'} preview`} />
+                ) : (
+                  <div className="project-media-placeholder">
+                    <ImageIcon size={22} />
+                    <span>No image selected yet</span>
+                  </div>
                 )}
               </div>
-              <button
-                onClick={() => setShowFilters(true)}
-                style={{
-                  background: 'var(--bg-input)',
-                  border: '1px solid var(--border-color)',
-                  padding: '6px 10px',
-                  borderRadius: '50%',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}
-              >
-                <Filter size={14} />
-              </button>
+            </div>
+          </div>
+        )}
+
+        {projectManagerTab === 'settings' && (
+          <div className="project-manager-panel">
+            <div className="project-manager-card">
+              <div className="project-manager-card-head">
+                <div>
+                  <span className="project-manager-kicker">Publishing</span>
+                  <h4>Project status and actions</h4>
+                </div>
+              </div>
+              <div className="project-manager-grid">
+                <label className="project-manager-field">
+                  <span>Status</span>
+                  <select
+                    className="project-manager-input"
+                    value={editForm.status}
+                    onChange={(event) => setEditForm({ ...editForm, status: event.target.value })}
+                  >
+                    <option value="approved">Active</option>
+                    <option value="pending_review">Pending Review</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="Sold Out">Sold Out</option>
+                    <option value="Active">Legacy Active</option>
+                  </select>
+                </label>
+              </div>
+              <div className="project-manager-danger">
+                <div>
+                  <strong>Delete project</strong>
+                  <span>This removes the project record permanently.</span>
+                </div>
+                <button type="button" className="btn-admin-action danger" onClick={handleDeleteProject}>Delete Project</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="form-actions-row project-manager-actions">
+          <button type="submit" className="btn-save">Save Changes</button>
+          <button type="button" className="btn-cancel" onClick={() => setProjectManagerOpen(false)}>Close</button>
+        </div>
+      </form>
+    );
+  };
+
+  const renderHomePanel = () => (
+    <div className="buyer-side-panel-content">
+      <div className="buyer-panel-search-row">
+        <label className="buyer-panel-search">
+          <Search size={16} />
+          <input
+            type="text"
+            placeholder="Search land, village, builder..."
+            value={homeSearchQuery}
+            onChange={(event) => setHomeSearchQuery(event.target.value)}
+          />
+          {homeSearchQuery && (
+            <button type="button" className="buyer-search-clear" onClick={() => setHomeSearchQuery('')}>
+              <X size={14} />
+            </button>
+          )}
+        </label>
+        <button type="button" className={`buyer-filter-toggle ${filtersOpen ? 'active' : ''}`} onClick={() => setFiltersOpen((prev) => !prev)}>
+          <SlidersHorizontal size={16} />
+          <span>Filters</span>
+        </button>
+      </div>
+
+      {filtersOpen && (
+        <div className="buyer-filter-card">
+          <label>
+            Max Budget
+            <strong>{formatINR(mapFilters.budgetMax)}</strong>
+            <input
+              type="range"
+              min="800000"
+              max="5000000"
+              step="100000"
+              value={mapFilters.budgetMax}
+              onChange={(event) => setMapFilters({ ...mapFilters, budgetMax: Number(event.target.value) })}
+            />
+          </label>
+          <label>
+            Max Distance
+            <strong>{mapFilters.distanceMax} km</strong>
+            <input
+              type="range"
+              min="1"
+              max="20"
+              step="1"
+              value={mapFilters.distanceMax}
+              onChange={(event) => setMapFilters({ ...mapFilters, distanceMax: Number(event.target.value) })}
+            />
+          </label>
+          <div className="buyer-filter-checks">
+            <label><input type="checkbox" checked={mapFilters.naPlot} onChange={(event) => setMapFilters({ ...mapFilters, naPlot: event.target.checked })} /> NA Certified</label>
+            <label><input type="checkbox" checked={mapFilters.bankLoan} onChange={(event) => setMapFilters({ ...mapFilters, bankLoan: event.target.checked })} /> Bank Approved</label>
+          </div>
+        </div>
+      )}
+
+      {homeSearchQuery && (
+        <div className="buyer-panel-section">
+          <div className="buyer-panel-section-head">
+            <h4>Search Results</h4>
+            <span>{searchableProjects.length}</span>
+          </div>
+          {searchableProjects.length === 0 ? (
+            <p className="buyer-empty-copy">No matching projects found.</p>
+          ) : (
+            <div className="buyer-search-results">
+              {searchableProjects.map((project) => (
+                <button key={project.id} type="button" className="buyer-search-result" onClick={() => handleProjectSelect(project)}>
+                  <div>
+                    <strong>{project.name}</strong>
+                    <span>{getDisplayLocation(project) || project.village || 'Druvio project'}</span>
+                  </div>
+                  <span>{formatINR(project.priceFrom || project.startingPrice)}</span>
+                </button>
+              ))}
             </div>
           )}
         </div>
       )}
 
-      {/* CORE VIEW AREA */}
-      <div style={{ flex: 1, overflowY: 'auto', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-
-        {/* DETAIL SCREEN OVERLAY */}
-        {selectedProject ? (
-          <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-dark)' }}>
-
-            {/* HERO HERO IMAGE */}
-            <div style={{ position: 'relative', width: '100%', height: '180px', flexShrink: 0 }}>
-              <img
-                src={selectedProject.heroImage}
-                alt={selectedProject.name}
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '80px', background: 'linear-gradient(to top, rgba(11,15,25,1) 0%, rgba(11,15,25,0) 100%)' }} />
-
-              {/* Floating Verified Tag */}
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '12px',
-                  left: '12px',
-                  background: selectedProject.verified ? 'var(--color-active)' : 'var(--color-sold)',
-                  color: 'white',
-                  fontSize: '9px',
-                  fontWeight: '800',
-                  padding: '3px 8px',
-                  borderRadius: '20px',
-                  textTransform: 'uppercase',
-                  boxShadow: 'var(--shadow-md)'
-                }}
-              >
-                {selectedProject.verified ? '✓ GPS Verified' : 'Unverified'}
-              </div>
-
-              {/* Status Badge */}
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '12px',
-                  right: '12px',
-                  background: selectedProject.status === 'Active' ? 'rgba(34,197,94,0.95)' : 'rgba(100,116,139,0.95)',
-                  color: 'white',
-                  fontSize: '9px',
-                  fontWeight: '800',
-                  padding: '3px 8px',
-                  borderRadius: '20px',
-                  textTransform: 'uppercase'
-                }}
-              >
-                {selectedProject.status}
-              </div>
-            </div>
-
-            {/* DETAIL DATA CONTENT */}
-            <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
-              {/* Title & Price Header */}
-              <div>
-                <h3 style={{ fontSize: '18px', fontWeight: '800', lineHeight: '1.2' }}>{selectedProject.name}</h3>
-                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
-                  <MapPin size={12} color="var(--brand-primary)" />
-                  {selectedProject.area}, {selectedProject.village} (Chakan)
-                </p>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', background: 'var(--bg-card)', padding: '12px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
-                  <div>
-                    <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block' }}>Starting Price</span>
-                    <span style={{ fontSize: '16px', fontWeight: '800', color: 'var(--brand-primary)' }}>{formatINR(selectedProject.startingPrice)}</span>
-                  </div>
-                  <div style={{ textAlign: 'right', borderLeft: '1px solid var(--border-color)', paddingLeft: '12px' }}>
-                    <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block' }}>Price per Sq.Ft</span>
-                    <span style={{ fontSize: '14px', fontWeight: '700', color: 'white' }}>₹{selectedProject.pricePerSqFt} / sqft</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* USP SIGNATURE FEATURE: Druvio Score Card */}
-              <div
-                style={{
-                  background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(21, 31, 50, 0.7) 100%)',
-                  border: '1px solid rgba(245, 158, 11, 0.25)',
-                  borderRadius: '16px',
-                  padding: '16px'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Star size={16} fill="var(--accent-gold)" color="var(--accent-gold)" />
-                    <h4 style={{ fontSize: '13px', fontWeight: '800', color: 'var(--accent-gold)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      Druvio Score
-                    </h4>
-                  </div>
-                  <div style={{ background: 'var(--accent-gold)', color: 'black', fontWeight: '800', fontSize: '15px', padding: '2px 10px', borderRadius: '20px', fontFamily: 'var(--font-title)' }}>
-                    {selectedProject.DruvioScore} / 100
-                  </div>
-                </div>
-
-                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4', marginBottom: '12px' }}>
-                  Objective benchmark analyzing safety, facilities, connectivity, and local market price value.
-                </p>
-
-                {/* Score Breakdown Bars */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '10px' }}>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-primary)', marginBottom: '2px' }}>
-                      <span>Legal Compliance (NA Sanction, RERA, Clear Title)</span>
-                      <strong>{selectedProject.naPlot && selectedProject.bankLoan ? '30/30' : selectedProject.naPlot ? '20/30' : '5/30'}</strong>
-                    </div>
-                    <div style={{ height: '4px', background: 'var(--bg-input)', borderRadius: '2px' }}>
-                      <div style={{ height: '100%', background: 'var(--brand-primary)', width: selectedProject.naPlot && selectedProject.bankLoan ? '100%' : selectedProject.naPlot ? '66%' : '16%', borderRadius: '2px' }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-primary)', marginBottom: '2px' }}>
-                      <span>Infrastructure (Tar Roads, Drainage, Power, Water)</span>
-                      <strong>{Math.min(selectedProject.amenities.length * 5, 30)}/30</strong>
-                    </div>
-                    <div style={{ height: '4px', background: 'var(--bg-input)', borderRadius: '2px' }}>
-                      <div style={{ height: '100%', background: 'var(--brand-primary)', width: `${Math.min((selectedProject.amenities.length * 5 / 30) * 100, 100)}%`, borderRadius: '2px' }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-primary)', marginBottom: '2px' }}>
-                      <span>Location Connectivity (Highway, MIDC, Schools)</span>
-                      <strong>{selectedProject.distance <= 3 ? '20/20' : selectedProject.distance <= 6 ? '15/20' : '10/20'}</strong>
-                    </div>
-                    <div style={{ height: '4px', background: 'var(--bg-input)', borderRadius: '2px' }}>
-                      <div style={{ height: '100%', background: 'var(--brand-primary)', width: selectedProject.distance <= 3 ? '100%' : selectedProject.distance <= 6 ? '75%' : '50%', borderRadius: '2px' }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-primary)', marginBottom: '2px' }}>
-                      <span>Price Competitiveness (vs Chakan Average)</span>
-                      <strong>{selectedProject.pricePerSqFt <= 1000 ? '20/20' : selectedProject.pricePerSqFt <= 1500 ? '15/20' : '10/20'}</strong>
-                    </div>
-                    <div style={{ height: '4px', background: 'var(--bg-input)', borderRadius: '2px' }}>
-                      <div style={{ height: '100%', background: 'var(--brand-primary)', width: selectedProject.pricePerSqFt <= 1000 ? '100%' : selectedProject.pricePerSqFt <= 1500 ? '75%' : '50%', borderRadius: '2px' }} />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Core Attributes Panel */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div style={{ background: 'var(--bg-card)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-                  <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>Remaining Inventory</span>
-                  <span style={{ fontSize: '13px', fontWeight: '700', color: selectedProject.remainingPlots > 0 ? 'var(--color-active)' : 'var(--text-muted)' }}>
-                    {selectedProject.remainingPlots > 0 ? `🟢 ${selectedProject.remainingPlots} / ${selectedProject.totalPlots} Plots` : '🔴 Sold Out'}
-                  </span>
-                </div>
-                <div style={{ background: 'var(--bg-card)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-                  <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>Plot Sizes</span>
-                  <span style={{ fontSize: '13px', fontWeight: '700' }}>{selectedProject.sizeMin} - {selectedProject.sizeMax} sqft</span>
-                </div>
-                <div style={{ background: 'var(--bg-card)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-                  <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>Facing Directions</span>
-                  <span style={{ fontSize: '12px', fontWeight: '700' }}>{selectedProject.facing.join(', ')}</span>
-                </div>
-                <div style={{ background: 'var(--bg-card)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-                  <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>NA / Gunthewari Status</span>
-                  <span style={{ fontSize: '13px', fontWeight: '700', color: 'var(--brand-primary)' }}>
-                    {selectedProject.naPlot ? '✅ Non-Agricultural' : 'Collector NA Pending'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <h4 style={{ fontSize: '13px', fontWeight: '700', marginBottom: '6px' }}>Project Overview</h4>
-                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
-                  {selectedProject.description}
-                </p>
-              </div>
-
-              {/* Layout plan viewer */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <h4 style={{ fontSize: '13px', fontWeight: '700' }}>Layout Plan</h4>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Tap image to simulate zoom</span>
-                </div>
-                <div className="layout-image-container">
-                  <img
-                    src={selectedProject.layoutPlanUrl}
-                    alt="Layout Plan"
-                    className={`layout-image ${layoutZoomed ? 'zoomed' : ''}`}
-                    onClick={() => setLayoutZoomed(!layoutZoomed)}
-                  />
-                  <div className="layout-overlay-btn" onClick={() => setLayoutZoomed(!layoutZoomed)}>
-                    <ZoomIn size={12} />
-                    {layoutZoomed ? 'Zoom Out' : 'Zoom Layout'}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                  <button
-                    onClick={() => alert("Downloading PDF Layout copy to mobile storage...")}
-                    style={{
-                      flex: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '6px',
-                      background: 'var(--bg-input)',
-                      border: '1px solid var(--border-color)',
-                      color: 'white',
-                      padding: '8px',
-                      borderRadius: '8px',
-                      fontSize: '11px',
-                      fontWeight: '600',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <Download size={12} />
-                    Download PDF Map
-                  </button>
-                </div>
-              </div>
-
-              {/* Amenities */}
-              <div>
-                <h4 style={{ fontSize: '13px', fontWeight: '700', marginBottom: '8px' }}>Project Infrastructure</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                  {selectedProject.amenities.map((amenity, idx) => (
-                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-                      <div style={{ display: 'flex', background: 'var(--brand-glow)', border: '1px solid var(--brand-primary)', padding: '2px', borderRadius: '50%' }}>
-                        <Check size={10} color="var(--brand-primary)" strokeWidth={3} />
-                      </div>
-                      <span style={{ color: 'var(--text-primary)' }}>{amenity}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Nearby Hubs */}
-              <div>
-                <h4 style={{ fontSize: '13px', fontWeight: '700', marginBottom: '8px' }}>Nearby Hubs (Hyperlocal Connectivity)</h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>🏭 Chakan MIDC Zone</span>
-                    <strong style={{ color: 'white' }}>{selectedProject.nearby.midc}</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>🛣️ Pune-Nashik Highway</span>
-                    <strong style={{ color: 'white' }}>{selectedProject.nearby.highway}</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>🏥 Hospital Support</span>
-                    <strong style={{ color: 'white' }}>{selectedProject.nearby.hospitals}</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '4px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>🏫 Educational Institute</span>
-                    <strong style={{ color: 'white' }}>{selectedProject.nearby.schools}</strong>
-                  </div>
-                </div>
-              </div>
-
-              {/* CTA Booking bar */}
-              {selectedProject.status === 'Active' ? (
-                <div style={{ display: 'flex', gap: '10px', position: 'sticky', bottom: 0, background: 'var(--bg-dark)', padding: '10px 0 0 0', borderTop: '1px solid var(--border-color)' }}>
-                  <a
-                    href={`https://wa.me/919999999999?text=Hello,%20I%20want%20to%20know%20more%20about%20your%20plotting%20project%20"${encodeURIComponent(selectedProject.name)}"%20listed%20on%20Druvio.`}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      flex: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      background: '#128C7E',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '10px',
-                      padding: '12px 10px',
-                      fontSize: '12px',
-                      fontWeight: '700',
-                      textDecoration: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <MessageSquare size={16} />
-                    WhatsApp Dev
-                  </a>
-                  <button
-                    onClick={() => setShowBookingModal(true)}
-                    className="btn-primary"
-                    style={{ flex: 1.5, padding: '12px 10px', fontSize: '12px' }}
-                  >
-                    <Calendar size={16} />
-                    Book Free Site Visit
-                  </button>
-                </div>
-              ) : (
-                <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '12px', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
-                  This project is completely sold out.
-                </div>
-              )}
-
-              {/* Spacer */}
-              <div style={{ height: '30px' }} />
-            </div>
-          </div>
-        ) : activeTab === 'map' ? (
-          // INTERACTIVE MAP SCREEN
-          <div style={{ flex: 1, width: '100%', height: '100%', position: 'relative' }}>
-            <BuyerMap
-              projects={filteredProjects}
-              onSelectProject={setSelectedProject}
-              selectedProject={null}
-            />
-          </div>
-        ) : activeTab === 'cashback' ? (
-          // CASHBACK CLAIM SCREEN
-          <div className="fade-in" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ background: 'var(--brand-light)', border: '1px solid rgba(37,99,235,0.3)', borderRadius: '16px', padding: '16px', textAlign: 'center' }}>
-              <Gift size={32} color="var(--brand-primary)" style={{ margin: '0 auto 8px' }} />
-              <h3 style={{ fontSize: '15px', fontWeight: '800' }}>1% Plot Purchase Cashback</h3>
-              <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4', marginTop: '6px' }}>
-                Bought a plot via Druvio? Submit your agreement document or token receipt to claim your **1% direct cash cashback** verified by our admin.
-              </p>
-            </div>
-
-            <form onSubmit={handleCashbackSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Select Druvio Project</label>
-                <select
-                  className="form-input"
-                  value={cashbackForm.projectId}
-                  onChange={(e) => setCashbackForm({ ...cashbackForm, projectId: e.target.value })}
-                >
-                  <option value="">-- Choose Project --</option>
-                  {projects.filter(p => p.status === 'Active').map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Purchaser Full Name</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="Enter name matching agreement"
-                  value={cashbackForm.buyerName}
-                  onChange={(e) => setCashbackForm({ ...cashbackForm, buyerName: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Purchaser Phone Number</label>
-                <input
-                  type="tel"
-                  className="form-input"
-                  placeholder="Enter registered mobile"
-                  value={cashbackForm.buyerPhone}
-                  onChange={(e) => setCashbackForm({ ...cashbackForm, buyerPhone: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Plot Purchase Price (₹)</label>
-                <input
-                  type="number"
-                  className="form-input"
-                  placeholder="Example: 1200000"
-                  value={cashbackForm.purchasePrice}
-                  onChange={(e) => setCashbackForm({ ...cashbackForm, purchasePrice: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Upload Purchase Receipt / Agreement</label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const name = prompt("Enter simulated file name:", "plot_agreement_stamp.pdf");
-                      if (name) setCashbackForm({ ...cashbackForm, documentName: name });
-                    }}
-                    style={{
-                      flex: 1,
-                      background: 'var(--bg-input)',
-                      border: '1px dashed var(--border-color)',
-                      color: 'var(--text-secondary)',
-                      padding: '10px',
-                      borderRadius: '8px',
-                      fontSize: '11px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {cashbackForm.documentName ? `📁 ${cashbackForm.documentName}` : "📎 Select Document (PDF/JPG)"}
-                  </button>
-                </div>
-              </div>
-
-              {cashbackSuccess ? (
-                <div style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid var(--color-active)', color: 'var(--color-active)', padding: '10px', borderRadius: '8px', fontSize: '11px', textAlign: 'center', fontWeight: 'bold' }}>
-                  🎉 Cashback Claim Submitted! Redirecting...
-                </div>
-              ) : (
-                <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: '8px' }}>
-                  Claim 1% Cashback
-                </button>
-              )}
-            </form>
-            <div style={{ height: '30px' }} />
+      <div className="buyer-panel-section">
+        <div className="buyer-panel-section-head">
+          <h4>Visible Projects</h4>
+          <span>{visibleProjects.length}</span>
+        </div>
+        {visibleProjects.length === 0 ? (
+          <div className="feed-empty-state slim">
+            <Compass size={24} color="var(--text-muted)" />
+            <p>Pan or zoom the map to load visible projects in this area.</p>
           </div>
         ) : (
-          // FEED VIEW (DEFAULT HOME)
-          <div className="fade-in" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>
-                Showing {filteredProjects.length} Verified Plot Projects
-              </span>
-              {searchQuery && (
-                <span onClick={() => setSearchQuery('')} style={{ fontSize: '10px', color: 'var(--brand-primary)', cursor: 'pointer' }}>
-                  Clear Search
-                </span>
-              )}
-            </div>
-
-            {filteredProjects.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px 20px', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>
-                <Compass size={24} style={{ color: 'var(--text-muted)', marginBottom: '8px' }} />
-                <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No plotting projects match your current filters.</p>
-              </div>
-            ) : (
-              filteredProjects.map((project) => (
-                <div
-                  key={project.id}
-                  onClick={() => setSelectedProject(project)}
-                  style={{
-                    background: 'var(--bg-card)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '16px',
-                    overflow: 'hidden',
-                    cursor: 'pointer',
-                    boxShadow: 'var(--shadow-md)',
-                    transition: 'transform 0.2s',
-                    position: 'relative'
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-                  onMouseLeave={(e) => e.currentTarget.style.transform = 'none'}
-                >
-                  {/* Card Image banner */}
-                  <div style={{ height: '140px', width: '100%', position: 'relative' }}>
-                    <img
-                      src={project.heroImage}
-                      alt={project.name}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    />
-
-                    {/* Druvio Score floating badge */}
-                    <div
-                      style={{
-                        position: 'absolute',
-                        bottom: '10px',
-                        right: '10px',
-                        background: 'rgba(15,23,42,0.9)',
-                        backdropFilter: 'blur(4px)',
-                        border: '1px solid rgba(245,158,11,0.4)',
-                        color: 'var(--accent-gold)',
-                        padding: '3px 8px',
-                        borderRadius: '12px',
-                        fontSize: '11px',
-                        fontWeight: '800',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}
-                    >
-                      <Star size={10} fill="var(--accent-gold)" color="var(--accent-gold)" />
-                      {project.DruvioScore}
-                    </div>
-
-                    {/* Verified stamp */}
-                    <div
-                      style={{
-                        position: 'absolute',
-                        top: '10px',
-                        left: '10px',
-                        background: 'rgba(16, 185, 129, 0.9)',
-                        color: 'white',
-                        padding: '2px 8px',
-                        borderRadius: '12px',
-                        fontSize: '9px',
-                        fontWeight: '700'
-                      }}
-                    >
-                      ✓ Verified Plots
-                    </div>
+          <div className="feed-listings-grid buyer-panel-list">
+            {visibleProjects.map((project) => (
+              <article key={project.id} className="feed-project-card" onClick={() => handleProjectSelect(project)}>
+                <div className="card-banner">
+                  <img src={project.thumbnail || project.heroImage || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80'} alt={project.name} />
+                  {formatCashbackLabel(project) && <div className="cashback-tag">💰 {formatCashbackLabel(project)}</div>}
+                  <div className="score-tag">
+                    <Star size={10} fill="var(--accent-gold)" color="var(--accent-gold)" />
+                    <span>{project.DruvioScore || '4.6'}</span>
                   </div>
-
-                  {/* Card Info details */}
-                  <div style={{ padding: '14px' }}>
-                    <h3 style={{ fontSize: '14px', fontWeight: '800' }}>{project.name}</h3>
-                    <p style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}>
-                      <MapPin size={10} />
-                      {project.village} • {project.distance} km from Chakan Circle
-                    </p>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px' }}>
-                      <div>
-                        <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>Starting From</span>
-                        <strong style={{ fontSize: '14px', color: 'var(--brand-primary)' }}>{formatINR(project.startingPrice)}</strong>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>Available Plots</span>
-                        <strong style={{ fontSize: '11px', color: project.remainingPlots > 0 ? 'var(--color-active)' : 'var(--text-muted)' }}>
-                          {project.remainingPlots > 0 ? `${project.remainingPlots} Remaining` : 'Sold Out'}
-                        </strong>
-                      </div>
+                </div>
+                <div className="card-info">
+                  <h3>{project.name}</h3>
+                  {getDisplayLocation(project) && <p className="card-loc"><MapPin size={10} /> {getDisplayLocation(project)}</p>}
+                  {hasValue(project.developer) && <p className="card-dev"><Building2 size={10} /> {project.developer}</p>}
+                  <div className="card-meta">
+                    <div className="price-tag">{formatINR(project.priceFrom || project.startingPrice)}</div>
+                    <div className="inv-tag">
+                      {hasValue(project.remainingPlots)
+                        ? (Number(project.remainingPlots) > 0 ? `${project.remainingPlots} plots left` : 'Sold out')
+                        : 'Availability on request'}
                     </div>
                   </div>
                 </div>
-              ))
-            )}
-            {/* spacer */}
-            <div style={{ height: '30px' }} />
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderCashbackPanel = () => (
+    <div className="buyer-side-panel-content">
+      <div className="cashback-intro-card">
+        <Gift size={28} color="var(--brand-primary)" />
+        <h3>1% Plot Purchase Cashback</h3>
+        <p>Claim Druvio cashback after purchase verification. The map stays visible while you browse offers and eligible projects.</p>
+      </div>
+
+      <div className="buyer-panel-section">
+        <div className="buyer-panel-section-head">
+          <h4>Eligible Projects</h4>
+          <span>{cashbackProjects.length}</span>
+        </div>
+        {cashbackProjects.length === 0 ? (
+          <p className="buyer-empty-copy">No cashback offers are active right now.</p>
+        ) : (
+          <div className="buyer-search-results">
+            {cashbackProjects.map((project) => (
+              <button key={project.id} type="button" className="buyer-search-result" onClick={() => handleProjectSelect(project)}>
+                <div>
+                  <strong>{project.name}</strong>
+                  <span>{getDisplayLocation(project) || 'Druvio verified project'}</span>
+                </div>
+                <span>{formatCashbackLabel(project)}</span>
+              </button>
+            ))}
           </div>
         )}
       </div>
 
-      {/* FOOTER TAB NAV BAR */}
-      {!selectedProject && (
-        <div className="buyer-nav">
-          <div
-            className={`buyer-nav-item ${activeTab === 'feed' ? 'active' : ''}`}
-            onClick={() => setActiveTab('feed')}
-          >
-            <Compass size={18} />
-            <span>Explore Plots</span>
-          </div>
-          <div
-            className={`buyer-nav-item ${activeTab === 'map' ? 'active' : ''}`}
-            onClick={() => setActiveTab('map')}
-          >
-            <Map size={18} />
-            <span>Map Center</span>
-          </div>
-          <div
-            className={`buyer-nav-item ${activeTab === 'cashback' ? 'active' : ''}`}
-            onClick={() => setActiveTab('cashback')}
-          >
-            <Gift size={18} />
-            <span>1% Cashback</span>
-          </div>
+      <div className="buyer-offer-grid">
+        <div className="buyer-offer-card">
+          <strong>Offers</strong>
+          <span>Buyer cashback can be percentage based or fixed amount based on the listing.</span>
         </div>
-      )}
+        <div className="buyer-offer-card">
+          <strong>Terms</strong>
+          <span>Valid purchase proof, phone number, and project selection are required for review.</span>
+        </div>
+      </div>
 
-      {/* FILTER DRAWER SLIDE-UP */}
-      {showFilters && (
-        <div
-          className="fade-in"
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            zIndex: 2000,
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'flex-end'
-          }}
-        >
-          <div
-            className="slide-up"
-            style={{
-              width: '100%',
-              background: 'var(--bg-sidebar)',
-              borderTopLeftRadius: '24px',
-              borderTopRightRadius: '24px',
-              borderTop: '1px solid var(--border-color)',
-              padding: '20px 16px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '14px',
-              boxShadow: '0 -10px 25px rgba(0,0,0,0.5)'
+      <form onSubmit={handleCashbackSubmit} className="cashback-claim-form">
+        <label>Select Druvio Project
+          <select
+            required
+            value={cashbackForm.projectId}
+            onChange={(event) => setCashbackForm({ ...cashbackForm, projectId: event.target.value })}
+          >
+            <option value="">-- Choose Project --</option>
+            {approvedProjects.map((project) => (
+              <option key={project.id} value={project.id}>{project.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>Purchaser Full Name
+          <input
+            required
+            type="text"
+            placeholder="Shivraj Kale"
+            value={cashbackForm.buyerName}
+            onChange={(event) => setCashbackForm({ ...cashbackForm, buyerName: event.target.value })}
+          />
+        </label>
+        <label>Phone Number
+          <input
+            required
+            type="tel"
+            placeholder="9999999999"
+            value={cashbackForm.buyerPhone}
+            onChange={(event) => setCashbackForm({ ...cashbackForm, buyerPhone: event.target.value })}
+          />
+        </label>
+        <label>Plot Purchase Price (₹)
+          <input
+            required
+            type="number"
+            placeholder="1200000"
+            value={cashbackForm.purchasePrice}
+            onChange={(event) => setCashbackForm({ ...cashbackForm, purchasePrice: event.target.value })}
+          />
+        </label>
+        <label>Upload Stamp Agreement / Receipt
+          <button
+            type="button"
+            className="file-sim-btn"
+            onClick={() => {
+              const name = prompt('Enter simulated agreement filename:', 'stamp_duty_agreement.pdf');
+              if (name) setCashbackForm({ ...cashbackForm, documentName: name });
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '15px', fontWeight: '800' }}>Filter Plot Listings</h3>
-              <button
-                onClick={() => setShowFilters(false)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-              >
-                <X size={18} />
+            {cashbackForm.documentName ? `📁 ${cashbackForm.documentName}` : '📎 Select Document (PDF/JPG)'}
+          </button>
+        </label>
+
+        {cashbackSuccess ? (
+          <div className="cashback-success-alert">✓ Cashback Claim Submitted Successfully! Redirecting...</div>
+        ) : (
+          <button type="submit" className="btn-primary claim-submit-btn">Claim 1% Cashback</button>
+        )}
+      </form>
+    </div>
+  );
+
+  const renderProjectPanel = () => {
+    if (!selectedProject) return null;
+
+    return (
+      <div className="buyer-side-panel-content project-panel-content">
+        {projectManagerOpen && isAdmin ? (
+          <div className="project-manager-screen">
+            <div className="project-manager-header">
+              <div>
+                <span className="project-manager-kicker">Project management</span>
+                <h3>{selectedProject.name}</h3>
+              </div>
+              <button type="button" className="btn-secondary compact-btn" onClick={() => setProjectManagerOpen(false)}>
+                Close
               </button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '350px', overflowY: 'auto', paddingRight: '4px' }}>
-
-              {/* Budget Range */}
-              <div>
-                <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Max Budget: <strong style={{ color: 'var(--brand-primary)' }}>{formatINR(filters.budgetMax)}</strong>
-                </label>
-                <input
-                  type="range"
-                  min="800000"
-                  max="3000000"
-                  step="100000"
-                  value={filters.budgetMax}
-                  onChange={(e) => setFilters({ ...filters, budgetMax: parseInt(e.target.value) })}
-                  style={{ width: '100%', accentColor: 'var(--brand-primary)' }}
-                />
-              </div>
-
-              {/* Distance Range */}
-              <div>
-                <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Max Distance: <strong style={{ color: 'var(--brand-primary)' }}>{filters.distanceMax} km</strong>
-                </label>
-                <input
-                  type="range"
-                  min="1"
-                  max="10"
-                  step="1"
-                  value={filters.distanceMax}
-                  onChange={(e) => setFilters({ ...filters, distanceMax: parseInt(e.target.value) })}
-                  style={{ width: '100%', accentColor: 'var(--brand-primary)' }}
-                />
-              </div>
-
-              {/* Facing */}
-              <div>
-                <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Plot Facing</label>
-                <select
-                  className="form-input"
-                  value={filters.facing}
-                  onChange={(e) => setFilters({ ...filters, facing: e.target.value })}
+            <div className="project-manager-tabs">
+              {MANAGEMENT_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`project-manager-tab ${projectManagerTab === tab.id ? 'active' : ''}`}
+                  onClick={() => setProjectManagerTab(tab.id)}
                 >
-                  <option value="Any">Any Direction</option>
-                  <option value="East">East Facing</option>
-                  <option value="North">North Facing</option>
-                  <option value="West">West Facing</option>
-                </select>
-              </div>
-
-              {/* Score benchmark */}
-              <div>
-                <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Min Druvio Score: <strong style={{ color: 'var(--accent-gold)' }}>{filters.minScore}+</strong>
-                </label>
-                <select
-                  className="form-input"
-                  value={filters.minScore}
-                  onChange={(e) => setFilters({ ...filters, minScore: parseInt(e.target.value) })}
-                >
-                  <option value="0">Show All Listings</option>
-                  <option value="60">Good Score (60+)</option>
-                  <option value="75">Great Score (75+)</option>
-                  <option value="90">Elite Score (90+)</option>
-                </select>
-              </div>
-
-              {/* Legal/Verified Toggles */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={filters.naPlot}
-                    onChange={(e) => setFilters({ ...filters, naPlot: e.target.checked })}
-                    style={{ accentColor: 'var(--brand-primary)' }}
-                  />
-                  <span>Sanctioned NA Plots (Non-Agricultural)</span>
-                </label>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={filters.bankLoan}
-                    onChange={(e) => setFilters({ ...filters, bankLoan: e.target.checked })}
-                    style={{ accentColor: 'var(--brand-primary)' }}
-                  />
-                  <span>Bank Loan Pre-Approved</span>
-                </label>
-              </div>
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
-            <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-              <button
-                onClick={() => {
-                  setFilters({
-                    budgetMax: 3000000,
-                    distanceMax: 10,
-                    minSize: 0,
-                    facing: 'Any',
-                    bankLoan: false,
-                    naPlot: false,
-                    minScore: 0
-                  });
-                  setShowFilters(false);
-                }}
-                className="btn-secondary"
-                style={{ flex: 1, padding: '10px' }}
-              >
-                Reset All
-              </button>
-              <button
-                onClick={() => setShowFilters(false)}
-                className="btn-primary"
-                style={{ flex: 1, padding: '10px' }}
-              >
-                Apply Filters
-              </button>
-            </div>
+            {renderProjectManagerContent()}
           </div>
-        </div>
-      )}
+        ) : (
+          <>
+            <div className="details-hero">
+              <img src={selectedProject.thumbnail || selectedProject.heroImage || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80'} alt={selectedProject.name} />
+              <div className="details-verified-stamp">✓ GPS Verified</div>
+              {selectedCashback && <div className="premium-cashback-badge">💰 {selectedCashback}</div>}
+            </div>
 
-      {/* BOOK SITE VISIT MODAL */}
-      {showBookingModal && (
-        <div
-          className="fade-in"
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            zIndex: 3000,
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '16px'
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '320px',
-              background: 'var(--bg-sidebar)',
-              borderRadius: '20px',
-              border: '1px solid var(--border-color)',
-              padding: '20px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '14px', fontWeight: '800' }}>Schedule Site Visit</h3>
-              <button
-                onClick={() => setShowBookingModal(false)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-              >
-                <X size={16} />
-              </button>
+            <div className="details-info-section">
+              <h2>{selectedProject.name}</h2>
+              {selectedLocation && (
+                <p className="details-location">
+                  <MapPin size={12} color="var(--brand-primary)" />
+                  {selectedLocation}
+                </p>
+              )}
+
+              <div className="details-pricing-block">
+                <div>
+                  <span>Price</span>
+                  <strong>{formatINR(selectedProject.priceFrom || selectedProject.startingPrice)}</strong>
+                </div>
+                {hasValue(selectedProject.remainingPlots) && (
+                  <div className="pricing-right">
+                    <span>Remaining plots</span>
+                    <strong>{Number(selectedProject.remainingPlots) > 0 ? selectedProject.remainingPlots : 'Sold Out'}</strong>
+                  </div>
+                )}
+              </div>
+
+              <div className="details-key-grid">
+                {hasValue(selectedProject.developer) && (
+                  <div className="spec-card">
+                    <span>Developer</span>
+                    <strong>{selectedProject.developer}</strong>
+                  </div>
+                )}
+                {selectedCashback && (
+                  <div className="spec-card">
+                    <span>Cashback</span>
+                    <strong>{selectedCashback}</strong>
+                  </div>
+                )}
+                {hasValue(selectedProject.siteVisitContact) && (
+                  <div className="spec-card">
+                    <span>Site Visit Contact</span>
+                    <strong>{selectedProject.siteVisitContact}</strong>
+                  </div>
+                )}
+                {hasValue(selectedProject.reraNumber) && (
+                  <div className="spec-card">
+                    <span>RERA Number</span>
+                    <strong>{selectedProject.reraNumber}</strong>
+                  </div>
+                )}
+              </div>
+
+              <div className="details-score-card">
+                <div className="score-header">
+                  <div className="score-title">
+                    <Star size={14} fill="var(--accent-gold)" color="var(--accent-gold)" />
+                    <span>Druvio Score</span>
+                  </div>
+                  <div className="score-badge">{selectedProject.DruvioScore || '4.6'} / 100</div>
+                </div>
+                <p className="score-desc">Benchmark safety, location value, infrastructure, and title checks.</p>
+              </div>
+
+              {selectedAmenities.length > 0 && (
+                <div className="details-amenities">
+                  <h4>Amenities</h4>
+                  <ul>
+                    {selectedAmenities.map((item, idx) => <li key={`${item}-${idx}`}>✓ {item}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {hasValue(selectedProject.description) && (
+                <div className="details-desc">
+                  <h4>About this project</h4>
+                  <p className="desc-text">{selectedProject.description}</p>
+                </div>
+              )}
+
+              <div className="available-layouts-section">
+                <h4>Layouts</h4>
+                {loadingLayouts ? (
+                  <p className="loading-tag">Loading layouts...</p>
+                ) : projectLayouts.length === 0 ? (
+                  <p className="no-layouts-tag">No layouts published yet.</p>
+                ) : (
+                  <div className="layouts-selector-grid">
+                    {projectLayouts.map((layout) => {
+                      const isSelected = activeLayout?.id === layout.id;
+                      return (
+                        <button
+                          key={layout.id}
+                          className={`layout-selector-card ${isSelected ? 'selected' : ''}`}
+                          onClick={() => setActiveLayout(isSelected ? null : layout)}
+                        >
+                          <span className="color-dot" style={{ backgroundColor: layout.color }} />
+                          <span>{layout.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {(hasValue(selectedProject.website) || hasValue(selectedProject.googleMapsLink)) && (
+                <div className="details-links-row">
+                  {hasValue(selectedProject.website) && (
+                    <a className="details-link-pill" href={selectedProject.website} target="_blank" rel="noreferrer">
+                      <Globe size={13} /> Website <ExternalLink size={12} />
+                    </a>
+                  )}
+                  {hasValue(selectedProject.googleMapsLink) && (
+                    <a className="details-link-pill" href={selectedProject.googleMapsLink} target="_blank" rel="noreferrer">
+                      <MapPin size={13} /> Maps <ExternalLink size={12} />
+                    </a>
+                  )}
+                </div>
+              )}
+
+              <div className="details-cta-sticky">
+                <div className="cta-buttons-row">
+                  {selectedWhatsAppUrl && (
+                    <a href={selectedWhatsAppUrl} target="_blank" rel="noreferrer" className="btn-whatsapp">
+                      WhatsApp Seller
+                    </a>
+                  )}
+                  <button onClick={() => setShowBookingModal(true)} className="btn-primary site-visit-btn">
+                    Book Site Visit
+                  </button>
+                </div>
+
+                <div className="cta-secondary-row">
+                  {selectedNavigateUrl && (
+                    <button className="btn-secondary icon-btn-text" onClick={() => window.open(selectedNavigateUrl, '_blank')}>
+                      Navigate Map
+                    </button>
+                  )}
+                  <button
+                    className="btn-secondary icon-btn-text"
+                    onClick={() => navigator.clipboard?.writeText(window.location.href).then(() => alert('Link copied!'))}
+                  >
+                    Share Listing
+                  </button>
+                </div>
+
+                {isAdmin && (
+                  <div className="details-admin-controls-block">
+                    <span className="admin-block-title"><Settings size={12} /> Admin Toolbar</span>
+                    <div className="admin-actions-row">
+                      <button onClick={() => openProjectManager('layouts')} className="btn-admin-action">Manage Layouts</button>
+                      <button onClick={() => openProjectManager('general')} className="btn-admin-action">Edit Project</button>
+                      <button onClick={handleDeleteProject} className="btn-admin-action danger">Delete Project</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="buyer-map-first-root">
+      <div className="buyer-map-canvas">
+        <MapScreen
+          projects={projects}
+          isAdmin={isAdmin}
+          selectedProject={selectedProject}
+          onSelectProject={handleProjectSelect}
+          activeLayout={activeLayout}
+          onActiveLayoutChange={setActiveLayout}
+          onVisibleProjectsChange={setVisibleProjects}
+          filters={mapFilters}
+        />
+      </div>
+
+      <aside className="buyer-map-nav" aria-label="Buyer navigation">
+        {SIDEBAR_ITEMS.map((item) => {
+          const Icon = item.icon;
+          const active = !item.disabled && activeSidebarItem === item.id && panelMode !== 'project';
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`buyer-map-nav-btn ${active ? 'active' : ''}`}
+              disabled={item.disabled}
+              title={item.disabled ? `${item.label} coming soon` : item.label}
+              onClick={() => !item.disabled && openNavigationPanel(item.id)}
+            >
+              <Icon size={18} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </aside>
+
+      <section className={`buyer-slide-panel ${panelOpen ? 'open' : ''}`}>
+        <div className="buyer-slide-panel-shell">
+          <div className="buyer-slide-panel-head">
+            <div>
+              <span className="buyer-panel-kicker">{panelMode === 'project' ? 'Selected project' : 'Map workspace'}</span>
+              <h3>{panelTitle}</h3>
+            </div>
+            <button type="button" className="buyer-panel-close" onClick={closePanel} aria-label="Close panel">
+              <X size={18} />
+            </button>
+          </div>
+
+          {panelMode === 'home' && renderHomePanel()}
+          {panelMode === 'cashback' && renderCashbackPanel()}
+          {panelMode === 'project' && renderProjectPanel()}
+        </div>
+      </section>
+
+      <nav className="buyer-mobile-nav" aria-label="Buyer mobile navigation">
+        <button type="button" className={`buyer-mobile-nav-btn ${panelMode === 'home' ? 'active' : ''}`} onClick={() => openNavigationPanel('home')}>
+          <Home size={18} />
+          <span>Home</span>
+        </button>
+        <button type="button" className={`buyer-mobile-nav-btn ${panelMode === 'cashback' ? 'active' : ''}`} onClick={() => openNavigationPanel('cashback')}>
+          <Gift size={18} />
+          <span>Cashback</span>
+        </button>
+        <button type="button" className={`buyer-mobile-nav-btn ${panelMode === null ? 'active' : ''}`} onClick={closePanel}>
+          <Compass size={18} />
+          <span>Map</span>
+        </button>
+      </nav>
+
+      {showBookingModal && selectedProject && (
+        <div className="modal-overlay">
+          <div className="modal-card">
+            <div className="modal-head">
+              <h3>Schedule Site Visit</h3>
+              <button onClick={() => setShowBookingModal(false)} className="close-modal-btn"><X size={18} /></button>
             </div>
 
             {bookingSuccess ? (
-              <div style={{ padding: '20px 0', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                <div style={{ background: 'var(--brand-glow)', border: '1px solid var(--brand-primary)', padding: '8px', borderRadius: '50%' }}>
-                  <Check size={24} color="var(--brand-primary)" strokeWidth={3} />
-                </div>
-                <h4 style={{ fontSize: '13px', fontWeight: '800', color: 'var(--color-active)' }}>Visit Confirmed!</h4>
-                <p style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>We've shared details on your phone.</p>
+              <div className="booking-success-anim">
+                <Check size={32} color="var(--color-active)" />
+                <h4>Site Visit Booked!</h4>
+                <p>We will contact you shortly to coordinate details.</p>
               </div>
             ) : (
-              <form onSubmit={handleBookVisit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <p style={{ fontSize: '10px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-                  A Druvio field executive will meet you at the site location of **{selectedProject.name}** and show you the exact physical plot boundaries.
+              <form onSubmit={handleBookVisit} className="modal-form-fields">
+                <p>
+                  A field executive will meet you at {selectedProject.name}
+                  {hasValue(selectedProject.siteVisitContact) ? ` with ${selectedProject.siteVisitContact}` : ''} and show you the layout limits.
                 </p>
-
-                <div>
-                  <input
-                    type="text"
-                    placeholder="Your Name"
-                    className="form-input"
-                    required
-                    value={bookingForm.name}
-                    onChange={(e) => setBookingForm({ ...bookingForm, name: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <input
-                    type="tel"
-                    placeholder="Mobile Number"
-                    className="form-input"
-                    required
-                    value={bookingForm.phone}
-                    onChange={(e) => setBookingForm({ ...bookingForm, phone: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <input
-                    type="date"
-                    className="form-input"
-                    required
-                    value={bookingForm.date}
-                    onChange={(e) => setBookingForm({ ...bookingForm, date: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <select
-                    className="form-input"
-                    value={bookingForm.time}
-                    onChange={(e) => setBookingForm({ ...bookingForm, time: e.target.value })}
-                  >
-                    <option value="09:00 AM">09:00 AM (Morning)</option>
-                    <option value="11:00 AM">11:00 AM (Morning)</option>
-                    <option value="02:00 PM">02:00 PM (Afternoon)</option>
-                    <option value="04:30 PM">04:30 PM (Evening)</option>
-                  </select>
-                </div>
-                <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: '6px' }}>
-                  Confirm Booking
-                </button>
+                <input
+                  required
+                  type="text"
+                  placeholder="Your Name"
+                  value={bookingForm.name}
+                  onChange={(event) => setBookingForm({ ...bookingForm, name: event.target.value })}
+                />
+                <input
+                  required
+                  type="tel"
+                  placeholder="Mobile Number"
+                  value={bookingForm.phone}
+                  onChange={(event) => setBookingForm({ ...bookingForm, phone: event.target.value })}
+                />
+                <input
+                  required
+                  type="date"
+                  value={bookingForm.date}
+                  onChange={(event) => setBookingForm({ ...bookingForm, date: event.target.value })}
+                />
+                <select
+                  value={bookingForm.time}
+                  onChange={(event) => setBookingForm({ ...bookingForm, time: event.target.value })}
+                >
+                  <option value="09:00 AM">09:00 AM (Morning)</option>
+                  <option value="11:00 AM">11:00 AM (Morning)</option>
+                  <option value="02:00 PM">02:00 PM (Afternoon)</option>
+                  <option value="04:30 PM">04:30 PM (Evening)</option>
+                </select>
+                <button type="submit" className="btn-primary">Confirm Site Visit</button>
               </form>
             )}
           </div>

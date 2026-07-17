@@ -1,0 +1,706 @@
+/* Druvio Premium Map Screen Stylesheet - Google Earth & Glassmorphism Theme */
+
+.druvio-map-screen-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #0c1512;
+}
+
+.druvio-google-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background-color: #0c1512;
+}
+
+/* Glassmorphism Utility class */
+.glass {
+  background: rgba(15, 23, 42, 0.75) !important;
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #f8fafc;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+/* Floating Controls Container */
+.map-floating-overlay-container {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none; /* Let clicks pass to map where needed */
+}
+
+.map-floating-overlay-container * {
+  pointer-events: auto; /* Enable inputs */
+}
+
+/* Brand & Search Bar Row */
+.search-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+/* Brand Badge */
+.brand-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 99px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.brand-badge strong {
+  font-family: var(--font-title);
+  font-size: 16px;
+  letter-spacing: 0.5px;
+}
+
+.brand-badge span {
+  font-size: 10px;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+  padding: 2px 6px;
+  border-radius: 99px;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+/* Floating Search Input Box */
+.floating-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 99px;
+  padding: 0 16px;
+  height: 40px;
+  min-width: 280px;
+  width: 320px;
+  max-width: 100%;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  transition: width 0.3s ease;
+}
+
+.floating-search-box:focus-within {
+  border-color: var(--brand-primary);
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.25);
+}
+
+.floating-search-box .search-icon {
+  color: #94a3b8;
+  margin-right: 8px;
+}
+
+.floating-search-box input {
+  background: transparent;
+  border: none;
+  color: #fff;
+  outline: none;
+  font-size: 13px;
+  width: 100%;
+  font-family: var(--font-body);
+}
+
+.floating-search-box input::placeholder {
+  color: #64748b;
+}
+
+.floating-search-box .clear-search {
+  color: #64748b;
+  cursor: pointer;
+  margin-left: 8px;
+}
+
+.floating-search-box .clear-search:hover {
+  color: #fff;
+}
+
+/* Search Dropdown Panel */
+.search-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
+  max-height: 250px;
+  overflow-y: auto;
+  z-index: 50;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.search-dropdown-panel button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #e2e8f0;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 0.2s ease;
+}
+
+.search-dropdown-panel button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.search-dropdown-panel button div {
+  display: flex;
+  flex-direction: column;
+}
+
+.search-dropdown-panel button div strong {
+  font-size: 13px;
+}
+
+.search-dropdown-panel button div span {
+  font-size: 10px;
+  color: #64748b;
+}
+
+/* Floating Circle Control Buttons */
+.floating-circle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+}
+
+.floating-circle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  transform: translateY(-2px);
+}
+
+.floating-circle-btn.active {
+  background: var(--brand-primary);
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 15px rgba(37, 99, 235, 0.4);
+}
+
+/* Popdown Panels */
+.floating-filters-popdown,
+.floating-layers-popdown {
+  position: absolute;
+  top: 56px;
+  width: 320px;
+  max-width: 100%;
+  border-radius: 16px;
+  padding: 16px;
+  z-index: 40;
+  animation: slideDown 0.25s ease-out forwards;
+}
+
+.floating-filters-popdown {
+  left: 0;
+}
+
+.floating-layers-popdown {
+  left: 120px;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.filters-header,
+.layers-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 8px;
+}
+
+.filters-header h4,
+.layers-header h4 {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.close-panel-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.close-panel-btn:hover {
+  color: #fff;
+}
+
+.filters-body,
+.layers-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.filters-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.filters-body label strong {
+  color: var(--brand-primary);
+}
+
+.filters-body input[type="range"] {
+  width: 100%;
+  accent-color: var(--brand-primary);
+  background: rgba(255, 255, 255, 0.1);
+  height: 4px;
+  border-radius: 2px;
+  outline: none;
+}
+
+.checkboxes-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.checkbox-row input[type="checkbox"] {
+  accent-color: var(--brand-primary);
+}
+
+/* Layers popdown specific styles */
+.layers-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #64748b;
+  letter-spacing: 0.5px;
+}
+
+.base-maps-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.base-map-option-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 2px;
+  color: #94a3b8;
+  font-size: 10px;
+  text-transform: capitalize;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.base-map-option-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.base-map-option-btn.active {
+  background: var(--brand-primary);
+  border-color: var(--brand-primary);
+  color: #fff;
+  font-weight: 700;
+}
+
+.gis-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Premium Admin Toolbar Floating Over Map */
+.map-floating-admin-toolbar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 99px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  z-index: 45;
+  width: fit-content;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 6px 12px;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: var(--font-body);
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pencil-btn.active {
+  background: #a855f7;
+  border-color: #a855f7;
+  color: #fff;
+}
+
+.admin-sub-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  padding-left: 8px;
+}
+
+.drawing-actions,
+.editing-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawing-status-badge {
+  font-size: 11px;
+  color: #facc15;
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+.primary-btn {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+.primary-btn:hover {
+  background: #15803d;
+}
+
+.danger-btn {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.danger-btn:hover {
+  background: #b91c1c;
+}
+
+.icon-toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.icon-toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Placing marker Hint toast */
+.placing-hint-toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  color: #facc15;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+  z-index: 40;
+}
+
+.placing-hint-toast button {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.placing-hint-toast button:hover {
+  color: #fff;
+}
+
+/* New Project Dialog Backdrop and Form */
+.map-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.map-project-form {
+  position: relative;
+  width: 100%;
+  max-width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 24px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.map-project-form h2 {
+  font-size: 20px;
+  margin-bottom: 4px;
+  color: #fff;
+}
+
+.coords-subtitle {
+  font-size: 11px;
+  color: var(--brand-primary);
+  font-family: monospace;
+  margin-bottom: 16px;
+}
+
+.form-fields-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.map-project-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.map-project-form input,
+.map-project-form textarea {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+  font-family: var(--font-body);
+}
+
+.map-project-form input:focus,
+.map-project-form textarea:focus {
+  border-color: var(--brand-primary);
+}
+
+.description-label {
+  grid-column: span 2;
+  margin-top: 12px;
+  margin-bottom: 16px;
+}
+
+.map-project-form textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.map-primary {
+  display: block;
+  width: 100%;
+  background: var(--brand-primary);
+  border: none;
+  border-radius: 10px;
+  padding: 12px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  font-family: var(--font-body);
+}
+
+.map-primary:hover:not(:disabled) {
+  background: var(--brand-primary-hover);
+}
+
+.map-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.map-card-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.map-card-close:hover {
+  color: #fff;
+}
+
+/* Warning alert card */
+.map-alert-card {
+  position: fixed;
+  top: 76px;
+  left: 24px;
+  max-width: 340px;
+  background: rgba(220, 38, 38, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.35);
+  z-index: 100;
+}
+
+.map-alert-card span {
+  font-size: 12px;
+  font-weight: 500;
+  flex: 1;
+}
+
+.map-alert-card button {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+}
+
+.map-alert-card button:hover {
+  color: #fff;
+}
+
+/* Responsive adjustments for map floating panel elements */
+@media (max-width: 768px) {
+  .map-floating-overlay-container {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+  }
+
+  .brand-badge {
+    padding: 8px 10px;
+  }
+
+  .brand-badge strong {
+    font-size: 13px;
+  }
+
+  .floating-search-box {
+    width: auto;
+    flex: 1;
+    min-width: 140px;
+  }
+
+  .floating-filters-popdown {
+    left: 0;
+    right: 0;
+    width: auto;
+  }
+
+  .floating-layers-popdown {
+    left: 0;
+    right: 0;
+    width: auto;
+  }
+
+  .map-floating-admin-toolbar {
+    bottom: 74px; /* Move above mobile bottom sheet/nav bar */
+    left: 10px;
+    right: 10px;
+    transform: none;
+    width: auto;
+    justify-content: center;
+  }
+}
