@@ -26,23 +26,9 @@ import {
 } from 'firebase/firestore';
 import EditProfileModal from './EditProfileModal';
 import { auth, db } from '../firebaseConfig';
+import { normalizePermissions } from '../utils/permissions';
 
 const getName = (account) => account?.displayName || account?.name || account?.businessName || account?.userName || account?.email || 'Unknown';
-
-const normalizePermissions = (permissions = {}) => {
-  const normalized = {
-    buyer: Boolean(permissions?.buyer),
-    seller: Boolean(permissions?.seller),
-    admin: Boolean(permissions?.admin)
-  };
-
-  if (normalized.admin) {
-    normalized.buyer = true;
-    normalized.seller = true;
-  }
-
-  return normalized;
-};
 
 const getProjectOwnerName = (project, sellers) => {
   const owner = sellers.find((item) => item.id === project.ownerId);

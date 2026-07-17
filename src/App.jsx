@@ -18,6 +18,13 @@ import AdminPanel from './components/AdminPanel';
 import LoginScreen from './components/LoginScreen';
 import ProfileDropdown from './components/ProfileDropdown';
 import { auth, db } from './firebaseConfig';
+import {
+  canAccessView,
+  DEFAULT_PERMISSIONS,
+  getDefaultView,
+  normalizePermissions
+} from './utils/permissions';
+import { withTimeout } from './utils/async';
 
 const collections = ['projects', 'leads', 'visits', 'cashbacks'];
 
