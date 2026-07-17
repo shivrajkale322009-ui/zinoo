@@ -73,21 +73,48 @@ function App() {
     }
 
     try {
-      // 10s safeguard so a slow/unreachable Firestore never blocks the app.
-      const profile = await withTimeout(getDoc(doc(db, 'users', nextUser.uid)), 10000);
-      const userPermissions = normalizePermissions(profile.data());
+      // Wait for Firestore to return the user profile
+      const profile = await withTimeout(
+        getDoc(doc(db, "users", nextUser.uid)),
+        10000,
+        "Timed out loading user profile"
+      );
+
+      if (!profile.exists()) {
+        throw new Error(`User profile not found for UID: ${nextUser.uid}`);
+      }
+
+      const profileData = profile.data();
+      console.log("UID:", nextUser.uid);
+      console.log("Firestore profile:", profileData);
+      console.log("Firestore profile:", profileData);
+
+
+      const userPermissions = normalizePermissions(
+        profileData.permissions ?? profileData
+      );
+
+      console.log("Normalized permissions:", userPermissions);
+      console.log("Default view:", getDefaultView(userPermissions));
       setPermissions(userPermissions);
       setCurrentView(getDefaultView(userPermissions));
-      if (userPermissions.admin) setSelectedSeller(null);
+
+      if (userPermissions.admin) {
+        setSelectedSeller(null);
+      }
     } catch (err) {
-      // CRITICAL: we must still assign permissions here. Default to buyer.
-      console.error('Unable to load account profile:', err);
+      console.error("PROFILE LOAD FAILED");
+      console.error(err);
+      console.error(err.stack);
+
+      alert(err?.message);
+
       setPermissions(DEFAULT_PERMISSIONS);
-      setCurrentView('buyer');
+      setCurrentView("buyer");
       setSelectedSeller(null);
-      setError('We could not load your profile, so you have been signed in as a buyer. Please refresh if this looks wrong.');
-    } finally {
-      setLoading(false);
+      setError(
+        "We could not load your profile, so you have been signed in as a buyer."
+      );
     }
   }), []);
 

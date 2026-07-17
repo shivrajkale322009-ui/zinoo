@@ -5,19 +5,43 @@ export const DEFAULT_PERMISSIONS = Object.freeze({
 });
 
 export function normalizePermissions(permissions = {}) {
+  // Support legacy role-based documents
+  if (permissions.role) {
+    switch (permissions.role) {
+      case "admin":
+        return {
+          buyer: true,
+          seller: true,
+          admin: true
+        };
+
+      case "seller":
+        return {
+          buyer: true,
+          seller: true,
+          admin: false
+        };
+
+      default:
+        return {
+          buyer: true,
+          seller: false,
+          admin: false
+        };
+    }
+  }
+
   const normalized = {
     buyer: Boolean(permissions?.buyer),
     seller: Boolean(permissions?.seller),
     admin: Boolean(permissions?.admin)
   };
 
-  // Administrators can use every workspace.
   if (normalized.admin) {
     normalized.buyer = true;
     normalized.seller = true;
   }
 
-  // A profile without permissions is still a valid buyer account.
   if (!normalized.buyer && !normalized.seller && !normalized.admin) {
     return { ...DEFAULT_PERMISSIONS };
   }
@@ -27,14 +51,18 @@ export function normalizePermissions(permissions = {}) {
 
 export function canAccessView(permissions, view) {
   const normalized = normalizePermissions(permissions);
-  return (view === 'buyer' && normalized.buyer)
-    || (view === 'seller' && normalized.seller)
-    || (view === 'admin' && normalized.admin);
+
+  return (
+    (view === "buyer" && normalized.buyer) ||
+    (view === "seller" && normalized.seller) ||
+    (view === "admin" && normalized.admin)
+  );
 }
 
 export function getDefaultView(permissions) {
   const normalized = normalizePermissions(permissions);
-  if (normalized.admin) return 'admin';
-  if (normalized.seller) return 'seller';
-  return 'buyer';
+
+  if (normalized.admin) return "admin";
+  if (normalized.seller) return "seller";
+  return "buyer";
 }
