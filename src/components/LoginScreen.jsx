@@ -85,7 +85,7 @@ function LoginScreen({ onLogin }) {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
       const userData = await ensureUserDoc(result.user);
-      onLogin(result.user, userData.permissions);
+      onLogin(result.user, userData.permissions ?? userData);
     } catch (err) {
       setError(getGoogleSignInError(err));
       console.error('Google sign-in error:', err);
@@ -131,7 +131,7 @@ function LoginScreen({ onLogin }) {
     try {
       const result = await confirmationResult.confirm(otp);
       const userData = await ensureUserDoc(result.user);
-      onLogin(result.user, userData.permissions);
+      onLogin(result.user, userData.permissions ?? userData);
     } catch (err) {
       setError('Invalid OTP. Please check the code and try again.');
       console.error(err);
