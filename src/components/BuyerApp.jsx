@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import MapScreen from '../maps/MapScreen';
+import ProfileDropdown from './ProfileDropdown';
+import {
+  formatDocumentDate,
+  getProjectDocumentLabel,
+  getVerifiedDocumentCount,
+  normalizeProjectDocuments,
+  PROJECT_DOCUMENT_OPTIONS
+} from '../utils/projectDocuments';
 import {
   Home,
   Gift,
@@ -21,8 +30,19 @@ import {
   Globe,
   ExternalLink,
   Building2,
-  Compass
+  Compass,
+  MessageCircle,
+  Navigation,
+  Share2,
+  FileCheck,
+  FileText,
+  Camera,
+  Loader2,
+  IndianRupee,
+  UserRound,
+  Phone
 } from 'lucide-react';
+import { storage } from '../firebaseConfig';
 import {
   loadProjectLayouts,
   deleteProjectLayout,
@@ -35,6 +55,7 @@ const MANAGEMENT_TABS = [
   { id: 'general', label: 'General Information' },
   { id: 'layouts', label: 'Layouts' },
   { id: 'media', label: 'Media' },
+  { id: 'documents', label: 'Documents' },
   { id: 'settings', label: 'Settings' }
 ];
 
@@ -50,13 +71,13 @@ const createEmptyProjectForm = () => ({
   thumbnail: '',
   amenities: '',
   status: 'approved',
-  cashbackPercentage: '',
   cashbackAmount: '',
   whatsappNumber: '',
   siteVisitContact: '',
   googleMapsLink: '',
   website: '',
-  reraNumber: ''
+  reraNumber: '',
+  documents: []
 });
 
 const DEFAULT_FILTERS = {
@@ -99,13 +120,13 @@ const getProjectFormFromRecord = (project) => ({
   thumbnail: project?.thumbnail || project?.heroImage || '',
   amenities: normalizeAmenities(project?.amenities).join(', '),
   status: project?.status || 'approved',
-  cashbackPercentage: project?.cashbackPercentage ?? '',
   cashbackAmount: project?.cashbackAmount ?? '',
   whatsappNumber: project?.whatsappNumber || '',
   siteVisitContact: project?.siteVisitContact || '',
   googleMapsLink: project?.googleMapsLink || '',
   website: project?.website || '',
-  reraNumber: project?.reraNumber || ''
+  reraNumber: project?.reraNumber || '',
+  documents: Array.isArray(project?.documents) ? project.documents : []
 });
 
 const getDisplayLocation = (project) =>
@@ -128,7 +149,6 @@ const formatINR = (num) => {
 };
 
 const formatCashbackLabel = (project) => {
-  if (hasValue(project?.cashbackPercentage)) return `${project.cashbackPercentage}% Cashback`;
   if (hasValue(project?.cashbackAmount)) {
     const amount = Number(project.cashbackAmount);
     if (Number.isFinite(amount) && amount > 0) {
@@ -146,8 +166,27 @@ const getNavigateUrl = (project) => {
   return '';
 };
 
-function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, addVisit, addCashback, isAdmin = false }) {
-  const [panelMode, setPanelMode] = useState(null);
+function BuyerApp({
+  projects,
+  leads,
+  visits,
+  cashbacks,
+  user,
+  buyerProfile,
+  addLead,
+  updateLead,
+  addVisit,
+  addCashback,
+  isAdmin = false,
+  onThemeToggle,
+  isDarkMode,
+  permissions,
+  currentView,
+  onViewChange,
+  onBackToAdmin,
+  selectedSeller
+}) {
+  const [panelMode, setPanelMode] = useState('home');
   const [selectedProject, setSelectedProject] = useState(null);
   const [projectLayouts, setProjectLayouts] = useState([]);
   const [activeLayout, setActiveLayout] = useState(null);
@@ -160,14 +199,17 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
   const [homeSearchQuery, setHomeSearchQuery] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [mapFilters, setMapFilters] = useState(DEFAULT_FILTERS);
+  const [savedProjectIds, setSavedProjectIds] = useState(() => new Set());
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [bookingForm, setBookingForm] = useState({ name: '', phone: '', date: '', time: '11:00 AM' });
   const [bookingSuccess, setBookingSuccess] = useState(false);
-  const [cashbackForm, setCashbackForm] = useState({ buyerName: '', buyerPhone: '', purchasePrice: '', documentName: '', projectId: '' });
+  const [cashbackForm, setCashbackForm] = useState({ purchasePrice: '', projectId: '', proofFile: null });
   const [cashbackSuccess, setCashbackSuccess] = useState(false);
+  const [cashbackSubmitting, setCashbackSubmitting] = useState(false);
+  const [cashbackError, setCashbackError] = useState('');
 
   const approvedProjects = useMemo(
-    () => projects.filter((project) => project.status === 'approved' || project.status === 'Active'),
+    () => projects.filter((project) => project.status === 'approved'),
     [projects]
   );
 
@@ -225,6 +267,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
     setSelectedProject(project);
     setPanelMode('project');
     setProjectManagerOpen(false);
+    window.dispatchEvent(new CustomEvent('druvio-focus-project', { detail: { project } }));
   }, []);
 
   const closePanel = useCallback(() => {
@@ -237,6 +280,15 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
     setProjectManagerOpen(false);
     setPanelMode(mode);
   }, []);
+
+  const toggleSavedProject = (projectId) => {
+    setSavedProjectIds((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  };
 
   const handleBookVisit = (e) => {
     e.preventDefault();
@@ -288,51 +340,83 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
     }, 2000);
   };
 
-  const handleCashbackSubmit = (e) => {
+  const handleCashbackSubmit = async (e) => {
     e.preventDefault();
-    if (!cashbackForm.buyerName || !cashbackForm.buyerPhone || !cashbackForm.purchasePrice || !cashbackForm.projectId || !cashbackForm.documentName) {
-      alert('Please fill all fields and select your agreement document!');
+    setCashbackError('');
+
+    const buyerName = buyerProfile?.displayName || buyerProfile?.name || user?.displayName || '';
+    const buyerPhone = buyerProfile?.phoneNumber || buyerProfile?.phone || user?.phoneNumber || '';
+    const project = cashbackProjects.find((item) => item.id === cashbackForm.projectId);
+    const purchaseVal = Number(cashbackForm.purchasePrice);
+    const proofFile = cashbackForm.proofFile;
+
+    if (!buyerName || !buyerPhone) {
+      setCashbackError('Add your name and phone number in Account Settings before submitting a claim.');
+      return;
+    }
+    if (!project || !Number.isFinite(purchaseVal) || purchaseVal <= 0 || !proofFile) {
+      setCashbackError('Select a project, enter the final purchase price, and capture purchase proof.');
       return;
     }
 
-    const project = projects.find((item) => item.id === cashbackForm.projectId);
-    const purchaseVal = parseFloat(cashbackForm.purchasePrice);
-    const cbVal = Math.round(purchaseVal * 0.01);
+    const cbVal = Math.max(0, Number(project?.cashbackAmount) || 0);
+    const safeFileName = proofFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+    const proofRef = ref(storage, `cashback-claims/${user.uid}/${Date.now()}-${safeFileName}`);
 
-    addCashback({
-      buyerName: cashbackForm.buyerName,
-      buyerPhone: cashbackForm.buyerPhone,
-      project: project ? project.name : 'Custom Project',
-      projectId: project?.id || '',
-      projectOwnerId: project?.ownerId || '',
-      purchasePrice: purchaseVal,
-      cashbackAmount: cbVal,
-      commissionAmount: cbVal,
-      documentName: cashbackForm.documentName,
-      submittedAt: new Date().toISOString().split('T')[0],
-      status: 'Pending Verification'
-    });
-
-    const existingLead = leads.find((lead) => lead.phone === cashbackForm.buyerPhone);
-    if (!existingLead) {
-      addLead({
-        name: cashbackForm.buyerName,
-        phone: cashbackForm.buyerPhone,
-        budget: `₹${(purchaseVal / 100000).toFixed(0)}L`,
-        stage: 'Negotiation',
-        date: new Date().toISOString().split('T')[0],
-        project: project ? project.name : 'Druvio Verified',
-        projectId: project?.id || '',
-        projectOwnerId: project?.ownerId || ''
+    setCashbackSubmitting(true);
+    try {
+      const snapshot = await uploadBytes(proofRef, proofFile, {
+        contentType: proofFile.type,
+        customMetadata: { projectId: project.id, uploadedBy: user.uid }
       });
-    }
+      const proofUrl = await getDownloadURL(snapshot.ref);
 
-    setCashbackSuccess(true);
-    setTimeout(() => {
-      setCashbackSuccess(false);
-      setCashbackForm({ buyerName: '', buyerPhone: '', purchasePrice: '', documentName: '', projectId: '' });
-      setPanelMode(null);
-    }, 2500);
+      try {
+        await addCashback({
+          createdBy: user.uid,
+          buyerName,
+          buyerPhone,
+          project: project.name,
+          projectId: project.id,
+          projectOwnerId: project.ownerId || '',
+          purchasePrice: purchaseVal,
+          cashbackAmount: cbVal,
+          commissionAmount: cbVal,
+          proofUrl,
+          proofPath: snapshot.ref.fullPath,
+          documentName: proofFile.name,
+          documentType: proofFile.type,
+          submittedAt: new Date().toISOString().split('T')[0],
+          status: 'Pending Verification'
+        });
+      } catch (claimError) {
+        await deleteObject(snapshot.ref).catch(() => undefined);
+        throw claimError;
+      }
+
+      const existingLead = leads.find((lead) => lead.phone === buyerPhone);
+      if (!existingLead) {
+        await addLead({
+          createdBy: user.uid,
+          name: buyerName,
+          phone: buyerPhone,
+          budget: `₹${(purchaseVal / 100000).toFixed(0)}L`,
+          stage: 'Negotiation',
+          date: new Date().toISOString().split('T')[0],
+          project: project.name,
+          projectId: project.id,
+          projectOwnerId: project.ownerId || ''
+        });
+      }
+
+      setCashbackSuccess(true);
+      setCashbackForm({ purchasePrice: '', projectId: '', proofFile: null });
+    } catch (submitError) {
+      console.error('Failed to submit cashback claim', submitError);
+      setCashbackError('We could not upload and submit your claim. Please check your connection and try again.');
+    } finally {
+      setCashbackSubmitting(false);
+    }
   };
 
   const openProjectManager = (tab = 'general') => {
@@ -439,11 +523,19 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
     () => approvedProjects.filter((project) => formatCashbackLabel(project)),
     [approvedProjects]
   );
+  const cashbackProject = useMemo(
+    () => cashbackProjects.find((project) => project.id === cashbackForm.projectId) || null,
+    [cashbackForm.projectId, cashbackProjects]
+  );
+  const cashbackBuyerName = buyerProfile?.displayName || buyerProfile?.name || user?.displayName || 'Not added';
+  const cashbackBuyerPhone = buyerProfile?.phoneNumber || buyerProfile?.phone || user?.phoneNumber || 'Not added';
 
-  const activeSidebarItem = panelMode === 'cashback' ? 'cashback' : 'home';
+  const activeSidebarItem = panelMode === 'cashback' ? 'cashback' : panelMode === 'home' ? 'home' : null;
   const selectedAmenities = normalizeAmenities(selectedProject?.amenities);
   const selectedLocation = getDisplayLocation(selectedProject);
   const selectedCashback = formatCashbackLabel(selectedProject);
+  const selectedDocuments = selectedProject ? normalizeProjectDocuments(selectedProject) : [];
+  const documentsLoading = Boolean(selectedProject && loadingLayouts && selectedDocuments.length === 0);
   const selectedWhatsAppUrl = buildWhatsAppUrl(selectedProject);
   const selectedNavigateUrl = getNavigateUrl(selectedProject);
   const panelOpen = Boolean(panelMode);
@@ -452,6 +544,12 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
     : panelMode === 'project'
       ? selectedProject?.name || 'Project'
       : 'Home';
+  const panelKicker = panelMode === 'project'
+    ? 'Selected project'
+    : panelMode === 'cashback'
+      ? 'Buyer rewards'
+      : 'Discover verified plot projects';
+  const activeFilterCount = Number(mapFilters.naPlot) + Number(mapFilters.bankLoan);
 
   const renderProjectManagerContent = () => {
     if (!selectedProject) return null;
@@ -528,6 +626,74 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
       );
     }
 
+    if (projectManagerTab === 'documents') {
+      const addDocument = () => {
+        setEditForm((current) => ({
+          ...current,
+          documents: [...current.documents, { type: PROJECT_DOCUMENT_OPTIONS[0].value, url: '', status: 'pending' }]
+        }));
+      };
+
+      return (
+        <div className="project-manager-panel">
+          <div className="project-manager-card">
+            <div className="project-manager-card-head">
+              <div>
+                <span className="project-manager-kicker">Due diligence</span>
+                <h4>Project documents</h4>
+              </div>
+              <button type="button" className="btn-secondary compact-btn" onClick={addDocument}>Add document</button>
+            </div>
+            <p className="project-manager-copy">Review document links and mark verified files before buyers see the verification status.</p>
+            {editForm.documents.length === 0 ? (
+              <p className="no-layouts-tag">No document links have been added yet.</p>
+            ) : (
+              <div className="project-document-editor-list">
+                {editForm.documents.map((document, index) => (
+                  <div key={`${document.type}-${index}`} className="project-document-editor">
+                    <select
+                      className="project-manager-input"
+                      value={document.type}
+                      onChange={(event) => setEditForm({
+                        ...editForm,
+                        documents: editForm.documents.map((item, itemIndex) => itemIndex === index ? { ...item, type: event.target.value } : item)
+                      })}
+                    >
+                      {PROJECT_DOCUMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                    <input
+                      type="url"
+                      className="project-manager-input"
+                      placeholder="Document URL"
+                      value={document.url || ''}
+                      onChange={(event) => setEditForm({
+                        ...editForm,
+                        documents: editForm.documents.map((item, itemIndex) => itemIndex === index ? { ...item, url: event.target.value } : item)
+                      })}
+                    />
+                    <select
+                      className="project-manager-input"
+                      value={document.status || 'pending'}
+                      onChange={(event) => setEditForm({
+                        ...editForm,
+                        documents: editForm.documents.map((item, itemIndex) => itemIndex === index ? { ...item, status: event.target.value, verifiedAt: event.target.value === 'verified' ? new Date().toISOString() : null } : item)
+                      })}
+                    >
+                      <option value="pending">Pending verification</option>
+                      <option value="verified">Verified by Druvio</option>
+                    </select>
+                    <button type="button" className="icon-btn danger-hover" title={`Remove ${getProjectDocumentLabel(document.type)}`} onClick={() => setEditForm({ ...editForm, documents: editForm.documents.filter((_, itemIndex) => itemIndex !== index) })}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     const field = (key, label, type = 'text', required = false, placeholder = '') => (
       <label className="project-manager-field">
         <span>{label}{required ? ' *' : ''}</span>
@@ -537,6 +703,8 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
           className="project-manager-input"
           placeholder={placeholder}
           value={editForm[key]}
+          min={key === 'cashbackAmount' ? '0' : undefined}
+          step={key === 'cashbackAmount' ? '1' : undefined}
           onChange={(event) => setEditForm({ ...editForm, [key]: event.target.value })}
         />
       </label>
@@ -555,7 +723,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               </div>
               <div className="project-manager-grid">
                 {field('name', 'Project Name', 'text', true, 'Project name')}
-                {field('developer', 'Developer Name', 'text', true, 'Developer name')}
+                {field('developer', 'Projected by', 'text', true, 'Company or project owner')}
               </div>
             </div>
 
@@ -572,8 +740,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                 {field('village', 'Village')}
                 {field('taluka', 'Taluka')}
                 {field('area', 'Area')}
-                {field('cashbackPercentage', 'Cashback Percentage', 'number')}
-                {field('cashbackAmount', 'Cashback Amount', 'number')}
+                {field('cashbackAmount', 'Cashback amount', 'number', false, 'Fixed amount in ₹')}
                 {field('whatsappNumber', 'WhatsApp Number')}
                 {field('siteVisitContact', 'Site Visit Contact')}
                 {field('googleMapsLink', 'Google Maps Link', 'url')}
@@ -676,24 +843,26 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
   const renderHomePanel = () => (
     <div className="buyer-side-panel-content">
       <div className="buyer-panel-search-row">
-        <label className="buyer-panel-search">
-          <Search size={16} />
-          <input
-            type="text"
-            placeholder="Search land, village, builder..."
-            value={homeSearchQuery}
-            onChange={(event) => setHomeSearchQuery(event.target.value)}
-          />
-          {homeSearchQuery && (
-            <button type="button" className="buyer-search-clear" onClick={() => setHomeSearchQuery('')}>
-              <X size={14} />
-            </button>
-          )}
-        </label>
-        <button type="button" className={`buyer-filter-toggle ${filtersOpen ? 'active' : ''}`} onClick={() => setFiltersOpen((prev) => !prev)}>
-          <SlidersHorizontal size={16} />
-          <span>Filters</span>
-        </button>
+        <div className="buyer-filter-chips" aria-label="Property filters">
+          <button type="button" className={`buyer-filter-chip ${filtersOpen ? 'active' : ''}`} onClick={() => setFiltersOpen((prev) => !prev)}>
+            Budget <span>{formatINR(mapFilters.budgetMax)}</span>
+          </button>
+          <button type="button" className={`buyer-filter-chip ${filtersOpen ? 'active' : ''}`} onClick={() => setFiltersOpen((prev) => !prev)}>
+            Distance <span>{mapFilters.distanceMax} km</span>
+          </button>
+          <button
+            type="button"
+            className={`buyer-filter-chip ${mapFilters.naPlot ? 'active' : ''}`}
+            onClick={() => setMapFilters({ ...mapFilters, naPlot: !mapFilters.naPlot })}
+            aria-pressed={mapFilters.naPlot}
+          >
+            Certified
+          </button>
+          <button type="button" className={`buyer-filter-chip buyer-filter-chip-icon ${filtersOpen ? 'active' : ''}`} onClick={() => setFiltersOpen((prev) => !prev)} aria-label="More filters" title="More filters">
+            <SlidersHorizontal size={18} />
+            {activeFilterCount > 0 && <span className="buyer-filter-count">{activeFilterCount}</span>}
+          </button>
+        </div>
       </div>
 
       {filtersOpen && (
@@ -725,6 +894,10 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
           <div className="buyer-filter-checks">
             <label><input type="checkbox" checked={mapFilters.naPlot} onChange={(event) => setMapFilters({ ...mapFilters, naPlot: event.target.checked })} /> NA Certified</label>
             <label><input type="checkbox" checked={mapFilters.bankLoan} onChange={(event) => setMapFilters({ ...mapFilters, bankLoan: event.target.checked })} /> Bank Approved</label>
+          </div>
+          <div className="buyer-filter-actions">
+            <button type="button" className="btn-secondary" onClick={() => setMapFilters(DEFAULT_FILTERS)}>Reset</button>
+            <button type="button" className="btn-primary" onClick={() => setFiltersOpen(false)}>Apply Filters</button>
           </div>
         </div>
       )}
@@ -765,10 +938,28 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
           </div>
         ) : (
           <div className="feed-listings-grid buyer-panel-list">
-            {visibleProjects.map((project) => (
-              <article key={project.id} className="feed-project-card" onClick={() => handleProjectSelect(project)}>
+            {visibleProjects.map((project) => {
+              const projectDocuments = normalizeProjectDocuments(project);
+              const verifiedDocumentCount = getVerifiedDocumentCount(project);
+
+              return (
+              <article
+                key={project.id}
+                className="feed-project-card"
+                role="button"
+                tabIndex={0}
+                aria-label={`View ${project.name}`}
+                onClick={() => handleProjectSelect(project)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleProjectSelect(project);
+                  }
+                }}
+              >
                 <div className="card-banner">
                   <img src={project.thumbnail || project.heroImage || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80'} alt={project.name} />
+                  <div className="verified-card-badge"><Check size={12} /> Verified</div>
                   {formatCashbackLabel(project) && <div className="cashback-tag">💰 {formatCashbackLabel(project)}</div>}
                   <div className="score-tag">
                     <Star size={10} fill="var(--accent-gold)" color="var(--accent-gold)" />
@@ -778,7 +969,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                 <div className="card-info">
                   <h3>{project.name}</h3>
                   {getDisplayLocation(project) && <p className="card-loc"><MapPin size={10} /> {getDisplayLocation(project)}</p>}
-                  {hasValue(project.developer) && <p className="card-dev"><Building2 size={10} /> {project.developer}</p>}
+                  {hasValue(project.developer) && <p className="card-dev"><Building2 size={10} /> Projected by {project.developer}</p>}
                   <div className="card-meta">
                     <div className="price-tag">{formatINR(project.priceFrom || project.startingPrice)}</div>
                     <div className="inv-tag">
@@ -787,9 +978,51 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                         : 'Availability on request'}
                     </div>
                   </div>
+                  {projectDocuments.length > 0 && (
+                    <button
+                      type="button"
+                      className="project-document-summary"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleProjectSelect(project);
+                      }}
+                    >
+                      <FileCheck size={16} />
+                      <span>{verifiedDocumentCount > 0 ? `${verifiedDocumentCount} verified document${verifiedDocumentCount === 1 ? '' : 's'}` : 'Documents available'}</span>
+                    </button>
+                  )}
+                  <div className="property-card-actions" aria-label={`${project.name} actions`}>
+                    <button
+                      type="button"
+                      className={`property-card-icon ${savedProjectIds.has(project.id) ? 'saved' : ''}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleSavedProject(project.id);
+                      }}
+                      aria-label={savedProjectIds.has(project.id) ? `Remove ${project.name} from saved projects` : `Save ${project.name}`}
+                      aria-pressed={savedProjectIds.has(project.id)}
+                      title={savedProjectIds.has(project.id) ? 'Remove from saved' : 'Save project'}
+                    >
+                      <Heart size={18} fill={savedProjectIds.has(project.id) ? 'currentColor' : 'none'} />
+                    </button>
+                    {getNavigateUrl(project) && (
+                      <button type="button" className="property-card-icon" onClick={(event) => { event.stopPropagation(); window.open(getNavigateUrl(project), '_blank'); }} aria-label={`Navigate to ${project.name}`} title="Navigate">
+                        <Navigation size={18} />
+                      </button>
+                    )}
+                    <button type="button" className="property-card-icon" onClick={(event) => { event.stopPropagation(); navigator.clipboard?.writeText(window.location.href); }} aria-label={`Share ${project.name}`} title="Share">
+                      <Share2 size={18} />
+                    </button>
+                    {buildWhatsAppUrl(project) && (
+                      <a href={buildWhatsAppUrl(project)} target="_blank" rel="noreferrer" className="property-card-icon property-card-whatsapp" onClick={(event) => event.stopPropagation()} aria-label={`Contact ${project.name} on WhatsApp`} title="WhatsApp">
+                        <MessageCircle size={18} />
+                      </a>
+                    )}
+                  </div>
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -797,110 +1030,90 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
   );
 
   const renderCashbackPanel = () => (
-    <div className="buyer-side-panel-content">
-      <div className="cashback-intro-card">
-        <Gift size={28} color="var(--brand-primary)" />
-        <h3>1% Plot Purchase Cashback</h3>
-        <p>Claim Druvio cashback after purchase verification. The map stays visible while you browse offers and eligible projects.</p>
+    <div className="buyer-side-panel-content cashback-panel-content">
+      <div className="cashback-panel-header">
+        <div className="cashback-panel-icon"><Gift size={20} /></div>
+        <div><h3>Claim Cashback</h3><p>Submit your plot purchase details for verification</p></div>
       </div>
-
-      <div className="buyer-panel-section">
-        <div className="buyer-panel-section-head">
-          <h4>Eligible Projects</h4>
-          <span>{cashbackProjects.length}</span>
-        </div>
-        {cashbackProjects.length === 0 ? (
-          <p className="buyer-empty-copy">No cashback offers are active right now.</p>
-        ) : (
-          <div className="buyer-search-results">
-            {cashbackProjects.map((project) => (
-              <button key={project.id} type="button" className="buyer-search-result" onClick={() => handleProjectSelect(project)}>
-                <div>
-                  <strong>{project.name}</strong>
-                  <span>{getDisplayLocation(project) || 'Druvio verified project'}</span>
-                </div>
-                <span>{formatCashbackLabel(project)}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="buyer-offer-grid">
-        <div className="buyer-offer-card">
-          <strong>Offers</strong>
-          <span>Buyer cashback can be percentage based or fixed amount based on the listing.</span>
-        </div>
-        <div className="buyer-offer-card">
-          <strong>Terms</strong>
-          <span>Valid purchase proof, phone number, and project selection are required for review.</span>
-        </div>
-      </div>
-
       <form onSubmit={handleCashbackSubmit} className="cashback-claim-form">
-        <label>Select Druvio Project
+        <section className="cashback-form-section">
+          <div className="cashback-section-heading"><span>1</span><div><h4>Purchase details</h4><p>Select the purchased project and enter the final price.</p></div></div>
+        <label>Purchased project
           <select
             required
             value={cashbackForm.projectId}
-            onChange={(event) => setCashbackForm({ ...cashbackForm, projectId: event.target.value })}
+            onChange={(event) => setCashbackForm((current) => ({ ...current, projectId: event.target.value }))}
           >
-            <option value="">-- Choose Project --</option>
-            {approvedProjects.map((project) => (
+            <option value="">Select a project</option>
+            {cashbackProjects.map((project) => (
               <option key={project.id} value={project.id}>{project.name}</option>
             ))}
           </select>
         </label>
-        <label>Purchaser Full Name
-          <input
-            required
-            type="text"
-            placeholder="Shivraj Kale"
-            value={cashbackForm.buyerName}
-            onChange={(event) => setCashbackForm({ ...cashbackForm, buyerName: event.target.value })}
-          />
-        </label>
-        <label>Phone Number
-          <input
-            required
-            type="tel"
-            placeholder="9999999999"
-            value={cashbackForm.buyerPhone}
-            onChange={(event) => setCashbackForm({ ...cashbackForm, buyerPhone: event.target.value })}
-          />
-        </label>
-        <label>Plot Purchase Price (₹)
+        <label>Final plot purchase price
           <input
             required
             type="number"
-            placeholder="1200000"
+            min="1"
+            step="1"
+            inputMode="numeric"
+            placeholder="₹ 12,00,000"
             value={cashbackForm.purchasePrice}
-            onChange={(event) => setCashbackForm({ ...cashbackForm, purchasePrice: event.target.value })}
+            onChange={(event) => setCashbackForm((current) => ({ ...current, purchasePrice: event.target.value }))}
           />
         </label>
-        <label>Upload Stamp Agreement / Receipt
-          <button
-            type="button"
-            className="file-sim-btn"
-            onClick={() => {
-              const name = prompt('Enter simulated agreement filename:', 'stamp_duty_agreement.pdf');
-              if (name) setCashbackForm({ ...cashbackForm, documentName: name });
-            }}
-          >
-            {cashbackForm.documentName ? `📁 ${cashbackForm.documentName}` : '📎 Select Document (PDF/JPG)'}
-          </button>
-        </label>
+        {cashbackProject && <div className="cashback-auto-value"><span>Cashback offered</span><strong>{formatCashbackLabel(cashbackProject)}</strong><small>Automatically loaded from the selected project.</small></div>}
+        </section>
 
+        <section className="cashback-form-section">
+          <div className="cashback-section-heading"><span>2</span><div><h4>Purchase proof</h4><p>Capture the stamp agreement or receipt with your device camera.</p></div></div>
+          <label htmlFor="cashback-proof" className="cashback-proof-picker">
+            <Camera size={22} />
+            <strong>{cashbackForm.proofFile ? cashbackForm.proofFile.name : 'Capture or upload proof'}</strong>
+            <span>JPG, PNG or PDF · maximum 10 MB</span>
+          </label>
+          <input id="cashback-proof" className="cashback-file-input" type="file" accept="image/jpeg,image/png,application/pdf" capture="environment" onChange={(event) => {
+            const file = event.target.files?.[0] || null;
+            setCashbackError('');
+            if (file && file.size > 10 * 1024 * 1024) {
+              setCashbackError('Purchase proof must be 10 MB or smaller.');
+              event.target.value = '';
+              setCashbackForm((current) => ({ ...current, proofFile: null }));
+              return;
+            }
+            setCashbackForm((current) => ({ ...current, proofFile: file }));
+          }} />
+        </section>
+
+        <section className="cashback-form-section cashback-review-section">
+          <div className="cashback-section-heading"><span>3</span><div><h4>Review claim</h4><p>These details come from your Druvio account and project.</p></div></div>
+          <div className="cashback-review-row"><UserRound size={18} /><span>Purchaser</span><strong>{cashbackBuyerName}</strong></div>
+          <div className="cashback-review-row"><Phone size={18} /><span>Phone</span><strong>{cashbackBuyerPhone}</strong></div>
+          <div className="cashback-review-row"><IndianRupee size={18} /><span>Cashback</span><strong>{cashbackProject ? formatCashbackLabel(cashbackProject) : 'Select a project'}</strong></div>
+        </section>
+
+        {cashbackError && <div className="cashback-error-alert" role="alert">{cashbackError}</div>}
         {cashbackSuccess ? (
-          <div className="cashback-success-alert">✓ Cashback Claim Submitted Successfully! Redirecting...</div>
+          <div className="cashback-success-alert">Claim submitted successfully. Druvio will verify your purchase proof.</div>
         ) : (
-          <button type="submit" className="btn-primary claim-submit-btn">Claim 1% Cashback</button>
+          <button type="submit" className="btn-primary claim-submit-btn" disabled={cashbackSubmitting || cashbackProjects.length === 0}>
+            {cashbackSubmitting ? <><Loader2 size={18} className="spin" /> Uploading proof…</> : 'Submit cashback claim'}
+          </button>
         )}
       </form>
     </div>
   );
 
   const renderProjectPanel = () => {
-    if (!selectedProject) return null;
+    if (!selectedProject) {
+      return (
+        <div className="buyer-side-panel-content project-panel-empty-state">
+          <FileText size={24} aria-hidden="true" />
+          <h4>No project selected</h4>
+          <p>Select a project on the map or from the results to review its details and documents.</p>
+        </div>
+      );
+    }
 
     return (
       <div className="buyer-side-panel-content project-panel-content">
@@ -940,7 +1153,30 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
             </div>
 
             <div className="details-info-section">
-              <h2>{selectedProject.name}</h2>
+              <div className="details-title-row">
+                <h2>{selectedProject.name}</h2>
+                <div className="details-header-actions" aria-label="Project actions">
+                  {selectedWhatsAppUrl && (
+                    <a href={selectedWhatsAppUrl} target="_blank" rel="noreferrer" className="details-icon-action details-icon-whatsapp" aria-label="Contact seller on WhatsApp" title="Contact seller on WhatsApp">
+                      <MessageCircle size={18} aria-hidden="true" />
+                    </a>
+                  )}
+                  {selectedNavigateUrl && (
+                    <button type="button" className="details-icon-action" onClick={() => window.open(selectedNavigateUrl, '_blank')} aria-label="Navigate to project" title="Navigate to project">
+                      <Navigation size={18} aria-hidden="true" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="details-icon-action"
+                    onClick={() => navigator.clipboard?.writeText(window.location.href).then(() => alert('Link copied!'))}
+                    aria-label="Share listing"
+                    title="Share listing"
+                  >
+                    <Share2 size={18} aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
               {selectedLocation && (
                 <p className="details-location">
                   <MapPin size={12} color="var(--brand-primary)" />
@@ -964,7 +1200,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
               <div className="details-key-grid">
                 {hasValue(selectedProject.developer) && (
                   <div className="spec-card">
-                    <span>Developer</span>
+                    <span>Projected by</span>
                     <strong>{selectedProject.developer}</strong>
                   </div>
                 )}
@@ -1015,6 +1251,38 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
                 </div>
               )}
 
+              <section className="project-documents-section" aria-labelledby="project-documents-title">
+                  <div className="project-documents-heading">
+                    <div>
+                      <span className="project-manager-kicker">Due diligence</span>
+                      <h4 id="project-documents-title">Project Documents</h4>
+                    </div>
+                    <span>{getVerifiedDocumentCount(selectedProject)} verified</span>
+                  </div>
+                  {documentsLoading ? (
+                    <p className="project-documents-empty">Loading documents…</p>
+                  ) : selectedDocuments.length === 0 ? (
+                    <p className="project-documents-empty">No verified documents are available yet. Documents will appear here once they are submitted and reviewed.</p>
+                  ) : (
+                    <div className="project-document-list">
+                    {selectedDocuments.map((document, index) => {
+                      const updatedDate = formatDocumentDate(document.updatedAt);
+                      const verified = document.status === 'verified';
+                      return (
+                        <article key={`${document.type}-${index}`} className="project-document-row">
+                          <span className={`project-document-icon ${verified ? 'verified' : ''}`}><FileText size={18} /></span>
+                          <div>
+                            <strong>{getProjectDocumentLabel(document.type)}</strong>
+                            <span>{verified ? 'Verified by Druvio' : 'Pending verification'}{updatedDate ? ` • Updated ${updatedDate}` : ''}</span>
+                          </div>
+                          <a href={document.url} target="_blank" rel="noreferrer" className="project-document-link">View document</a>
+                        </article>
+                      );
+                    })}
+                    </div>
+                  )}
+                </section>
+
               <div className="available-layouts-section">
                 <h4>Layouts</h4>
                 {loadingLayouts ? (
@@ -1057,27 +1325,8 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
 
               <div className="details-cta-sticky">
                 <div className="cta-buttons-row">
-                  {selectedWhatsAppUrl && (
-                    <a href={selectedWhatsAppUrl} target="_blank" rel="noreferrer" className="btn-whatsapp">
-                      WhatsApp Seller
-                    </a>
-                  )}
                   <button onClick={() => setShowBookingModal(true)} className="btn-primary site-visit-btn">
                     Book Site Visit
-                  </button>
-                </div>
-
-                <div className="cta-secondary-row">
-                  {selectedNavigateUrl && (
-                    <button className="btn-secondary icon-btn-text" onClick={() => window.open(selectedNavigateUrl, '_blank')}>
-                      Navigate Map
-                    </button>
-                  )}
-                  <button
-                    className="btn-secondary icon-btn-text"
-                    onClick={() => navigator.clipboard?.writeText(window.location.href).then(() => alert('Link copied!'))}
-                  >
-                    Share Listing
                   </button>
                 </div>
 
@@ -1103,7 +1352,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
     <div className="buyer-map-first-root">
       <div className="buyer-map-canvas">
         <MapScreen
-          projects={projects}
+          projects={approvedProjects}
           isAdmin={isAdmin}
           selectedProject={selectedProject}
           onSelectProject={handleProjectSelect}
@@ -1113,6 +1362,42 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
           filters={mapFilters}
         />
       </div>
+
+      <header className="buyer-workspace-header">
+        <div className="buyer-workspace-title">
+          <strong>Home</strong>
+          <span>Discover verified plot projects</span>
+        </div>
+        <label className="buyer-workspace-search">
+          <Search size={18} aria-hidden="true" />
+          <input
+            type="search"
+            placeholder="Search land, village, project company..."
+            value={homeSearchQuery}
+            onChange={(event) => {
+              setHomeSearchQuery(event.target.value);
+              if (panelMode !== 'home') setPanelMode('home');
+            }}
+            aria-label="Search plot projects"
+          />
+          {homeSearchQuery && (
+            <button type="button" className="buyer-search-clear" onClick={() => setHomeSearchQuery('')} aria-label="Clear search">
+              <X size={16} />
+            </button>
+          )}
+        </label>
+        <ProfileDropdown
+          user={user}
+          onThemeToggle={onThemeToggle}
+          isDarkMode={isDarkMode}
+          permissions={permissions}
+          currentView={currentView}
+          onViewChange={onViewChange}
+          onBackToAdmin={onBackToAdmin}
+          selectedSeller={selectedSeller}
+          hideChevron
+        />
+      </header>
 
       <aside className="buyer-map-nav" aria-label="Buyer navigation">
         {SIDEBAR_ITEMS.map((item) => {
@@ -1138,12 +1423,14 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
         <div className="buyer-slide-panel-shell">
           <div className="buyer-slide-panel-head">
             <div>
-              <span className="buyer-panel-kicker">{panelMode === 'project' ? 'Selected project' : 'Map workspace'}</span>
+              <span className="buyer-panel-kicker">{panelKicker}</span>
               <h3>{panelTitle}</h3>
             </div>
-            <button type="button" className="buyer-panel-close" onClick={closePanel} aria-label="Close panel">
-              <X size={18} />
-            </button>
+            <div className="buyer-panel-head-actions">
+              <button type="button" className="buyer-panel-close" onClick={closePanel} aria-label="Close panel">
+                <X size={18} />
+              </button>
+            </div>
           </div>
 
           {panelMode === 'home' && renderHomePanel()}
@@ -1222,6 +1509,7 @@ function BuyerApp({ projects, leads, visits, cashbacks, addLead, updateLead, add
           </div>
         </div>
       )}
+
     </div>
   );
 }

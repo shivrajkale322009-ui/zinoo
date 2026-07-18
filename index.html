@@ -11,6 +11,14 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Druvio" />
+    <script>
+      (() => {
+        const preference = localStorage.getItem('theme') || 'system';
+        const isDark = preference === 'dark' || (preference === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark-mode', isDark);
+        document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+      })();
+    </script>
     <link rel="apple-touch-icon" href="/icon-192.png" />
     
     <link rel="manifest" href="/manifest.json" />

@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Plus, Pencil, Undo2, Redo2, Check, X, ShieldAlert,
   MapPin, Eye, Compass, Navigation, Share2, Trash2,
-  Search, Filter, Layers, CheckSquare, Square, RefreshCw, ZoomIn
+  Layers, CheckSquare, Square, RefreshCw, ZoomIn, ZoomOut, RotateCw, Maximize2
 } from 'lucide-react';
 import { loadGoogleMaps } from './googleMaps';
 import {
@@ -17,8 +17,6 @@ import './mapScreen.css';
 
 const DEFAULT_CENTER = { lat: 18.7889, lng: 73.8568 };
 const DEFAULT_ZOOM = 12;
-const safeLower = (value) => String(value || '').toLowerCase();
-
 const pointFor = (project) => ({
   lat: Number(project.latitude ?? project.coords?.[0]),
   lng: Number(project.longitude ?? project.coords?.[1])
@@ -44,7 +42,8 @@ export default function MapScreen({
   onSelectProject = null,
   activeLayout = null,
   onActiveLayoutChange = null,
-  onVisibleProjectsChange = null
+  onVisibleProjectsChange = null,
+  filters = { budgetMax: 3000000, distanceMax: 10, naPlot: false, bankLoan: false, minScore: 0 }
 }) {
   const mapElement = useRef(null);
   const mapRef = useRef(null);
@@ -60,19 +59,7 @@ export default function MapScreen({
   const [mapError, setMapError] = useState('');
   const [mapReady, setMapReady] = useState(false);
   const [adminMode, setAdminMode] = useState(false);
-
-  // Search & Filter state inside Map module
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({
-    budgetMax: 3000000,
-    distanceMax: 10,
-    facing: 'Any',
-    minScore: 0,
-    naPlot: false,
-    bankLoan: false
-  });
+  const [mapHeading, setMapHeading] = useState(0);
 
   // Layer toggles
   const [showLayers, setShowLayers] = useState(false);
@@ -110,7 +97,6 @@ export default function MapScreen({
     description: '',
     thumbnail: '',
     amenities: '',
-    cashbackPercentage: '',
     cashbackAmount: '',
     whatsappNumber: '',
     siteVisitContact: '',
@@ -137,19 +123,11 @@ export default function MapScreen({
     try {
       const visible = await loadProjectsInBounds(sw, ne);
 
-      // Apply search and filters on visible projects
+      // Apply Home-panel filters to visible projects.
       const finalVisible = visible.filter(p => {
         const isApproved = p.status === 'approved' || p.status === 'Active';
         if (!isApproved) return false;
 
-        // Search match
-        const q = searchQuery.toLowerCase();
-        const matchesSearch = !searchQuery ||
-          safeLower(p.name).includes(q) ||
-          safeLower(p.village).includes(q) ||
-          safeLower(p.developer).includes(q);
-
-        // Filters match
         const startingPrice = Number(p.priceFrom || p.startingPrice || 0);
         const matchesBudget = startingPrice <= filters.budgetMax;
         const matchesDistance = Number(p.distance || 0) <= filters.distanceMax;
@@ -157,7 +135,7 @@ export default function MapScreen({
         const matchesNaPlot = !filters.naPlot || p.naPlot;
         const matchesScore = Number(p.DruvioScore || p.plotItScore || 0) >= filters.minScore;
 
-        return matchesSearch && matchesBudget && matchesDistance && matchesBankLoan && matchesNaPlot && matchesScore;
+        return matchesBudget && matchesDistance && matchesBankLoan && matchesNaPlot && matchesScore;
       });
 
       if (onVisibleProjectsChange) {
@@ -166,7 +144,7 @@ export default function MapScreen({
     } catch (err) {
       console.error('[Druvio] Visible bounds load error:', err);
     }
-  }, [searchQuery, filters, onVisibleProjectsChange]);
+  }, [filters, onVisibleProjectsChange]);
 
   // Handle map type and styles (Roads toggling)
   useEffect(() => {
@@ -391,13 +369,14 @@ export default function MapScreen({
           mapTypeControl: false,
           streetViewControl: false,
           fullscreenControl: false,
-          rotateControl: true,
+          rotateControl: false,
           zoomControl: false,
           tilt: 45,
           gestureHandling: 'greedy'
         });
 
         mapRef.current = map;
+        map.addListener('heading_changed', () => setMapHeading(map.getHeading() || 0));
 
         // Idle listener to fetch visible bounds markers
         idleListener = map.addListener('idle', handleBoundsIdle);
@@ -428,6 +407,19 @@ export default function MapScreen({
       villageBoundaryRef.current?.setMap(null);
     };
   }, [handleBoundsIdle]);
+
+  useEffect(() => {
+    const focusProject = (event) => {
+      const project = event.detail?.project;
+      if (!project) return;
+      const position = pointFor(project);
+      if (!Number.isFinite(position.lat) || !Number.isFinite(position.lng)) return;
+      mapRef.current?.panTo(position);
+      mapRef.current?.setZoom(15);
+    };
+    window.addEventListener('druvio-focus-project', focusProject);
+    return () => window.removeEventListener('druvio-focus-project', focusProject);
+  }, []);
 
   // Update projects markers and cluster
   useEffect(() => {
@@ -616,7 +608,6 @@ export default function MapScreen({
         description: '',
         thumbnail: '',
         amenities: '',
-        cashbackPercentage: '',
         cashbackAmount: '',
         whatsappNumber: '',
         siteVisitContact: '',
@@ -636,34 +627,18 @@ export default function MapScreen({
     }
   };
 
-  // Search logic inside Map module
-  const handleSearchChange = (e) => {
-    const q = e.target.value;
-    setSearchQuery(q);
-    if (!q) {
-      setSearchResults([]);
-      return;
-    }
-
-    const matches = projects.filter(p =>
-      safeLower(p.name).includes(q.toLowerCase()) ||
-      safeLower(p.village).includes(q.toLowerCase())
-    ).slice(0, 5);
-
-    setSearchResults(matches);
-  };
-
-  const handleSelectSearchResult = (proj) => {
-    const position = pointFor(proj);
-    setSearchQuery(proj.name);
-    setSearchResults([]);
-
-    if (onSelectProject) {
-      onSelectProject(proj);
-    }
-
-    mapRef.current?.panTo(position);
-    mapRef.current?.setZoom(15);
+  const zoomMap = (amount) => mapRef.current?.setZoom((mapRef.current.getZoom() || DEFAULT_ZOOM) + amount);
+  const resetHeading = () => mapRef.current?.setHeading(0);
+  const rotateMap = () => mapRef.current?.setHeading(((mapRef.current?.getHeading() || 0) + 45) % 360);
+  const locateUser = () => navigator.geolocation?.getCurrentPosition(
+    ({ coords }) => { mapRef.current?.panTo({ lat: coords.latitude, lng: coords.longitude }); mapRef.current?.setZoom(15); },
+    () => alert('Unable to access your current location. Please allow location permission.')
+  );
+  const toggleFullscreen = () => {
+    const container = mapElement.current?.parentElement;
+    if (!container) return;
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else container.requestFullscreen?.();
   };
 
   return (
@@ -675,102 +650,26 @@ export default function MapScreen({
       {/* FLOATING GLASSMORPHISM CONTROLS */}
       <div className="map-floating-overlay-container">
 
-        {/* BRAND LABEL & SEARCH ROW */}
-        <div className="search-brand-row">
+        <div className="map-top-left-controls">
           <div className="brand-badge">
             <Compass size={18} />
             <strong>Druvio</strong>
             <span>Hybrid</span>
           </div>
-
-          <div className="floating-search-box">
-            <Search size={16} className="search-icon" />
-            <input
-              type="text"
-              placeholder="Search Land, Village, Builder..."
-              value={searchQuery}
-              onChange={handleSearchChange}
-            />
-            {searchQuery && <X size={16} className="clear-search" onClick={() => { setSearchQuery(''); setSearchResults([]); }} />}
-
-            {/* Search results dropdown */}
-            {searchResults.length > 0 && (
-              <div className="search-dropdown-panel">
-                {searchResults.map(proj => (
-                  <button key={proj.id} onClick={() => handleSelectSearchResult(proj)}>
-                    <MapPin size={14} />
-                    <div>
-                      <strong>{proj.name}</strong>
-                      <span>{proj.village}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Filter button */}
-          <button
-            className={`floating-circle-btn ${showFilters ? 'active' : ''}`}
-            onClick={() => setShowFilters(!showFilters)}
-            title="Filters"
-          >
-            <Filter size={16} />
-          </button>
-
-          {/* Layers button */}
-          <button
-            className={`floating-circle-btn ${showLayers ? 'active' : ''}`}
-            onClick={() => setShowLayers(!showLayers)}
-            title="Map Layers"
-          >
-            <Layers size={16} />
-          </button>
         </div>
 
-        {/* FLOATING FILTERS POPDOWN */}
-        {showFilters && (
-          <div className="floating-filters-popdown glass">
-            <div className="filters-header">
-              <h4>Filter Properties</h4>
-              <button onClick={() => setShowFilters(false)} className="close-panel-btn"><X size={14} /></button>
-            </div>
-            <div className="filters-body">
-              <label>Max Budget: <strong>{priceLabel(filters.budgetMax)}</strong>
-                <input
-                  type="range"
-                  min="800000"
-                  max="5000000"
-                  step="100000"
-                  value={filters.budgetMax}
-                  onChange={e => setFilters({ ...filters, budgetMax: Number(e.target.value) })}
-                />
-              </label>
+        <div className="map-top-right-controls">
+          {Math.abs(mapHeading) > 1 && <button className="floating-circle-btn map-compass-control" title="Reset north" onClick={resetHeading}><Compass size={17} style={{ transform: `rotate(${-mapHeading}deg)` }} /></button>}
+          <button className={`floating-circle-btn ${showLayers ? 'active' : ''}`} onClick={() => setShowLayers(!showLayers)} title="Map Layers"><Layers size={16} /></button>
+          <button className="floating-circle-btn" onClick={locateUser} title="Current Location"><Navigation size={16} /></button>
+        </div>
 
-              <label>Max Distance: <strong>{filters.distanceMax} km</strong>
-                <input
-                  type="range"
-                  min="1"
-                  max="20"
-                  step="1"
-                  value={filters.distanceMax}
-                  onChange={e => setFilters({ ...filters, distanceMax: Number(e.target.value) })}
-                />
-              </label>
-
-              <div className="checkboxes-grid">
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={filters.naPlot} onChange={e => setFilters({ ...filters, naPlot: e.target.checked })} />
-                  <span>NA Certified</span>
-                </label>
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={filters.bankLoan} onChange={e => setFilters({ ...filters, bankLoan: e.target.checked })} />
-                  <span>Bank Approved</span>
-                </label>
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="map-bottom-right-controls">
+          <button className="floating-circle-btn" onClick={() => zoomMap(1)} title="Zoom in"><ZoomIn size={16} /></button>
+          <button className="floating-circle-btn" onClick={() => zoomMap(-1)} title="Zoom out"><ZoomOut size={16} /></button>
+          <button className="floating-circle-btn" onClick={rotateMap} title="Rotate map"><RotateCw size={16} /></button>
+          <button className="floating-circle-btn" onClick={toggleFullscreen} title="Fullscreen"><Maximize2 size={16} /></button>
+        </div>
 
         {/* FLOATING LAYERS POPDOWN */}
         {showLayers && (
@@ -911,14 +810,13 @@ export default function MapScreen({
             <div className="form-fields-grid">
               {[
                 ['name', 'Project name'],
-                ['developer', 'Developer name'],
+                ['developer', 'Projected by'],
                 ['priceFrom', 'Price from (₹)'],
                 ['remainingPlots', 'Remaining plots'],
                 ['village', 'Village'],
                 ['taluka', 'Taluka'],
                 ['area', 'Area / landmark'],
                 ['thumbnail', 'Thumbnail URL'],
-                ['cashbackPercentage', 'Cashback percentage'],
                 ['cashbackAmount', 'Cashback amount (₹)'],
                 ['whatsappNumber', 'WhatsApp number'],
                 ['siteVisitContact', 'Site visit contact'],
@@ -930,7 +828,8 @@ export default function MapScreen({
                   {label}{key === 'name' || key === 'developer' ? ' (Required)' : ''}
                   <input
                     required={key === 'name' || key === 'developer'}
-                    type={['priceFrom', 'remainingPlots', 'cashbackPercentage', 'cashbackAmount'].includes(key) ? 'number' : (key.includes('Link') || key === 'website' || key === 'thumbnail' ? 'url' : 'text')}
+                    type={['priceFrom', 'remainingPlots', 'cashbackAmount'].includes(key) ? 'number' : (key.includes('Link') || key === 'website' || key === 'thumbnail' ? 'url' : 'text')}
+                    min={key === 'cashbackAmount' ? '0' : undefined}
                     value={form[key]}
                     onChange={(event) => setForm({ ...form, [key]: event.target.value })}
                   />

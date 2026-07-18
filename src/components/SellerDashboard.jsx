@@ -1,8 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  ArrowRight,
   ArrowLeft,
-  BarChart3,
   Building,
   Calendar,
   Check,
@@ -22,9 +20,10 @@ import {
   User,
   Users
 } from 'lucide-react';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebaseConfig';
 import EditProfileModal from './EditProfileModal';
+import { PROJECT_DOCUMENT_OPTIONS, getProjectDocumentLabel } from '../utils/projectDocuments';
 
 const createProjectDraft = (developer) => ({
   name: '',
@@ -51,7 +50,6 @@ const createProjectDraft = (developer) => ({
   nearbyHighway: '',
   description: '',
   thumbnail: '',
-  cashbackPercentage: '',
   cashbackAmount: '',
   whatsappNumber: '',
   siteVisitContact: '',
@@ -59,7 +57,8 @@ const createProjectDraft = (developer) => ({
   website: '',
   reraNumber: '',
   heroImage: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80',
-  layoutPlanUrl: 'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=800&q=80'
+  layoutPlanUrl: 'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=800&q=80',
+  documents: []
 });
 
 const toNumber = (value, fallback = 0) => {
@@ -76,8 +75,7 @@ const normalizeAmenities = (value) => {
 };
 
 const formatCashback = (project) => {
-  if (project.cashbackPercentage) return `${project.cashbackPercentage}% Cashback`;
-  if (project.cashbackAmount) return `₹${new Intl.NumberFormat('en-IN').format(project.cashbackAmount)} Cashback`;
+  if (toNumber(project.cashbackAmount) > 0) return `₹${new Intl.NumberFormat('en-IN').format(project.cashbackAmount)} Cashback`;
   return '';
 };
 
@@ -96,7 +94,7 @@ const getProjectBadgeClass = (status) => {
 
 const formatProjectStatus = (status) => {
   if (status === 'approved') return 'Approved';
-  if (status === 'pending_review') return 'Pending Review';
+  if (status === 'pending' || status === 'pending_review') return 'Pending Review';
   if (status === 'rejected') return 'Rejected';
   return status || 'Active';
 };
@@ -119,6 +117,7 @@ function SellerDashboard({
 
   const developerName = projects[0]?.developer || 'Shivraj Land Developers';
   const [newProject, setNewProject] = useState(() => createProjectDraft(developerName));
+  const [documentDraft, setDocumentDraft] = useState({ type: PROJECT_DOCUMENT_OPTIONS[0].value, url: '' });
 
   const myProjects = useMemo(() => projects, [projects]);
   const myLeads = useMemo(() => leads, [leads]);
@@ -134,7 +133,7 @@ function SellerDashboard({
   );
   const totalLeads = myLeads.length;
   const pendingVisits = myVisits.filter((visit) => visit.status === 'Scheduled').length;
-  const pendingReviewCount = myProjects.filter((project) => project.status === 'pending_review').length;
+  const pendingReviewCount = myProjects.filter((project) => project.status === 'pending' || project.status === 'pending_review').length;
   const conversionRate = totalLeads ? Math.round((myLeads.filter((lead) => lead.stage === 'Purchased').length / totalLeads) * 100) : 0;
   const fillRate = totalInventory ? Math.round((totalPlotsForSale / totalInventory) * 100) : 0;
 
@@ -155,26 +154,25 @@ function SellerDashboard({
       pricePerSqFt: toNumber(editingProject.pricePerSqFt),
       remainingPlots: toNumber(editingProject.remainingPlots),
       totalPlots: toNumber(editingProject.totalPlots),
-      status: isAdminView ? editingProject.status : 'pending_review'
+      cashbackAmount: Math.max(0, toNumber(editingProject.cashbackAmount)),
+      status: isAdminView ? editingProject.status : 'pending'
     });
     setEditingProject(null);
     showToast();
   };
 
   const handleApproveProject = async (projectId) => {
-    await updateDoc(doc(db, 'projects', projectId), {
-      status: 'approved',
-      reviewedAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
+    await httpsCallable(functions, 'reviewProject')({
+      projectId,
+      decision: 'approved'
     });
     showToast();
   };
 
   const handleRejectProject = async (projectId) => {
-    await updateDoc(doc(db, 'projects', projectId), {
-      status: 'rejected',
-      reviewedAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
+    await httpsCallable(functions, 'reviewProject')({
+      projectId,
+      decision: 'rejected'
     });
     showToast();
   };
@@ -208,23 +206,24 @@ function SellerDashboard({
         highway: newProject.nearbyHighway || 'Pune-Nashik Highway (2.0 km)'
       },
       updated: 'Just now',
-      status: isAdminView ? 'approved' : 'pending_review',
+      status: isAdminView ? 'approved' : 'pending',
       thumbnail: newProject.thumbnail || newProject.heroImage,
       heroImage: newProject.heroImage,
       description: newProject.description || 'Freshly listed residential plotting development near Chakan.',
-      cashbackPercentage: toNumber(newProject.cashbackPercentage),
-      cashbackAmount: toNumber(newProject.cashbackAmount),
+      cashbackAmount: Math.max(0, toNumber(newProject.cashbackAmount)),
       whatsappNumber: newProject.whatsappNumber,
       siteVisitContact: newProject.siteVisitContact,
       googleMapsLink: newProject.googleMapsLink,
       website: newProject.website,
       reraNumber: newProject.reraNumber,
       layoutPlanUrl: newProject.layoutPlanUrl,
+      documents: newProject.documents,
       DruvioScore: 4.6
     };
 
     addProject(createdProject);
     setNewProject(createProjectDraft(developerName));
+    setDocumentDraft({ type: PROJECT_DOCUMENT_OPTIONS[0].value, url: '' });
     setActiveTab('listings');
     showToast();
   };
@@ -297,26 +296,9 @@ function SellerDashboard({
   return (
     <div className="seller-dashboard seller-workspace">
       <aside className="seller-desktop-sidebar" aria-label="Seller workspace navigation">
-        <div className="seller-sidebar-brand">
-          <div className="seller-brand-mark"><Building size={19} /></div>
-          <div>
-            <span>Druvio</span>
-            <strong>Seller studio</strong>
-          </div>
-        </div>
-
-        <div className="seller-sidebar-account">
-          <span className="seller-sidebar-avatar">{developerName.charAt(0)}</span>
-          <div>
-            <strong>{developerName}</strong>
-            <span>Property partner</span>
-          </div>
-        </div>
-
         <nav className="seller-sidebar-nav">
-          <span className="seller-sidebar-label">Workspace</span>
           <button type="button" className={`seller-sidebar-link ${activeTab === 'listings' ? 'active' : ''}`} onClick={() => selectTab('listings')}>
-            <LayoutDashboard size={17} /> Overview
+            <LayoutDashboard size={17} /> Dashboard
           </button>
           <button type="button" className={`seller-sidebar-link ${activeTab === 'add' ? 'active' : ''}`} onClick={() => selectTab('add')}>
             <ListPlus size={17} /> Create listing
@@ -333,11 +315,6 @@ function SellerDashboard({
           )}
         </nav>
 
-        <div className="seller-sidebar-tip">
-          <BarChart3 size={18} />
-          <strong>Keep listings fresh</strong>
-          <p>Updated inventory helps buyers make faster decisions.</p>
-        </div>
       </aside>
 
       <main className="seller-workspace-main">
@@ -350,6 +327,18 @@ function SellerDashboard({
             <Plus size={16} /> New listing
           </button>
         </header>
+        <div className="metric-grid seller-metric-grid">
+          {metrics.map((metric) => (
+            <div key={metric.label} className="metric-card">
+              <div className="metric-title">{metric.label}</div>
+              <div className="metric-value seller-metric-value">
+                {metric.icon}
+                {metric.value}
+              </div>
+              <span className="seller-metric-helper">{metric.helper}</span>
+            </div>
+          ))}
+        </div>
       {isAdminView && selectedSeller && (
         <section className="seller-panel seller-content-panel" style={{ marginBottom: '16px' }}>
           <div className="seller-panel-heading">
@@ -390,68 +379,6 @@ function SellerDashboard({
           </div>
         </section>
       )}
-
-      <section className="seller-hero">
-        <div className="seller-hero-copy">
-          <span className="seller-eyebrow">{isAdminView ? 'Seller workspace - admin mode' : 'Seller workspace'}</span>
-          <h2>{isAdminView ? 'Manage seller projects from the existing dashboard.' : 'Manage projects, leads, and visits from one cleaner dashboard.'}</h2>
-          <p>
-            {isAdminView
-              ? 'Review seller activity, approve listings, and update seller information using the existing seller flow.'
-              : 'Keep inventory updated, monitor buyer interest, and make your listings feel active even before the first lead arrives.'}
-          </p>
-          <div className="seller-hero-actions">
-            <button type="button" className="btn-primary" onClick={() => { setActiveTab('add'); setEditingProject(null); }}>
-              <Plus size={16} /> Add project
-            </button>
-            {isAdminView ? (
-              <button type="button" className="btn-secondary" onClick={() => { setActiveTab('listings'); setEditingProject(null); }}>
-                Review listings <ArrowRight size={16} />
-              </button>
-            ) : (
-              <button type="button" className="btn-secondary" onClick={() => { setActiveTab('leads'); setEditingProject(null); }}>
-                Review leads <ArrowRight size={16} />
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="seller-hero-panel">
-          <div className="seller-hero-stat">
-            <span>Live listings</span>
-            <strong>{myProjects.length}</strong>
-          </div>
-          <div className="seller-hero-stat">
-            <span>{isAdminView ? 'Approved' : 'Buyer pipeline'}</span>
-            <strong>{isAdminView ? myProjects.filter((project) => project.status === 'approved' || project.status === 'Active').length : totalLeads}</strong>
-          </div>
-          <div className="seller-hero-stat">
-            <span>{isAdminView ? 'Pending review' : 'Visit requests'}</span>
-            <strong>{isAdminView ? pendingReviewCount : pendingVisits}</strong>
-          </div>
-          <p className="seller-hero-note">
-            {isAdminView
-              ? (myProjects.length === 0
-                ? 'This seller does not have any listings yet.'
-                : 'Approve, reject, or update listings without leaving the existing seller workspace.')
-              : (myProjects.length === 0
-                ? 'Start with one polished listing to unlock the rest of the seller flow.'
-                : 'Keep project details fresh so buyers trust the listing and book visits faster.')}
-          </p>
-        </div>
-      </section>
-
-      <div className="metric-grid seller-metric-grid">
-        {metrics.map((metric) => (
-          <div key={metric.label} className="metric-card">
-            <div className="metric-title">{metric.label}</div>
-            <div className="metric-value seller-metric-value">
-              {metric.icon}
-              {metric.value}
-            </div>
-            <span className="seller-metric-helper">{metric.helper}</span>
-          </div>
-        ))}
-      </div>
 
       {saveSuccess && (
         <div className="seller-toast">
@@ -497,6 +424,20 @@ function SellerDashboard({
                 value={editingProject.remainingPlots}
                 onChange={(e) => setEditingProject({ ...editingProject, remainingPlots: e.target.value })}
               />
+            </label>
+            <label className="seller-field">
+              <span>Cashback amount</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                className="form-input"
+                placeholder="₹ 25,000"
+                value={editingProject.cashbackAmount ?? ''}
+                onChange={(e) => setEditingProject({ ...editingProject, cashbackAmount: e.target.value })}
+              />
+              <small>Enter the fixed cashback amount offered for this project.</small>
             </label>
             <label className="seller-field">
               <span>Availability status</span>
@@ -574,6 +515,7 @@ function SellerDashboard({
                   </div>
 
                   <div className="seller-project-tags">
+                    {project.developer && <span>Projected by {project.developer}</span>}
                     {project.naPlot && <span>NA Certified</span>}
                     {project.bankLoan && <span>Bank Loan Ready</span>}
                     {formatCashback(project) && <span>{formatCashback(project)}</span>}
@@ -629,7 +571,7 @@ function SellerDashboard({
                 <input type="text" className="form-input" placeholder="Near Mercedes Benz Junction" value={newProject.area} onChange={(e) => setNewProject({ ...newProject, area: e.target.value })} />
               </label>
               <label className="seller-field">
-                <span>Developer identity</span>
+                <span>Projected by</span>
                 <input type="text" className="form-input" disabled value={newProject.developer} />
               </label>
             </div>
@@ -703,12 +645,9 @@ function SellerDashboard({
             <h4>Business details</h4>
             <div className="seller-form-grid">
               <label className="seller-field">
-                <span>Cashback percentage</span>
-                <input type="number" className="form-input" value={newProject.cashbackPercentage} onChange={(e) => setNewProject({ ...newProject, cashbackPercentage: e.target.value })} />
-              </label>
-              <label className="seller-field">
                 <span>Cashback amount</span>
-                <input type="number" className="form-input" value={newProject.cashbackAmount} onChange={(e) => setNewProject({ ...newProject, cashbackAmount: e.target.value })} />
+                <input type="number" min="0" step="1" inputMode="numeric" className="form-input" placeholder="₹ 25,000" value={newProject.cashbackAmount} onChange={(e) => setNewProject({ ...newProject, cashbackAmount: e.target.value })} />
+                <small>Enter the fixed cashback amount offered for this project.</small>
               </label>
               <label className="seller-field">
                 <span>WhatsApp number</span>
@@ -733,6 +672,49 @@ function SellerDashboard({
             </div>
           </div>
 
+          <div className="seller-form-section">
+            <h4>Project documents</h4>
+            <p className="seller-section-copy">Add document links for review. Newly added documents remain pending until Druvio verifies them.</p>
+            <div className="seller-form-grid">
+              <label className="seller-field">
+                <span>Document type</span>
+                <select className="form-input" value={documentDraft.type} onChange={(event) => setDocumentDraft({ ...documentDraft, type: event.target.value })}>
+                  {PROJECT_DOCUMENT_OPTIONS.map((document) => <option key={document.value} value={document.value}>{document.label}</option>)}
+                </select>
+              </label>
+              <label className="seller-field">
+                <span>Document URL</span>
+                <input type="url" className="form-input" placeholder="https://..." value={documentDraft.url} onChange={(event) => setDocumentDraft({ ...documentDraft, url: event.target.value })} />
+              </label>
+            </div>
+            <div className="seller-form-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={!documentDraft.url.trim()}
+                onClick={() => {
+                  setNewProject({
+                    ...newProject,
+                    documents: [...newProject.documents, { type: documentDraft.type, url: documentDraft.url.trim(), status: 'pending' }]
+                  });
+                  setDocumentDraft({ type: PROJECT_DOCUMENT_OPTIONS[0].value, url: '' });
+                }}
+              >
+                Add document
+              </button>
+            </div>
+            {newProject.documents.length > 0 && (
+              <div className="seller-document-list">
+                {newProject.documents.map((document, index) => (
+                  <div key={`${document.type}-${index}`}>
+                    <span>{getProjectDocumentLabel(document.type)}</span>
+                    <button type="button" onClick={() => setNewProject({ ...newProject, documents: newProject.documents.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="seller-toggle-row">
             <label><input type="checkbox" checked={newProject.naPlot} onChange={(e) => setNewProject({ ...newProject, naPlot: e.target.checked })} /> Collector NA certified</label>
             <label><input type="checkbox" checked={newProject.bankLoan} onChange={(e) => setNewProject({ ...newProject, bankLoan: e.target.checked })} /> Bank loan pre-approved</label>
@@ -740,7 +722,7 @@ function SellerDashboard({
           </div>
 
           <div className="seller-form-actions">
-            <button type="submit" className="btn-primary"><Plus size={16} /> Create and publish</button>
+            <button type="submit" className="btn-primary"><Plus size={16} /> Submit for approval</button>
             <button type="button" className="btn-secondary" onClick={() => setNewProject(createProjectDraft(developerName))}>Reset</button>
           </div>
         </form>

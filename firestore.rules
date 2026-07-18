@@ -13,16 +13,24 @@ service cloud.firestore {
         && request.resource.data.permissions.seller == false
         && request.resource.data.permissions.admin == false;
       allow read: if signedIn() && (request.auth.uid == userId || admin());
-      allow update: if admin() || (signedIn() && request.auth.uid == userId
-        && request.resource.data.permissions == resource.data.permissions);
+      allow update: if signedIn()
+        && request.resource.data.permissions == resource.data.permissions
+        && (admin() || request.auth.uid == userId);
       allow delete: if false;
     }
 
     match /sellerRequests/{requestId} {
-      allow create, update: if signedIn() && request.auth.uid == requestId
-        && request.resource.data.userId == request.auth.uid;
+      allow create: if signedIn() && request.auth.uid == requestId
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
       allow read: if signedIn() && (request.auth.uid == requestId || admin());
-      allow update: if admin();
+      allow update: if signedIn()
+        && request.auth.uid == requestId
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && resource.data.status == 'pending'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == resource.data.createdAt;
       allow delete: if false;
     }
 

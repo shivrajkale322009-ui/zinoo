@@ -39,6 +39,21 @@
   pointer-events: none; /* Let clicks pass to map where needed */
 }
 
+.map-top-left-controls,
+.map-top-right-controls,
+.map-bottom-right-controls {
+  position: absolute;
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.map-top-left-controls { top: 0; left: 0; }
+.map-top-right-controls { top: 52px; right: 0; flex-direction: column; }
+.map-bottom-right-controls { right: 0; bottom: 0; flex-direction: column; }
+
+.map-compass-control { transition: opacity 180ms ease, transform 180ms ease; }
+
 .map-floating-overlay-container * {
   pointer-events: auto; /* Enable inputs */
 }
@@ -58,7 +73,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 7px 11px;
   border-radius: 99px;
   background: rgba(15, 23, 42, 0.85);
   backdrop-filter: blur(12px);
@@ -668,6 +683,9 @@
     left: 8px;
     right: 8px;
   }
+
+  .map-top-right-controls { top: 52px; }
+  .map-bottom-right-controls { right: 0; bottom: 68px; }
 
   .brand-badge {
     padding: 8px 10px;

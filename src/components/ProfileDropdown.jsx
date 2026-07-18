@@ -14,7 +14,8 @@ function ProfileDropdown({
   currentView,
   onViewChange,
   onBackToAdmin,
-  selectedSeller
+  selectedSeller,
+  hideChevron = false
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -22,7 +23,7 @@ function ProfileDropdown({
   const [sellerRequestStatus, setSellerRequestStatus] = useState(null);
   const dropdownRef = useRef(null);
 
-  const profileName = user.displayName || user.phoneNumber || user.email || 'User';
+  const profileName = user?.displayName || user?.phoneNumber || user?.email || 'User';
   const profileInitial = profileName.trim().charAt(0).toUpperCase() || 'U';
 
   useEffect(() => {
@@ -71,34 +72,40 @@ function ProfileDropdown({
     setIsOpen(false);
   };
 
-  const canSwitchToSeller = permissions?.seller;
   const hasPendingSellerRequest = sellerRequestStatus === 'pending';
   const canBecomeSeller = permissions?.buyer && !permissions?.seller && !hasPendingSellerRequest;
   const adminReviewingSeller = permissions?.admin && currentView === 'seller' && selectedSeller;
-  const showAdminSwitcher = permissions?.admin;
+  const moduleOptions = [
+    { view: 'admin', label: 'Admin Module', icon: User, available: permissions?.admin },
+    { view: 'seller', label: 'Seller Mode', icon: Store, available: permissions?.seller },
+    { view: 'buyer', label: 'Buyer Mode', icon: Home, available: permissions?.buyer }
+  ].filter((option) => option.available);
 
   return (
     <div className="profile-dropdown" ref={dropdownRef}>
       <button
+        type="button"
         className="profile-trigger"
         onClick={() => setIsOpen(!isOpen)}
-        aria-label="Profile menu"
+        aria-label="Open account menu"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
       >
         <div className="profile-avatar">
-          {user.photoURL ? (
+          {user?.photoURL ? (
             <img src={user.photoURL} alt={`${profileName} avatar`} />
           ) : (
             <span>{profileInitial}</span>
           )}
         </div>
-        <ChevronDown size={16} className={`chevron ${isOpen ? 'open' : ''}`} />
+        {!hideChevron && <ChevronDown size={16} className={`chevron ${isOpen ? 'open' : ''}`} />}
       </button>
 
       {isOpen && (
-        <div className="dropdown-menu">
+        <div className="dropdown-menu" role="menu" aria-label="Account menu">
           <div className="dropdown-header">
             <div className="dropdown-avatar">
-              {user.photoURL ? (
+              {user?.photoURL ? (
                 <img src={user.photoURL} alt={`${profileName} avatar`} />
               ) : (
                 <span>{profileInitial}</span>
@@ -112,81 +119,52 @@ function ProfileDropdown({
 
           <div className="dropdown-divider"></div>
 
-          {/* View Switching */}
-          {(permissions?.buyer || permissions?.seller || permissions?.admin) && (
+          {moduleOptions.length > 0 && (
             <>
               {adminReviewingSeller && onBackToAdmin && (
                 <button
+                  type="button"
                   className="dropdown-item"
                   onClick={() => {
                     onBackToAdmin();
                     setIsOpen(false);
                   }}
-                  style={{ background: 'rgba(37, 99, 235, 0.1)', color: 'var(--brand-primary)' }}
+                  role="menuitem"
                 >
                   <Store size={18} />
                   <span>Back to Admin Panel</span>
                 </button>
               )}
 
-              {showAdminSwitcher && currentView !== 'admin' && (
-                <button
-                  className="dropdown-item"
-                  onClick={() => handleSwitchView('admin')}
-                >
-                  <User size={18} />
-                  <span>Open Admin Panel</span>
-                </button>
-              )}
-
-              {showAdminSwitcher && currentView !== 'buyer' && (
-                <button
-                  className="dropdown-item"
-                  onClick={() => handleSwitchView('buyer')}
-                >
-                  <Home size={18} />
-                  <span>Open Buyer Module</span>
-                </button>
-              )}
-
-              {showAdminSwitcher && !adminReviewingSeller && (
-                <button
-                  className="dropdown-item"
-                  onClick={() => handleSwitchView('seller')}
-                >
-                  <Store size={18} />
-                  <span>Open Seller Module</span>
-                </button>
-              )}
-
-              {!permissions?.admin && permissions?.buyer && currentView !== 'buyer' && (
-                <button
-                  className="dropdown-item"
-                  onClick={() => handleSwitchView('buyer')}
-                >
-                  <Home size={18} />
-                  <span>Switch to Buyer View</span>
-                </button>
-              )}
-              {!permissions?.admin && permissions?.seller && currentView !== 'seller' && (
-                <button
-                  className="dropdown-item"
-                  onClick={() => handleSwitchView('seller')}
-                >
-                  <Store size={18} />
-                  <span>Switch to Seller Dashboard</span>
-                </button>
-              )}
-              {(permissions?.buyer || permissions?.seller || permissions?.admin) && <div className="dropdown-divider"></div>}
+              {moduleOptions.map(({ view, label, icon: Icon }) => {
+                const isCurrentModule = currentView === view;
+                return (
+                  <button
+                    key={view}
+                    type="button"
+                    className={`dropdown-item${isCurrentModule ? ' selected active-module' : ''}`}
+                    onClick={() => !isCurrentModule && handleSwitchView(view)}
+                    disabled={isCurrentModule}
+                    role="menuitem"
+                  >
+                    <Icon size={18} />
+                    <span>{label}</span>
+                    {isCurrentModule && <span className="dropdown-item-status">Current</span>}
+                  </button>
+                );
+              })}
+              <div className="dropdown-divider"></div>
             </>
           )}
 
           <button
+            type="button"
             className="dropdown-item"
             onClick={() => {
               setShowEditModal(true);
               setIsOpen(false);
             }}
+            role="menuitem"
           >
             <User size={18} />
             <span>{adminReviewingSeller ? 'Edit Seller Profile' : 'Edit Profile'}</span>
@@ -194,11 +172,13 @@ function ProfileDropdown({
 
           {canBecomeSeller && (
             <button
+              type="button"
               className="dropdown-item"
               onClick={() => {
                 setShowBecomeSellerModal(true);
                 setIsOpen(false);
               }}
+              role="menuitem"
             >
               <Store size={18} />
               <span>Become a Seller</span>
@@ -207,9 +187,10 @@ function ProfileDropdown({
 
           {hasPendingSellerRequest && (
             <button
-              className="dropdown-item"
+              type="button"
+              className="dropdown-item disabled"
               disabled
-              style={{ opacity: 0.6, cursor: 'not-allowed' }}
+              role="menuitem"
             >
               <Store size={18} />
               <span>Seller Verification Pending</span>
@@ -217,19 +198,23 @@ function ProfileDropdown({
           )}
 
           <button
+            type="button"
             className="dropdown-item"
             onClick={() => {
               onThemeToggle();
               setIsOpen(false);
             }}
+            role="menuitem"
           >
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
             <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
           </button>
 
           <button
+            type="button"
             className="dropdown-item"
             onClick={handleCustomerSupport}
+            role="menuitem"
           >
             <MessageCircle size={18} />
             <span>Customer Support</span>
@@ -237,7 +222,7 @@ function ProfileDropdown({
 
           <div className="dropdown-divider"></div>
 
-          <button className="dropdown-item logout" onClick={handleLogout}>
+          <button type="button" className="dropdown-item logout" onClick={handleLogout} role="menuitem">
             <LogOut size={18} />
             <span>Logout</span>
           </button>

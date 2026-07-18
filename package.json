@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "firebase deploy",
+    "deploy:functions": "firebase deploy --only functions",
     "deploy:rules": "firebase deploy --only firestore:rules",
     "deploy:hosting": "firebase deploy --only hosting"
   },

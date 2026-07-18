@@ -17,17 +17,13 @@ import {
 } from 'lucide-react';
 import {
   collection,
-  doc,
-  getDoc,
   onSnapshot,
   query,
-  limit,
-  serverTimestamp,
-  setDoc,
-  updateDoc
+  limit
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import EditProfileModal from './EditProfileModal';
-import { auth, db } from '../firebaseConfig';
+import { auth, db, functions } from '../firebaseConfig';
 import { normalizePermissions } from '../utils/permissions';
 
 const getName = (account) => account?.displayName || account?.name || account?.businessName || account?.userName || account?.email || 'Unknown';
@@ -62,30 +58,44 @@ function AdminPanel({
   }, [initialTab]);
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'sellerRequests'), (snapshot) => {
-      const requests = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
-      setSellerRequests(requests);
-    });
+    const unsubscribe = onSnapshot(
+      collection(db, 'sellerRequests'),
+      (snapshot) => {
+        const requests = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+        setSellerRequests(requests);
+      },
+      (error) => {
+        console.error('Failed to load seller requests:', error);
+        setErrorMessage('Your signed-in account is not authorized to load Admin seller requests.');
+      }
+    );
     return () => unsubscribe();
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const accounts = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+    const unsubscribe = onSnapshot(
+      collection(db, 'users'),
+      (snapshot) => {
+        const accounts = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
 
-      const sellerList = accounts.filter((account) => {
-        const permissions = normalizePermissions(account.permissions);
-        return permissions.seller && !permissions.admin;
-      });
+        const sellerList = accounts.filter((account) => {
+          const permissions = normalizePermissions(account.permissions);
+          return permissions.seller && !permissions.admin;
+        });
 
-      const buyerList = accounts.filter((account) => {
-        const permissions = normalizePermissions(account.permissions);
-        return permissions.buyer && !permissions.seller && !permissions.admin;
-      });
+        const buyerList = accounts.filter((account) => {
+          const permissions = normalizePermissions(account.permissions);
+          return permissions.buyer && !permissions.seller && !permissions.admin;
+        });
 
-      setSellers(sellerList);
-      setBuyers(buyerList);
-    });
+        setSellers(sellerList);
+        setBuyers(buyerList);
+      },
+      (error) => {
+        console.error('Failed to load Admin accounts:', error);
+        setErrorMessage('Your signed-in account is not authorized to load Admin account data.');
+      }
+    );
     return () => unsubscribe();
   }, []);
 
@@ -103,7 +113,7 @@ function AdminPanel({
     [projects]
   );
   const pendingProjects = useMemo(
-    () => projects.filter((project) => project.status === 'pending_review'),
+    () => projects.filter((project) => project.status === 'pending' || project.status === 'pending_review'),
     [projects]
   );
   const pendingSellerRequests = useMemo(
@@ -136,46 +146,15 @@ function AdminPanel({
     resetFeedback();
 
     try {
-      const userRef = doc(db, 'users', request.userId);
-      const userSnap = await getDoc(userRef);
-      const existingData = userSnap.exists() ? userSnap.data() : {};
-      const existingPermissions = normalizePermissions(existingData.permissions);
-
-      const sellerProfile = {
-        uid: request.userId,
-        displayName: existingData.displayName || request.userName || request.contactPerson || request.businessName || '',
-        email: existingData.email || request.userEmail || request.contactEmail || '',
-        phoneNumber: existingData.phoneNumber || request.userPhone || request.contactPhone || '',
-        businessName: request.businessName || existingData.businessName || '',
-        businessType: request.businessType || existingData.businessType || '',
-        businessAddress: request.businessAddress || existingData.businessAddress || '',
-        updatedAt: serverTimestamp(),
-        permissions: {
-          buyer: true,
-          seller: true,
-          admin: Boolean(existingPermissions.admin)
-        }
-      };
-
-      if (userSnap.exists()) {
-        await updateDoc(userRef, sellerProfile);
-      } else {
-        await setDoc(userRef, {
-          createdAt: serverTimestamp(),
-          ...sellerProfile
-        });
-      }
-
-      await updateDoc(doc(db, 'sellerRequests', request.id), {
-        status: 'approved',
-        reviewedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
+      await httpsCallable(functions, 'reviewSellerRequest')({
+        requestId: request.id,
+        decision: 'approved'
       });
 
       setStatusMessage(`${getName(request)} has been approved as a seller.`);
     } catch (error) {
       console.error('Failed to approve seller request:', error);
-      setErrorMessage('Unable to approve the seller request right now.');
+      setErrorMessage(error?.message || 'Unable to approve the seller request right now.');
     } finally {
       setWorkingKey('');
     }
@@ -187,16 +166,15 @@ function AdminPanel({
     resetFeedback();
 
     try {
-      await updateDoc(doc(db, 'sellerRequests', request.id), {
-        status: 'rejected',
-        reviewedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
+      await httpsCallable(functions, 'reviewSellerRequest')({
+        requestId: request.id,
+        decision: 'rejected'
       });
 
       setStatusMessage(`${getName(request)} has been marked as rejected.`);
     } catch (error) {
       console.error('Failed to reject seller request:', error);
-      setErrorMessage('Unable to reject the seller request right now.');
+      setErrorMessage(error?.message || 'Unable to reject the seller request right now.');
     } finally {
       setWorkingKey('');
     }
@@ -208,10 +186,9 @@ function AdminPanel({
     resetFeedback();
 
     try {
-      await updateDoc(doc(db, 'projects', projectId), {
-        status: 'approved',
-        reviewedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
+      await httpsCallable(functions, 'reviewProject')({
+        projectId,
+        decision: 'approved'
       });
       setStatusMessage('Property listing approved successfully.');
     } catch (error) {
@@ -228,10 +205,9 @@ function AdminPanel({
     resetFeedback();
 
     try {
-      await updateDoc(doc(db, 'projects', projectId), {
-        status: 'rejected',
-        reviewedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
+      await httpsCallable(functions, 'reviewProject')({
+        projectId,
+        decision: 'rejected'
       });
       setStatusMessage('Property listing rejected successfully.');
     } catch (error) {
@@ -632,7 +608,7 @@ function AdminPanel({
                 <thead>
                   <tr>
                     <th>Project</th>
-                    <th>Seller</th>
+                    <th>Projected by</th>
                     <th>Village</th>
                     <th>Status</th>
                     <th>Actions</th>

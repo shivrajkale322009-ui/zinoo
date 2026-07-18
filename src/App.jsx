@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useContext, useEffect, useState, useCallback } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   addDoc,
@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { MapPin } from 'lucide-react';
 import BuyerApp from './components/BuyerApp';
+import BuyerErrorBoundary from './components/BuyerErrorBoundary';
 import SellerDashboard from './components/SellerDashboard';
 import AdminPanel from './components/AdminPanel';
 import LoginScreen from './components/LoginScreen';
@@ -26,30 +27,20 @@ import {
   normalizePermissions
 } from './utils/permissions';
 import { withTimeout } from './utils/async';
+import ThemeContext from './components/ThemeProvider';
 
 const collections = ['projects', 'leads', 'visits', 'cashbacks'];
 
 function App() {
+  const { isDarkMode, toggleTheme } = useContext(ThemeContext);
   const [user, setUser] = useState(null);
+  const [profileData, setProfileData] = useState(null);
   const [permissions, setPermissions] = useState(null);
   const [currentView, setCurrentView] = useState('buyer'); // 'buyer', 'seller', 'admin'
   const [selectedSeller, setSelectedSeller] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [data, setData] = useState({ projects: [], leads: [], visits: [], cashbacks: [] });
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    const saved = localStorage.getItem('theme');
-    return saved ? saved === 'dark' : false;
-  });
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark-mode', isDarkMode);
-    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
-  }, [isDarkMode]);
-
-  const toggleTheme = useCallback(() => {
-    setIsDarkMode((prev) => !prev);
-  }, []);
 
   const handleViewChange = useCallback((nextView) => {
     if (!permissions) return;
@@ -69,6 +60,7 @@ function App() {
     const unsubscribeAuth = onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
       if (!nextUser) {
+        setProfileData(null);
         setPermissions(null);
         setCurrentView('buyer');
         setSelectedSeller(null);
@@ -86,6 +78,7 @@ function App() {
           if (!profile.exists()) {
             console.error(`User profile not found for UID: ${nextUser.uid}`);
             setPermissions(DEFAULT_PERMISSIONS);
+            setProfileData(null);
             setCurrentView('buyer');
             setSelectedSeller(null);
             setError('We could not load your profile, so you have been signed in as a buyer.');
@@ -96,6 +89,7 @@ function App() {
           const profileData = profile.data();
           const userPermissions = normalizePermissions(profileData.permissions ?? profileData);
 
+          setProfileData(profileData);
           setPermissions(userPermissions);
           setCurrentView((current) => {
             if (canAccessView(userPermissions, current)) {
@@ -113,6 +107,7 @@ function App() {
           console.error('PROFILE LOAD FAILED', err);
           alert(err?.message);
           setPermissions(DEFAULT_PERMISSIONS);
+          setProfileData(null);
           setCurrentView('buyer');
           setSelectedSeller(null);
           setError('We could not load your profile, so you have been signed in as a buyer.');
@@ -146,7 +141,7 @@ function App() {
       // Buyer mode reuses the existing buyer app with approved listings plus the
       // signed-in account's own activity records.
       if (currentView === 'buyer') {
-        if (name === 'projects') return ref;
+        if (name === 'projects') return query(ref, where('status', '==', 'approved'));
         return query(ref, where('createdBy', '==', user.uid));
       }
 
@@ -170,9 +165,10 @@ function App() {
 
   const createRecord = async (name, record) => {
     try {
-      await addDoc(collection(db, name), { ...record, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-    } catch {
+      return await addDoc(collection(db, name), { ...record, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    } catch (saveError) {
       setError('We could not save that change. Please try again.');
+      throw saveError;
     }
   };
 
@@ -191,7 +187,7 @@ function App() {
   const addProject = (project) => createRecord('projects', {
     ...project,
     ownerId: selectedSeller?.id || user.uid,
-    status: permissions?.admin && currentView === 'seller' && selectedSeller ? 'approved' : 'pending_review',
+    status: permissions?.admin && currentView === 'seller' && selectedSeller ? 'approved' : 'pending',
     createdByAdmin: Boolean(permissions?.admin && currentView === 'seller' && selectedSeller)
   });
   const updateProject = (project) => updateRecord('projects', project.id, project);
@@ -290,7 +286,27 @@ function App() {
             />
           )
       )
-      : <BuyerApp {...data} addLead={addLead} updateLead={updateLead} addVisit={addVisit} addCashback={addCashback} isAdmin={Boolean(permissions?.admin)} />;
+      : (
+        <BuyerErrorBoundary>
+          <BuyerApp
+            {...data}
+            user={user}
+            buyerProfile={profileData}
+            addLead={addLead}
+            updateLead={updateLead}
+            addVisit={addVisit}
+            addCashback={addCashback}
+            isAdmin={Boolean(permissions?.admin)}
+            onThemeToggle={toggleTheme}
+            isDarkMode={isDarkMode}
+            permissions={permissions}
+            currentView={currentView}
+            onViewChange={handleViewChange}
+            onBackToAdmin={handleBackToAdmin}
+            selectedSeller={selectedSeller}
+          />
+        </BuyerErrorBoundary>
+      );
 
   const headerViewLabel = permissions?.admin && currentView === 'seller' && selectedSeller
     ? `${selectedSeller.displayName || selectedSeller.name || selectedSeller.businessName || 'seller'}`
@@ -298,19 +314,21 @@ function App() {
 
   return (
     <main className={`live-app ${currentView === 'buyer' ? 'buyer-experience' : 'backoffice-experience'}`}>
-      <header className="live-app-header">
-        <div className="brand-lockup"><MapPin size={21} /><strong>Druvio</strong><span>{headerViewLabel}</span></div>
-        <ProfileDropdown
-          user={user}
-          onThemeToggle={toggleTheme}
-          isDarkMode={isDarkMode}
-          permissions={permissions}
-          currentView={currentView}
-          onViewChange={handleViewChange}
-          onBackToAdmin={handleBackToAdmin}
-          selectedSeller={selectedSeller}
-        />
-      </header>
+      {currentView !== 'buyer' && (
+        <header className="live-app-header">
+          <div className="brand-lockup"><MapPin size={21} /><strong>Druvio</strong><span>{headerViewLabel}</span></div>
+          <ProfileDropdown
+            user={user}
+            onThemeToggle={toggleTheme}
+            isDarkMode={isDarkMode}
+            permissions={permissions}
+            currentView={currentView}
+            onViewChange={handleViewChange}
+            onBackToAdmin={handleBackToAdmin}
+            selectedSeller={selectedSeller}
+          />
+        </header>
+      )}
       {error && <div className="app-error" role="alert">{error}</div>}
       <section className="live-app-content">{content}</section>
     </main>

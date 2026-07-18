@@ -48,8 +48,7 @@ const buildProjectPayload = (project = {}) => {
     priceFrom: priceValue,
     startingPrice: priceValue,
     remainingPlots: toOptionalNumber(project.remainingPlots),
-    cashbackPercentage: toOptionalNumber(project.cashbackPercentage),
-    cashbackAmount: toOptionalNumber(project.cashbackAmount),
+    cashbackAmount: Math.max(0, toOptionalNumber(project.cashbackAmount) || 0),
     amenities: normalizeAmenities(project.amenities),
     status: project.status || 'approved'
   };
@@ -155,4 +154,3 @@ export async function loadProjectsInBounds(sw, ne) {
     .map(item => ({ id: item.id, ...item.data() }))
     .filter(p => p.longitude >= sw.lng && p.longitude <= ne.lng);
 }
-
