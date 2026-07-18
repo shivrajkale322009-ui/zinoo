@@ -1,69 +1,106 @@
 import { MarkerClusterer } from '@googlemaps/markerclusterer';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Plus, Pencil, Undo2, Redo2, Check, X, ShieldAlert,
-  MapPin, Eye, Compass, Navigation, Share2, Trash2,
-  Layers, CheckSquare, Square, RefreshCw, ZoomIn, ZoomOut, RotateCw, Maximize2
+  Undo2, Redo2, Check, X, ShieldAlert,
+  MapPin, Eye, Navigation, Share2, Trash2,
+  Layers, CheckSquare, Square, RefreshCw, ZoomIn, ZoomOut, RotateCw, Maximize2, PersonStanding,
+  Route, Building2
 } from 'lucide-react';
 import { loadGoogleMaps } from './googleMaps';
+import { getProjectCoordinates, isProjectPublishable } from '../utils/projectVisibility';
+import { matchesProjectFilters } from '../utils/projectLand';
 import {
-  createMapProject,
-  updateProjectMarker,
   createProjectLayout,
   saveProjectLayout,
+  updateProjectBoundary,
   loadProjectsInBounds
 } from './projectMapService';
+import { buildProjectGeometry, normalizeProjectPolygon } from '../utils/projectGeometry';
+import { CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
+import { getMarkerVisualState } from './mapZoom';
+import { createProjectPopupElement } from './projectPopupOverlay';
 import './mapScreen.css';
 
-const DEFAULT_CENTER = { lat: 18.7889, lng: 73.8568 };
+const DEFAULT_CENTER = CHAKAN_MAP_POSITION;
 const DEFAULT_ZOOM = 12;
-const pointFor = (project) => ({
-  lat: Number(project.latitude ?? project.coords?.[0]),
-  lng: Number(project.longitude ?? project.coords?.[1])
-});
+const pointFor = (project) => getProjectCoordinates(project);
 
 const priceLabel = (value) =>
   value ? `₹${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(value)}` : 'View';
 
-function markerIcon(project) {
+function markerContent(project, zoomTier = 'medium') {
   const price = project.priceFrom || project.startingPrice;
-  const label = price ? priceLabel(price) : project.name;
-  return {
-    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="128" height="48"><rect x="2" y="2" width="124" height="34" rx="17" fill="#0c5c42" stroke="#d9f99d" stroke-width="2"/><text x="64" y="24" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="white">${String(label).replace(/[<>&]/g, '')}</text><path d="M56 36h16l-8 10z" fill="#0c5c42"/></svg>`)}`,
-    scaledSize: new window.google.maps.Size(128, 48),
-    anchor: new window.google.maps.Point(64, 46)
-  };
+  const label = zoomTier === 'low'
+    ? '●'
+    : zoomTier === 'medium'
+      ? '●'
+      : priceLabel(price);
+  const marker = document.createElement('div');
+  marker.className = `druvio-project-marker druvio-project-marker-${zoomTier}`;
+  marker.textContent = String(label || 'View');
+  marker.setAttribute('role', 'button');
+  marker.setAttribute('tabindex', '0');
+  return marker;
 }
+
+function clusterContent(count) {
+  const marker = document.createElement('div');
+  marker.className = 'druvio-cluster-marker';
+  marker.textContent = String(count);
+  marker.setAttribute('aria-label', `${count} projects`);
+  return marker;
+}
+
+const toBoundaryPoint = (point, geoJsonOrder = false) => {
+  if (Array.isArray(point) && point.length >= 2) {
+    const first = Number(point[0]);
+    const second = Number(point[1]);
+    return geoJsonOrder ? { lat: second, lng: first } : { lat: first, lng: second };
+  }
+  const lat = Number(point?.lat ?? point?.latitude);
+  const lng = Number(point?.lng ?? point?.longitude);
+  return { lat, lng };
+};
+
+const normalizeBoundaryPath = (value) => {
+  const geoJsonCoordinates = value?.type === 'Polygon' ? value.coordinates?.[0] : null;
+  const source = geoJsonCoordinates || value;
+  if (!Array.isArray(source)) return [];
+  return source
+    .map((point) => toBoundaryPoint(point, Boolean(geoJsonCoordinates)))
+    .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+};
 
 export default function MapScreen({
   projects = [],
-  isAdmin = false,
   selectedProject = null,
   onSelectProject = null,
+  onViewProjectDetails = null,
+  showProjectPopup = true,
   activeLayout = null,
   onActiveLayoutChange = null,
   onVisibleProjectsChange = null,
+  externalOverlayOpen = false,
+  onLayersOpen = null,
   filters = { budgetMax: 3000000, distanceMax: 10, naPlot: false, bankLoan: false, minScore: 0 }
 }) {
   const mapElement = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
+  const selectedMarkerRef = useRef(null);
+  const projectPopupRef = useRef(null);
   const clusterRef = useRef(null);
   const polygonRef = useRef(null);
 
   // Drawing overlays
   const draftLineRef = useRef(null);
-  const draftMarkerRef = useRef(null);
 
   // States
   const [mapError, setMapError] = useState('');
   const [mapReady, setMapReady] = useState(false);
-  const [adminMode, setAdminMode] = useState(false);
-  const [mapHeading, setMapHeading] = useState(0);
-
+  const [zoomTier, setZoomTier] = useState('low');
   // Layer toggles
   const [showLayers, setShowLayers] = useState(false);
-  const [mapType, setMapType] = useState('hybrid'); // hybrid, satellite, roadmap, terrain
   const [layerVisibility, setLayerVisibility] = useState({
     markers: true,
     layouts: true,
@@ -71,40 +108,26 @@ export default function MapScreen({
     villageBoundaries: false
   });
 
-  // Village boundary polygon helper
-  const villageBoundaryRef = useRef(null);
+  const villageBoundaryRefs = useRef([]);
+  const villageBoundaries = useMemo(() => projects.map((project) => {
+    const boundarySource = project.villageBoundary
+      || project.villageBoundaryCoordinates
+      || project.boundaryCoordinates
+      || project.location?.boundary;
+    return {
+      id: project.id,
+      label: project.village || project.name || 'Village boundary',
+      path: normalizeBoundaryPath(boundarySource)
+    };
+  }).filter((boundary) => boundary.path.length >= 3), [projects]);
 
   // Drawing state
   const [drawing, setDrawing] = useState(false);
   const [drawingFinished, setDrawingFinished] = useState(false);
   const [editingLayout, setEditingLayout] = useState(false);
   const [draftPoints, setDraftPoints] = useState([]);
-  const [newPosition, setNewPosition] = useState(null);
-  const [placingProject, setPlacingProject] = useState(false);
-  const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draftLayoutName, setDraftLayoutName] = useState('');
-
-  // Project creation form state
-  const [form, setForm] = useState({
-    name: '',
-    developer: '',
-    priceFrom: '',
-    remainingPlots: '',
-    village: '',
-    taluka: '',
-    area: '',
-    description: '',
-    thumbnail: '',
-    amenities: '',
-    cashbackAmount: '',
-    whatsappNumber: '',
-    siteVisitContact: '',
-    googleMapsLink: '',
-    website: '',
-    reraNumber: '',
-    status: 'approved'
-  });
 
   // Undo/Redo stack for polygon edits
   const pathHistoryRef = useRef([]);
@@ -125,17 +148,9 @@ export default function MapScreen({
 
       // Apply Home-panel filters to visible projects.
       const finalVisible = visible.filter(p => {
-        const isApproved = p.status === 'approved' || p.status === 'Active';
-        if (!isApproved) return false;
+        if (!isProjectPublishable(p)) return false;
 
-        const startingPrice = Number(p.priceFrom || p.startingPrice || 0);
-        const matchesBudget = startingPrice <= filters.budgetMax;
-        const matchesDistance = Number(p.distance || 0) <= filters.distanceMax;
-        const matchesBankLoan = !filters.bankLoan || p.bankLoan;
-        const matchesNaPlot = !filters.naPlot || p.naPlot;
-        const matchesScore = Number(p.DruvioScore || p.plotItScore || 0) >= filters.minScore;
-
-        return matchesBudget && matchesDistance && matchesBankLoan && matchesNaPlot && matchesScore;
+        return matchesProjectFilters(p, filters);
       });
 
       if (onVisibleProjectsChange) {
@@ -146,16 +161,10 @@ export default function MapScreen({
     }
   }, [filters, onVisibleProjectsChange]);
 
-  // Handle map type and styles (Roads toggling)
+  // Keep one Druvio basemap and expose only useful discovery overlays.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-
-    // Set Map Type
-    if (mapType === 'hybrid') map.setMapTypeId(window.google.maps.MapTypeId.HYBRID);
-    else if (mapType === 'satellite') map.setMapTypeId(window.google.maps.MapTypeId.SATELLITE);
-    else if (mapType === 'roadmap') map.setMapTypeId(window.google.maps.MapTypeId.ROADMAP);
-    else if (mapType === 'terrain') map.setMapTypeId(window.google.maps.MapTypeId.TERRAIN);
 
     // Set Roads visibility
     const hideRoadsStyle = [
@@ -163,48 +172,63 @@ export default function MapScreen({
       { featureType: "road", elementType: "labels", stylers: [{ visibility: "off" }] }
     ];
     map.setOptions({ styles: layerVisibility.roads ? [] : hideRoadsStyle });
-  }, [mapType, layerVisibility.roads]);
+  }, [layerVisibility.roads]);
 
-  // Village Boundaries Simulated GIS layer
+  useEffect(() => {
+    if (externalOverlayOpen || selectedProject) setShowLayers(false);
+  }, [externalOverlayOpen, selectedProject]);
+
+  // Render only verified boundary coordinates stored with project data.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    if (layerVisibility.villageBoundaries) {
-      if (!villageBoundaryRef.current) {
-        // Draw a simulated village boundary around Chakan circle
-        const circleCoords = [];
-        const radius = 0.04; // ~4km
-        for (let i = 0; i < 360; i += 10) {
-          const angle = (i * Math.PI) / 180;
-          circleCoords.push({
-            lat: DEFAULT_CENTER.lat + radius * Math.sin(angle),
-            lng: DEFAULT_CENTER.lng + radius * 1.5 * Math.cos(angle)
-          });
-        }
-        villageBoundaryRef.current = new window.google.maps.Polygon({
-          paths: circleCoords,
-          map,
-          strokeColor: '#38bdf8',
-          strokeOpacity: 0.8,
-          strokeWeight: 2,
-          fillColor: '#38bdf8',
-          fillOpacity: 0.1,
-          clickable: false,
-          zIndex: 1
-        });
-      } else {
-        villageBoundaryRef.current.setMap(map);
-      }
-    } else {
-      villageBoundaryRef.current?.setMap(null);
-    }
-  }, [layerVisibility.villageBoundaries]);
+    villageBoundaryRefs.current.forEach((polygon) => polygon.setMap(null));
+    villageBoundaryRefs.current = [];
+    if (!layerVisibility.villageBoundaries) return;
+
+    villageBoundaryRefs.current = villageBoundaries.map((boundary) => {
+      const polygon = new window.google.maps.Polygon({
+        paths: boundary.path,
+        map,
+        strokeColor: '#059669',
+        strokeOpacity: 0.9,
+        strokeWeight: 2,
+        fillColor: '#10b981',
+        fillOpacity: 0.1,
+        clickable: true,
+        zIndex: 1
+      });
+      polygon.addListener('mouseover', () => polygon.setOptions({ fillOpacity: 0.2 }));
+      polygon.addListener('mouseout', () => polygon.setOptions({ fillOpacity: 0.1 }));
+      return polygon;
+    });
+
+    return () => {
+      villageBoundaryRefs.current.forEach((polygon) => polygon.setMap(null));
+      villageBoundaryRefs.current = [];
+    };
+  }, [layerVisibility.villageBoundaries, villageBoundaries]);
 
   // Clear polygon on layout change
   const clearPolygon = useCallback(() => {
     polygonRef.current?.setMap(null);
     polygonRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    const focusLocation = (event) => {
+      const { location, viewport } = event.detail || {};
+      const map = mapRef.current;
+      if (!map || !location) return;
+      if (viewport) map.fitBounds(viewport, 48);
+      else {
+        map.panTo(location);
+        map.setZoom(15);
+      }
+    };
+    window.addEventListener('druvio-focus-location', focusLocation);
+    return () => window.removeEventListener('druvio-focus-location', focusLocation);
   }, []);
 
   // History stack triggers
@@ -291,34 +315,18 @@ export default function MapScreen({
   useEffect(() => {
     if (activeLayout && activeLayout.polygonCoordinates) {
       drawPolygon(activeLayout.polygonCoordinates, editingLayout, activeLayout.color);
+    } else if (zoomTier === 'high' && selectedProject?.layoutPolygon) {
+      const path = normalizeProjectPolygon(selectedProject.layoutPolygon);
+      drawPolygon(path, editingLayout, '#2563eb');
+      if (path.length >= 3 && mapRef.current) {
+        const bounds = new window.google.maps.LatLngBounds();
+        path.forEach((point) => bounds.extend(point));
+        mapRef.current.fitBounds(bounds, 64);
+      }
     } else {
       clearPolygon();
     }
-  }, [activeLayout, editingLayout, drawPolygon, clearPolygon]);
-
-  // Place project draft marker helper
-  const placeDraftMarker = useCallback((position) => {
-    const map = mapRef.current;
-    if (!map || !window.google?.maps) return;
-    if (!draftMarkerRef.current) {
-      draftMarkerRef.current = new window.google.maps.Marker({
-        map,
-        position,
-        title: 'New Project Coordinates',
-        draggable: true,
-        zIndex: 6
-      });
-      draftMarkerRef.current.addListener('dragend', (event) => setNewPosition(event.latLng.toJSON()));
-    } else {
-      draftMarkerRef.current.setPosition(position);
-      draftMarkerRef.current.setMap(map);
-    }
-  }, []);
-
-  const clearDraftMarker = useCallback(() => {
-    draftMarkerRef.current?.setMap(null);
-    draftMarkerRef.current = null;
-  }, []);
+  }, [activeLayout, editingLayout, drawPolygon, clearPolygon, selectedProject, zoomTier]);
 
   // Listen to the custom sidebar layout-adding event
   useEffect(() => {
@@ -354,6 +362,7 @@ export default function MapScreen({
     let resizeObserver;
     let tilesLoadedListener;
     let idleListener;
+    let zoomListener;
 
     loadGoogleMaps().then(() => {
       if (disposed) return;
@@ -365,18 +374,24 @@ export default function MapScreen({
         const map = new window.google.maps.Map(container, {
           center,
           zoom: DEFAULT_ZOOM,
+          mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || 'DEMO_MAP_ID',
           mapTypeId: window.google.maps.MapTypeId.HYBRID,
           mapTypeControl: false,
           streetViewControl: false,
           fullscreenControl: false,
           rotateControl: false,
           zoomControl: false,
-          tilt: 45,
           gestureHandling: 'greedy'
         });
 
         mapRef.current = map;
-        map.addListener('heading_changed', () => setMapHeading(map.getHeading() || 0));
+        map.setMapTypeId(window.google.maps.MapTypeId.HYBRID);
+        const updateZoomTier = () => {
+          const zoom = map.getZoom() || DEFAULT_ZOOM;
+          setZoomTier(getMarkerVisualState(zoom).tier);
+        };
+        updateZoomTier();
+        zoomListener = map.addListener('zoom_changed', updateZoomTier);
 
         // Idle listener to fetch visible bounds markers
         idleListener = map.addListener('idle', handleBoundsIdle);
@@ -400,11 +415,13 @@ export default function MapScreen({
       resizeObserver?.disconnect();
       tilesLoadedListener?.remove();
       idleListener?.remove();
+      zoomListener?.remove();
       clusterRef.current?.clearMarkers();
-      markersRef.current.forEach((marker) => marker.setMap(null));
+      markersRef.current.forEach((marker) => { marker.map = null; });
+      selectedMarkerRef.current && (selectedMarkerRef.current.map = null);
+      projectPopupRef.current?.setMap(null);
       polygonRef.current?.setMap(null);
-      draftMarkerRef.current?.setMap(null);
-      villageBoundaryRef.current?.setMap(null);
+      villageBoundaryRefs.current.forEach((polygon) => polygon.setMap(null));
     };
   }, [handleBoundsIdle]);
 
@@ -413,7 +430,7 @@ export default function MapScreen({
       const project = event.detail?.project;
       if (!project) return;
       const position = pointFor(project);
-      if (!Number.isFinite(position.lat) || !Number.isFinite(position.lng)) return;
+      if (!position) return;
       mapRef.current?.panTo(position);
       mapRef.current?.setZoom(15);
     };
@@ -421,54 +438,116 @@ export default function MapScreen({
     return () => window.removeEventListener('druvio-focus-project', focusProject);
   }, []);
 
+  useEffect(() => {
+    const viewLayout = (event) => {
+      if (event.detail?.projectId && event.detail.projectId !== selectedProject?.id) return;
+      const path = normalizeProjectPolygon(selectedProject?.layoutPolygon);
+      if (path.length < 3 || !mapRef.current) return;
+      const bounds = new window.google.maps.LatLngBounds();
+      path.forEach((point) => bounds.extend(point));
+      mapRef.current.fitBounds(bounds, 64);
+      const container = mapElement.current?.parentElement;
+      if (container && !document.fullscreenElement) container.requestFullscreen?.();
+    };
+    window.addEventListener('druvio-view-project-layout', viewLayout);
+    return () => window.removeEventListener('druvio-view-project-layout', viewLayout);
+  }, [selectedProject]);
+
   // Update projects markers and cluster
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !window.google?.maps || !mapReady) return;
 
     clusterRef.current?.clearMarkers();
-    markersRef.current.forEach((marker) => marker.setMap(null));
+    markersRef.current.forEach((marker) => { marker.map = null; });
 
     if (!layerVisibility.markers) return;
 
     markersRef.current = projects.map((project) => {
       const position = pointFor(project);
-      const isApproved = project.status === 'approved' || project.status === 'Active';
-      if (!isApproved || !position.lat || !position.lng) return null;
+      if (!isProjectPublishable(project) || !position) return null;
 
-      const marker = new window.google.maps.Marker({
+      const marker = new window.google.maps.marker.AdvancedMarkerElement({
         position,
         title: project.name,
-        icon: markerIcon(project),
-        optimized: true
+        content: markerContent(project, zoomTier),
+        gmpClickable: true,
+        gmpDraggable: false
       });
 
-      marker.addListener('click', () => {
+      marker.addEventListener('gmp-click', () => {
         clearPolygon();
         if (onSelectProject) {
           onSelectProject(project);
         }
         map.panTo(position);
-        map.setZoom(15);
       });
-
-      if (isAdmin && adminMode) {
-        marker.setDraggable(true);
-        marker.addListener('dragend', async () => {
-          try {
-            await updateProjectMarker(project.id, marker.getPosition().toJSON());
-            alert('Marker position updated.');
-          } catch (error) {
-            alert('Unable to move project marker: ' + error.message);
-          }
-        });
-      }
 
       return marker;
     }).filter(Boolean);
 
-    clusterRef.current = new MarkerClusterer({ map, markers: markersRef.current });
-  }, [projects, adminMode, isAdmin, clearPolygon, mapReady, onSelectProject, layerVisibility.markers]);
+    if (zoomTier === 'high') {
+      markersRef.current.forEach((marker) => { marker.map = map; });
+    } else {
+      clusterRef.current = new MarkerClusterer({
+        map,
+        markers: markersRef.current,
+        renderer: {
+          render: ({ count, position }) => new window.google.maps.marker.AdvancedMarkerElement({
+            position,
+            content: clusterContent(count),
+            title: `${count} projects`,
+            zIndex: 1000 + count
+          })
+        }
+      });
+    }
+  }, [projects, clearPolygon, mapReady, onSelectProject, layerVisibility.markers, zoomTier]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    selectedMarkerRef.current && (selectedMarkerRef.current.map = null);
+    projectPopupRef.current?.setMap(null);
+    selectedMarkerRef.current = null;
+    projectPopupRef.current = null;
+    if (!selectedProject || !showProjectPopup || !map || !window.google?.maps?.marker?.AdvancedMarkerElement) return undefined;
+    const position = pointFor(selectedProject);
+    if (!position) return undefined;
+
+    const content = markerContent(selectedProject, 'high');
+    content.classList.add('druvio-project-marker-selected');
+    const marker = new window.google.maps.marker.AdvancedMarkerElement({
+      map,
+      position,
+      title: selectedProject.name,
+      content,
+      gmpClickable: true,
+      zIndex: 9999
+    });
+    selectedMarkerRef.current = marker;
+    map.panTo(position);
+    class ProjectPopupOverlay extends window.google.maps.OverlayView {
+      constructor() {
+        super();
+        this.element = createProjectPopupElement(selectedProject, onViewProjectDetails);
+      }
+      onAdd() { this.getPanes().floatPane.appendChild(this.element); }
+      draw() {
+        const point = this.getProjection().fromLatLngToDivPixel(new window.google.maps.LatLng(position));
+        if (!point) return;
+        const popupWidth = 288;
+        const flipLeft = point.x + popupWidth + 18 > map.getDiv().clientWidth;
+        this.element.classList.toggle('flip-left', flipLeft);
+        this.element.style.transform = `translate(${flipLeft ? point.x - popupWidth - 18 : point.x + 18}px, ${point.y - 148}px)`;
+      }
+      onRemove() { this.element.remove(); }
+    }
+    const popup = new ProjectPopupOverlay();
+    popup.setMap(map);
+    projectPopupRef.current = popup;
+
+    return () => { marker.map = null; popup.setMap(null); };
+  }, [selectedProject, mapReady, onViewProjectDetails, showProjectPopup]);
 
   // Click listeners for placing projects or drawing polygons
   useEffect(() => {
@@ -477,20 +556,15 @@ export default function MapScreen({
 
     const clickListener = map.addListener('click', (event) => {
       const point = event.latLng.toJSON();
-      if (placingProject) {
-        placeDraftMarker(point);
-        setNewPosition(point);
-        setPlacingProject(false);
-        setFormOpen(true);
-        return;
-      }
       if (drawing && !drawingFinished) {
         setDraftPoints((points) => [...points, point]);
+      } else if (onSelectProject) {
+        onSelectProject(null);
       }
     });
 
     return () => clickListener.remove();
-  }, [placingProject, drawing, drawingFinished, placeDraftMarker]);
+  }, [drawing, drawingFinished, onSelectProject]);
 
   // Live preview polyline/polygon drawing
   useEffect(() => {
@@ -544,6 +618,8 @@ export default function MapScreen({
     setSaving(true);
 
     try {
+      const geometry = buildProjectGeometry(coordinates, window.google.maps);
+      await updateProjectBoundary(selectedProject.id, geometry);
       if (activeLayout) {
         // Edit existing layout
         await saveProjectLayout(activeLayout.id, coordinates);
@@ -583,62 +659,25 @@ export default function MapScreen({
     clearPolygon();
   };
 
-  const submitProject = async (event) => {
-    event.preventDefault();
-    if (!newPosition) return;
-    setSaving(true);
-
-    try {
-      const id = await createMapProject({
-        ...form,
-        latitude: newPosition.lat,
-        longitude: newPosition.lng
-      });
-      clearDraftMarker();
-      setFormOpen(false);
-      setNewPosition(null);
-      setForm({
-        name: '',
-        developer: '',
-        priceFrom: '',
-        remainingPlots: '',
-        village: '',
-        taluka: '',
-        area: '',
-        description: '',
-        thumbnail: '',
-        amenities: '',
-        cashbackAmount: '',
-        whatsappNumber: '',
-        siteVisitContact: '',
-        googleMapsLink: '',
-        website: '',
-        reraNumber: '',
-        status: 'approved'
-      });
-      alert('Project saved successfully. It is now visible on the map!');
-
-      // Automatically pan to new project
-      mapRef.current?.panTo(newPosition);
-    } catch (error) {
-      alert('Failed to save project: ' + error.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const zoomMap = (amount) => mapRef.current?.setZoom((mapRef.current.getZoom() || DEFAULT_ZOOM) + amount);
-  const resetHeading = () => mapRef.current?.setHeading(0);
   const rotateMap = () => mapRef.current?.setHeading(((mapRef.current?.getHeading() || 0) + 45) % 360);
-  const locateUser = () => navigator.geolocation?.getCurrentPosition(
-    ({ coords }) => { mapRef.current?.panTo({ lat: coords.latitude, lng: coords.longitude }); mapRef.current?.setZoom(15); },
-    () => alert('Unable to access your current location. Please allow location permission.')
-  );
+  const locateUser = () => {
+    mapRef.current?.panTo(CHAKAN_MAP_POSITION);
+    mapRef.current?.setZoom(15);
+  };
   const toggleFullscreen = () => {
     const container = mapElement.current?.parentElement;
     if (!container) return;
     if (document.fullscreenElement) document.exitFullscreen?.();
     else container.requestFullscreen?.();
+  };
+  const openStreetView = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    const panorama = map.getStreetView();
+    panorama.setPosition(map.getCenter());
+    panorama.setPov({ heading: map.getHeading() || 0, pitch: 0 });
+    panorama.setVisible(true);
   };
 
   return (
@@ -650,229 +689,72 @@ export default function MapScreen({
       {/* FLOATING GLASSMORPHISM CONTROLS */}
       <div className="map-floating-overlay-container">
 
-        <div className="map-top-left-controls">
-          <div className="brand-badge">
-            <Compass size={18} />
-            <strong>Druvio</strong>
-            <span>Hybrid</span>
-          </div>
-        </div>
-
         <div className="map-top-right-controls">
-          {Math.abs(mapHeading) > 1 && <button className="floating-circle-btn map-compass-control" title="Reset north" onClick={resetHeading}><Compass size={17} style={{ transform: `rotate(${-mapHeading}deg)` }} /></button>}
-          <button className={`floating-circle-btn ${showLayers ? 'active' : ''}`} onClick={() => setShowLayers(!showLayers)} title="Map Layers"><Layers size={16} /></button>
-          <button className="floating-circle-btn" onClick={locateUser} title="Current Location"><Navigation size={16} /></button>
+          <button className={`floating-circle-btn ${showLayers ? 'active' : ''}`} onClick={() => { const nextOpen = !showLayers; setShowLayers(nextOpen); if (nextOpen) onLayersOpen?.(); }} title="Map layers" aria-label="Map layers"><Layers size={19} /></button>
+          <button className="floating-circle-btn" onClick={locateUser} title="Your location" aria-label="Your location"><Navigation size={19} /></button>
+          <button className="floating-circle-btn" onClick={openStreetView} title="Street View" aria-label="Open Street View"><PersonStanding size={19} /></button>
         </div>
 
         <div className="map-bottom-right-controls">
-          <button className="floating-circle-btn" onClick={() => zoomMap(1)} title="Zoom in"><ZoomIn size={16} /></button>
-          <button className="floating-circle-btn" onClick={() => zoomMap(-1)} title="Zoom out"><ZoomOut size={16} /></button>
-          <button className="floating-circle-btn" onClick={rotateMap} title="Rotate map"><RotateCw size={16} /></button>
-          <button className="floating-circle-btn" onClick={toggleFullscreen} title="Fullscreen"><Maximize2 size={16} /></button>
+          <button className="floating-circle-btn" onClick={() => zoomMap(1)} title="Zoom in" aria-label="Zoom in"><ZoomIn size={19} /></button>
+          <button className="floating-circle-btn" onClick={() => zoomMap(-1)} title="Zoom out" aria-label="Zoom out"><ZoomOut size={19} /></button>
+          <button className="floating-circle-btn" onClick={rotateMap} title="Rotate map" aria-label="Rotate map"><RotateCw size={19} /></button>
+          <button className="floating-circle-btn" onClick={toggleFullscreen} title="Fullscreen" aria-label="Toggle fullscreen"><Maximize2 size={19} /></button>
         </div>
 
         {/* FLOATING LAYERS POPDOWN */}
         {showLayers && (
-          <div className="floating-layers-popdown glass">
+          <div className="floating-layers-popdown">
             <div className="layers-header">
-              <h4>Map Layers</h4>
-              <button onClick={() => setShowLayers(false)} className="close-panel-btn"><X size={14} /></button>
+              <div><span>Map display</span><h4>Layers</h4><p>Control project and location overlays.</p></div>
+              <button onClick={() => setShowLayers(false)} className="close-panel-btn" aria-label="Close layers"><X size={16} /></button>
             </div>
 
             <div className="layers-body">
-              <span className="layers-section-title">Base Map</span>
-              <div className="base-maps-grid">
-                {['hybrid', 'satellite', 'roadmap', 'terrain'].map(type => (
-                  <button
-                    key={type}
-                    className={`base-map-option-btn ${mapType === type ? 'active' : ''}`}
-                    onClick={() => setMapType(type)}
-                  >
-                    {type}
+              <span className="layers-section-title">Project overlays</span>
+              <div className="gis-toggles">
+                {[
+                  { key: 'markers', label: 'Project markers', description: 'Approved projects on the map', icon: MapPin },
+                  { key: 'layouts', label: 'Project layouts', description: 'Plot and phase outlines', icon: Building2 },
+                  { key: 'roads', label: 'Road network', description: 'Road geometry and labels', icon: Route }
+                ].map(({ key, label, description, icon: Icon }) => (
+                  <button key={key} type="button" className="layer-toggle-row" role="switch" aria-checked={layerVisibility[key]} onClick={() => setLayerVisibility({ ...layerVisibility, [key]: !layerVisibility[key] })}>
+                    <Icon size={18} /><span><strong>{label}</strong><small>{description}</small></span><i className={layerVisibility[key] ? 'on' : ''} />
                   </button>
                 ))}
-              </div>
-
-              <span className="layers-section-title" style={{ marginTop: '12px', display: 'block' }}>GIS Features</span>
-              <div className="gis-toggles">
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={layerVisibility.markers} onChange={e => setLayerVisibility({ ...layerVisibility, markers: e.target.checked })} />
-                  <span>Project Markers</span>
-                </label>
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={layerVisibility.layouts} onChange={e => setLayerVisibility({ ...layerVisibility, layouts: e.target.checked })} />
-                  <span>Project Layouts</span>
-                </label>
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={layerVisibility.roads} onChange={e => setLayerVisibility({ ...layerVisibility, roads: e.target.checked })} />
-                  <span>Road Networks</span>
-                </label>
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={layerVisibility.villageBoundaries} onChange={e => setLayerVisibility({ ...layerVisibility, villageBoundaries: e.target.checked })} />
-                  <span>Village Boundaries</span>
-                </label>
+                <button type="button" className="layer-toggle-row" role="switch" aria-checked={layerVisibility.villageBoundaries} disabled={villageBoundaries.length === 0} onClick={() => setLayerVisibility({ ...layerVisibility, villageBoundaries: !layerVisibility.villageBoundaries })}>
+                  <Layers size={18} /><span><strong>Village boundaries</strong><small>{villageBoundaries.length ? `${villageBoundaries.length} verified boundary ${villageBoundaries.length === 1 ? 'area' : 'areas'}` : 'No verified boundary data available'}</small></span><i className={layerVisibility.villageBoundaries ? 'on' : ''} />
+                </button>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* ADMIN TOOLBAR FLOATING OVER MAP */}
-        {isAdmin && (
-          <div className="map-floating-admin-toolbar glass">
-            <button
-              type="button"
-              className={`toolbar-btn pencil-btn ${adminMode ? 'active' : ''}`}
-              onClick={() => setAdminMode(!adminMode)}
-            >
-              <Pencil size={14} />
-              <span>{adminMode ? 'Exit Admin' : 'Admin Toolbar'}</span>
-            </button>
-
-            {adminMode && (
-              <div className="admin-sub-toolbar">
-                {/* Regular actions */}
-                {!drawing && !editingLayout && (
-                  <>
-                    <button
-                      onClick={() => {
-                        clearDraftMarker();
-                        setNewPosition(null);
-                        setPlacingProject(true);
-                      }}
-                      className="toolbar-btn"
-                    >
-                      <Plus size={14} /> New Project
-                    </button>
-                    {selectedProject && (
-                      <button onClick={beginLayoutDrawing} className="toolbar-btn">
-                        <Layers size={14} /> Draw Polygon
-                      </button>
-                    )}
-                    {activeLayout && (
-                      <button onClick={() => setEditingLayout(true)} className="toolbar-btn">
-                        <Pencil size={14} /> Edit
-                      </button>
-                    )}
-                  </>
-                )}
-
-                {/* Drawing / Editing controls */}
-                {drawing && (
-                  <div className="drawing-actions">
-                    <span className="drawing-status-badge">Drawing layout: Click map ({draftPoints.length})</span>
-                    <button onClick={handleFinishDrawing} disabled={draftPoints.length < 3} className="toolbar-btn primary-btn"><Check size={13} /> Finish</button>
-                    <button onClick={handleCancelDrawing} className="toolbar-btn danger-btn"><X size={13} /> Cancel</button>
-                  </div>
-                )}
-
-                {editingLayout && (
-                  <div className="editing-actions">
-                    <span className="drawing-status-badge">Adjusting vertices</span>
-                    <button onClick={handleUndo} className="icon-toolbar-btn" title="Undo"><Undo2 size={13} /></button>
-                    <button onClick={handleRedo} className="icon-toolbar-btn" title="Redo"><Redo2 size={13} /></button>
-                    <button onClick={handleSavePolygon} disabled={saving} className="toolbar-btn primary-btn"><Check size={13} /> Save Layout</button>
-                    <button onClick={handleCancelDrawing} className="toolbar-btn danger-btn"><X size={13} /> Cancel</button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Placing Project Hint Overlay */}
-        {placingProject && (
-          <div className="placing-hint-toast glass">
-            <span>Click on the map to place the project marker.</span>
-            <button onClick={() => setPlacingProject(false)}><X size={14} /></button>
           </div>
         )}
 
       </div>
 
-      {/* NEW PROJECT DIALOG BACKDROP */}
-      {formOpen && (
-        <div className="map-modal-backdrop">
-          <form className="map-project-form glass" onSubmit={submitProject}>
-            <button
-              type="button"
-              className="map-card-close"
-              onClick={() => {
-                clearDraftMarker();
-                setFormOpen(false);
-                setNewPosition(null);
-              }}
-            >
-              <X size={18} />
-            </button>
-            <h2>New project</h2>
-            <p className="coords-subtitle">Coordinates: {newPosition?.lat.toFixed(6)}, {newPosition?.lng.toFixed(6)}</p>
-
-            <div className="form-fields-grid">
-              {[
-                ['name', 'Project name'],
-                ['developer', 'Projected by'],
-                ['priceFrom', 'Price from (₹)'],
-                ['remainingPlots', 'Remaining plots'],
-                ['village', 'Village'],
-                ['taluka', 'Taluka'],
-                ['area', 'Area / landmark'],
-                ['thumbnail', 'Thumbnail URL'],
-                ['cashbackAmount', 'Cashback amount (₹)'],
-                ['whatsappNumber', 'WhatsApp number'],
-                ['siteVisitContact', 'Site visit contact'],
-                ['googleMapsLink', 'Google Maps link'],
-                ['website', 'Website'],
-                ['reraNumber', 'RERA number']
-              ].map(([key, label]) => (
-                <label key={key}>
-                  {label}{key === 'name' || key === 'developer' ? ' (Required)' : ''}
-                  <input
-                    required={key === 'name' || key === 'developer'}
-                    type={['priceFrom', 'remainingPlots', 'cashbackAmount'].includes(key) ? 'number' : (key.includes('Link') || key === 'website' || key === 'thumbnail' ? 'url' : 'text')}
-                    min={key === 'cashbackAmount' ? '0' : undefined}
-                    value={form[key]}
-                    onChange={(event) => setForm({ ...form, [key]: event.target.value })}
-                  />
-                </label>
-              ))}
-            </div>
-
-            <label className="description-label">
-              Amenities
-              <input
-                type="text"
-                value={form.amenities}
-                onChange={(event) => setForm({ ...form, amenities: event.target.value })}
-                placeholder="Roads, Electricity, Water"
-              />
-            </label>
-
-            <label className="description-label">
-              Description
-              <textarea
-                value={form.description}
-                onChange={(event) => setForm({ ...form, description: event.target.value })}
-              />
-            </label>
-
-            <label className="description-label">
-              Status
-              <select
-                value={form.status}
-                onChange={(event) => setForm({ ...form, status: event.target.value })}
-              >
-                <option value="approved">Active</option>
-                <option value="pending_review">Pending Review</option>
-                <option value="rejected">Rejected</option>
-                <option value="Sold Out">Sold Out</option>
-              </select>
-            </label>
-
-            <button className="map-primary" disabled={saving}>
-              {saving ? 'Saving…' : 'Create project'}
-            </button>
-          </form>
-        </div>
+      {(drawing || editingLayout) && (
+        <section className="map-layout-editor-controls" aria-label="Layout editor controls">
+          <div>
+            <strong>{drawing ? 'Drawing layout' : 'Editing layout'}</strong>
+            <span>{drawing ? `${draftPoints.length} points placed` : 'Adjust the polygon handles, then save your changes.'}</span>
+          </div>
+          <div className="map-layout-editor-actions">
+            {drawing ? (
+              <button type="button" className="map-layout-editor-primary" onClick={handleFinishDrawing} disabled={draftPoints.length < 3}>
+                <Check size={16} /> Finish drawing
+              </button>
+            ) : (
+              <>
+                <button type="button" className="map-layout-editor-icon" onClick={handleUndo} title="Undo" aria-label="Undo"><Undo2 size={16} /></button>
+                <button type="button" className="map-layout-editor-icon" onClick={handleRedo} title="Redo" aria-label="Redo"><Redo2 size={16} /></button>
+                <button type="button" className="map-layout-editor-primary" onClick={handleSavePolygon} disabled={saving}>
+                  <Check size={16} /> {saving ? 'Saving…' : 'Save layout'}
+                </button>
+              </>
+            )}
+            <button type="button" className="map-layout-editor-cancel" onClick={handleCancelDrawing}><X size={16} /> Cancel</button>
+          </div>
+        </section>
       )}
 
       {/* MAP ALERTS */}

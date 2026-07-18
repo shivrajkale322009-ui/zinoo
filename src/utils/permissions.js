@@ -66,3 +66,12 @@ export function getDefaultView(permissions) {
   if (normalized.seller) return "seller";
   return "buyer";
 }
+
+export function isApprovedSellerAccount(account) {
+  if (!account || !normalizePermissions(account.permissions).seller) return false;
+  const blockedStatuses = new Set(['pending', 'rejected', 'suspended', 'disabled', 'inactive', 'revoked']);
+  const statuses = [account.status, account.sellerStatus, account.approvalStatus, account.reviewStatus]
+    .map((value) => String(value ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  return !statuses.some((status) => blockedStatuses.has(status));
+}

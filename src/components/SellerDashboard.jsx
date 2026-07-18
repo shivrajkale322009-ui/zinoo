@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import {
   ArrowLeft,
   Building,
@@ -21,19 +22,33 @@ import {
   Users
 } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebaseConfig';
+import { auth, functions, storage } from '../firebaseConfig';
+import { CHAKAN_LOCATION } from '../utils/chakanLocation';
 import EditProfileModal from './EditProfileModal';
+import ProjectLocationPicker from './ProjectLocationPicker';
 import { PROJECT_DOCUMENT_OPTIONS, getProjectDocumentLabel } from '../utils/projectDocuments';
+import { getCashbackPerGuntha, withCanonicalPlotArea } from '../utils/projectArea';
+import { getProjectApprovalStatus, isProjectPublishable } from '../utils/projectVisibility';
+import {
+  LAND_ZONE_OPTIONS,
+  NA_STATUS_OPTIONS,
+  getLandZoneLabel,
+  getNaStatusLabel,
+  withCanonicalLandFields
+} from '../utils/projectLand';
 
 const createProjectDraft = (developer) => ({
   name: '',
   developer: developer || 'Shivraj Land Developers',
   village: '',
   area: '',
-  latitude: 18.7889,
-  longitude: 73.8568,
+  latitude: CHAKAN_LOCATION.latitude,
+  longitude: CHAKAN_LOCATION.longitude,
+  layoutPolygon: null,
+  layoutCenter: null,
+  layoutBounds: null,
+  layoutAreaSqFt: null,
   startingPrice: 1000000,
-  pricePerSqFt: 1000,
   distance: 3.5,
   remainingPlots: 20,
   totalPlots: 40,
@@ -41,7 +56,8 @@ const createProjectDraft = (developer) => ({
   sizeMax: 2400,
   facing: 'East, North',
   bankLoan: true,
-  naPlot: true,
+  landZone: 'residential',
+  naStatus: 'na_approved',
   verified: true,
   amenities: 'Water Supply Connection, Electricity Line, 9m Tar Road, Street Lights',
   nearbySchools: '',
@@ -56,8 +72,11 @@ const createProjectDraft = (developer) => ({
   googleMapsLink: '',
   website: '',
   reraNumber: '',
-  heroImage: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80',
-  layoutPlanUrl: 'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=800&q=80',
+  heroImage: '',
+  heroImagePath: '',
+  heroImageMetadata: null,
+  thumbnailPath: '',
+  thumbnailMetadata: null,
   documents: []
 });
 
@@ -74,8 +93,15 @@ const normalizeAmenities = (value) => {
   return [];
 };
 
+const getDocumentContentType = (file) => {
+  const extension = file.name.split('.').pop()?.toLowerCase();
+  const inferred = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png' }[extension];
+  return inferred || file.type;
+};
+
 const formatCashback = (project) => {
-  if (toNumber(project.cashbackAmount) > 0) return `₹${new Intl.NumberFormat('en-IN').format(project.cashbackAmount)} Cashback`;
+  const amount = getCashbackPerGuntha(project);
+  if (amount > 0) return `₹${new Intl.NumberFormat('en-IN').format(amount)} per Guntha`;
   return '';
 };
 
@@ -86,13 +112,15 @@ const stageClassName = (stage) => {
   return 'badge-danger';
 };
 
-const getProjectBadgeClass = (status) => {
-  if (status === 'approved' || status === 'Active') return 'badge-success';
-  if (status === 'rejected' || status === 'Sold Out') return 'badge-danger';
+const getProjectBadgeClass = (project) => {
+  const status = getProjectApprovalStatus(project);
+  if (status === 'approved') return 'badge-success';
+  if (status === 'rejected') return 'badge-danger';
   return 'badge-warning';
 };
 
-const formatProjectStatus = (status) => {
+const formatProjectStatus = (project) => {
+  const status = getProjectApprovalStatus(project);
   if (status === 'approved') return 'Approved';
   if (status === 'pending' || status === 'pending_review') return 'Pending Review';
   if (status === 'rejected') return 'Rejected';
@@ -103,21 +131,28 @@ function SellerDashboard({
   projects,
   leads,
   visits,
+  user,
   updateProject,
   addProject,
   isAdminView = false,
   selectedSeller = null,
+  initialTab = selectedSeller?.initialSellerTab || 'listings',
   onBackToAdmin,
   onSelectedSellerChange
 }) {
-  const [activeTab, setActiveTab] = useState('listings');
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [editingProject, setEditingProject] = useState(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showSellerProfileEditor, setShowSellerProfileEditor] = useState(false);
+  const [documentUploading, setDocumentUploading] = useState(false);
+  const [documentError, setDocumentError] = useState('');
+  const [mediaUploading, setMediaUploading] = useState('');
+  const [mediaError, setMediaError] = useState('');
+  const [projectSubmitError, setProjectSubmitError] = useState('');
 
   const developerName = projects[0]?.developer || 'Shivraj Land Developers';
   const [newProject, setNewProject] = useState(() => createProjectDraft(developerName));
-  const [documentDraft, setDocumentDraft] = useState({ type: PROJECT_DOCUMENT_OPTIONS[0].value, url: '' });
+  const [documentDraft, setDocumentDraft] = useState({ type: PROJECT_DOCUMENT_OPTIONS[0].value, file: null, previewUrl: '' });
 
   const myProjects = useMemo(() => projects, [projects]);
   const myLeads = useMemo(() => leads, [leads]);
@@ -143,20 +178,25 @@ function SellerDashboard({
   };
 
   const handleEditClick = (project) => {
-    setEditingProject({ ...project });
+    setEditingProject(withCanonicalPlotArea(withCanonicalLandFields(project)));
   };
 
   const handleEditSave = (e) => {
     e.preventDefault();
-    updateProject({
+    updateProject(withCanonicalPlotArea(withCanonicalLandFields({
       ...editingProject,
       startingPrice: toNumber(editingProject.startingPrice),
-      pricePerSqFt: toNumber(editingProject.pricePerSqFt),
+      latitude: toNumber(editingProject.latitude ?? editingProject.coords?.[0], CHAKAN_LOCATION.latitude),
+      longitude: toNumber(editingProject.longitude ?? editingProject.coords?.[1], CHAKAN_LOCATION.longitude),
+      coords: [toNumber(editingProject.latitude ?? editingProject.coords?.[0], CHAKAN_LOCATION.latitude), toNumber(editingProject.longitude ?? editingProject.coords?.[1], CHAKAN_LOCATION.longitude)],
+      location: { lat: toNumber(editingProject.latitude ?? editingProject.coords?.[0], CHAKAN_LOCATION.latitude), lng: toNumber(editingProject.longitude ?? editingProject.coords?.[1], CHAKAN_LOCATION.longitude) },
       remainingPlots: toNumber(editingProject.remainingPlots),
       totalPlots: toNumber(editingProject.totalPlots),
-      cashbackAmount: Math.max(0, toNumber(editingProject.cashbackAmount)),
+      plotAreaMinSqFt: toNumber(editingProject.plotAreaMinSqFt ?? editingProject.sizeMin),
+      plotAreaMaxSqFt: toNumber(editingProject.plotAreaMaxSqFt ?? editingProject.sizeMax),
+      cashbackPerGuntha: Math.max(0, toNumber(editingProject.cashbackPerGuntha ?? editingProject.cashbackAmount)),
       status: isAdminView ? editingProject.status : 'pending'
-    });
+    })));
     setEditingProject(null);
     showToast();
   };
@@ -177,26 +217,149 @@ function SellerDashboard({
     showToast();
   };
 
-  const handleAddProject = (e) => {
+  const handleDocumentUpload = async (fileOverride, typeOverride) => {
+    const file = fileOverride || documentDraft.file;
+    const documentType = typeOverride || documentDraft.type;
+    const ownerId = selectedSeller?.id || user?.uid;
+    const uploaderId = auth.currentUser?.uid || user?.uid;
+    const contentType = file ? getDocumentContentType(file) : '';
+    setDocumentError('');
+    if (!file || !ownerId || !uploaderId) {
+      setDocumentError('Your sign-in session is unavailable. Please sign in again before uploading a document.');
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setDocumentError('Document must be 15 MB or smaller.');
+      return;
+    }
+    if (!['application/pdf', 'image/jpeg', 'image/png'].includes(contentType)) {
+      setDocumentError('Upload a PDF, JPG, or PNG document.');
+      return;
+    }
+
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+    const documentId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const storageRef = ref(storage, `project-documents/${uploaderId}/drafts/${documentId}-${safeName}`);
+    setDocumentUploading(true);
+    try {
+      const snapshot = await uploadBytes(storageRef, file, {
+        contentType,
+        customMetadata: {
+          ownerId,
+          sellerUid: ownerId,
+          documentType,
+          uploadedBy: uploaderId,
+          uploadedByRole: isAdminView ? 'admin' : 'seller'
+        }
+      });
+      const url = await getDownloadURL(snapshot.ref);
+      setNewProject((current) => ({
+        ...current,
+        documents: [...current.documents, {
+          id: documentId,
+          type: documentType,
+          url,
+          path: snapshot.ref.fullPath,
+          fileName: file.name,
+          contentType,
+          size: file.size,
+          status: 'pending',
+          uploadedAt: new Date().toISOString(),
+          uploadedBy: uploaderId,
+          previewUrl: contentType.startsWith('image/') ? URL.createObjectURL(file) : ''
+        }]
+      }));
+      setDocumentDraft({ type: PROJECT_DOCUMENT_OPTIONS[0].value, file: null, previewUrl: '' });
+    } catch (error) {
+      console.error('Project document upload failed:', error);
+      setDocumentError(error?.code === 'storage/unauthorized'
+        ? 'Upload permission was denied. Refresh your sign-in session and try again.'
+        : 'Unable to upload this document. Check your connection and try again.');
+    } finally {
+      setDocumentUploading(false);
+    }
+  };
+
+  const handleMediaUpload = async (file, field) => {
+    const ownerId = selectedSeller?.id || user?.uid;
+    setMediaError('');
+    if (!file || !ownerId || !user?.uid) return;
+    if (file.size > 10 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setMediaError('Project images must be JPG, PNG, or WebP and 10 MB or smaller.');
+      return;
+    }
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+    const assetId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const assetRef = ref(storage, `project-media/${user.uid}/drafts/${assetId}-${safeName}`);
+    setMediaUploading(field);
+    try {
+      const snapshot = await uploadBytes(assetRef, file, {
+        contentType: file.type,
+        customMetadata: {
+          ownerId,
+          sellerUid: ownerId,
+          mediaRole: field,
+          uploadedBy: user.uid,
+          uploadedByRole: isAdminView ? 'admin' : 'seller'
+        }
+      });
+      const url = await getDownloadURL(snapshot.ref);
+      setNewProject((current) => ({
+        ...current,
+        [field]: url,
+        [`${field}Path`]: snapshot.ref.fullPath,
+        [`${field}Metadata`]: {
+          fileName: file.name,
+          contentType: file.type,
+          size: file.size,
+          uploadedAt: new Date().toISOString(),
+          uploadedBy: user.uid
+        }
+      }));
+    } catch (error) {
+      console.error('Project image upload failed:', error);
+      setMediaError('Unable to upload this project image. Please try again.');
+    } finally {
+      setMediaUploading('');
+    }
+  };
+
+  const removeDraftDocument = async (document, index) => {
+    setNewProject((current) => ({ ...current, documents: current.documents.filter((_, itemIndex) => itemIndex !== index) }));
+    if (document.path) await deleteObject(ref(storage, document.path)).catch(() => undefined);
+  };
+
+  const handleAddProject = async (e) => {
     e.preventDefault();
     if (!newProject.name.trim()) return;
+    setProjectSubmitError('');
 
     const createdProject = {
       name: newProject.name.trim(),
       developer: newProject.developer,
       village: newProject.village.trim(),
       area: newProject.area.trim(),
-      coords: [toNumber(newProject.latitude, 18.7889), toNumber(newProject.longitude, 73.8568)],
+      latitude: toNumber(newProject.latitude, CHAKAN_LOCATION.latitude),
+      longitude: toNumber(newProject.longitude, CHAKAN_LOCATION.longitude),
+      coords: [toNumber(newProject.latitude, CHAKAN_LOCATION.latitude), toNumber(newProject.longitude, CHAKAN_LOCATION.longitude)],
+      location: { lat: toNumber(newProject.latitude, CHAKAN_LOCATION.latitude), lng: toNumber(newProject.longitude, CHAKAN_LOCATION.longitude) },
+      layoutPolygon: newProject.layoutPolygon || null,
+      layoutCenter: newProject.layoutCenter || null,
+      layoutBounds: newProject.layoutBounds || null,
+      layoutAreaSqFt: newProject.layoutAreaSqFt || null,
       startingPrice: toNumber(newProject.startingPrice),
-      pricePerSqFt: toNumber(newProject.pricePerSqFt),
       distance: toNumber(newProject.distance),
       remainingPlots: toNumber(newProject.remainingPlots),
       totalPlots: toNumber(newProject.totalPlots),
       sizeMin: toNumber(newProject.sizeMin),
       sizeMax: toNumber(newProject.sizeMax),
+      plotAreaMinSqFt: toNumber(newProject.sizeMin),
+      plotAreaMaxSqFt: toNumber(newProject.sizeMax),
       facing: newProject.facing.split(',').map((face) => face.trim()).filter(Boolean),
       bankLoan: newProject.bankLoan,
-      naPlot: newProject.naPlot,
+      landZone: newProject.landZone,
+      naStatus: newProject.naStatus,
+      naPlot: newProject.naStatus === 'na_approved',
       verified: newProject.verified,
       amenities: newProject.amenities.split(',').map((item) => item.trim()).filter(Boolean),
       nearby: {
@@ -210,22 +373,31 @@ function SellerDashboard({
       thumbnail: newProject.thumbnail || newProject.heroImage,
       heroImage: newProject.heroImage,
       description: newProject.description || 'Freshly listed residential plotting development near Chakan.',
+      cashbackPerGuntha: Math.max(0, toNumber(newProject.cashbackAmount)),
       cashbackAmount: Math.max(0, toNumber(newProject.cashbackAmount)),
       whatsappNumber: newProject.whatsappNumber,
       siteVisitContact: newProject.siteVisitContact,
       googleMapsLink: newProject.googleMapsLink,
       website: newProject.website,
       reraNumber: newProject.reraNumber,
-      layoutPlanUrl: newProject.layoutPlanUrl,
+      heroImagePath: newProject.heroImagePath,
+      heroImageMetadata: newProject.heroImageMetadata,
+      thumbnailPath: newProject.thumbnailPath,
+      thumbnailMetadata: newProject.thumbnailMetadata,
       documents: newProject.documents,
       DruvioScore: 4.6
     };
 
-    addProject(createdProject);
-    setNewProject(createProjectDraft(developerName));
-    setDocumentDraft({ type: PROJECT_DOCUMENT_OPTIONS[0].value, url: '' });
-    setActiveTab('listings');
-    showToast();
+    try {
+      await addProject(createdProject);
+      setNewProject(createProjectDraft(developerName));
+      setDocumentDraft({ type: PROJECT_DOCUMENT_OPTIONS[0].value, file: null, previewUrl: '' });
+      setActiveTab('listings');
+      showToast();
+    } catch (error) {
+      console.error('Project creation failed:', error);
+      setProjectSubmitError(error?.message || 'Unable to create this project.');
+    }
   };
 
   const metrics = isAdminView
@@ -244,7 +416,7 @@ function SellerDashboard({
       },
       {
         label: 'Approved Listings',
-        value: myProjects.filter((project) => project.status === 'approved' || project.status === 'Active').length,
+        value: myProjects.filter(isProjectPublishable).length,
         helper: 'Visible to buyers',
         icon: <ShieldCheck size={20} color="#10b981" />
       },
@@ -323,9 +495,6 @@ function SellerDashboard({
             <span className="seller-topbar-kicker">{isAdminView ? 'Admin view' : 'Seller workspace'}</span>
             <h1>{activeTab === 'add' ? 'Create a listing' : activeTab === 'leads' ? 'Lead pipeline' : activeTab === 'visits' ? 'Visit calendar' : 'Portfolio overview'}</h1>
           </div>
-          <button type="button" className="btn-primary" onClick={() => selectTab('add')}>
-            <Plus size={16} /> New listing
-          </button>
         </header>
         <div className="metric-grid seller-metric-grid">
           {metrics.map((metric) => (
@@ -346,7 +515,7 @@ function SellerDashboard({
               <span className="seller-section-kicker">Admin seller context</span>
               <h3>{selectedSeller.displayName || selectedSeller.name || selectedSeller.businessName || 'Seller account'}</h3>
               <p style={{ marginTop: '6px', color: 'var(--text-secondary)' }}>
-                Review the existing seller workspace with admin permissions still enabled.
+                You are creating and managing projects on behalf of this approved Seller. Your Admin session remains active.
               </p>
             </div>
             <div className="seller-form-actions">
@@ -397,7 +566,22 @@ function SellerDashboard({
             <button type="button" className="seller-link-button" onClick={() => setEditingProject(null)}>Cancel</button>
           </div>
 
+          <ProjectLocationPicker
+            latitude={editingProject.latitude ?? editingProject.coords?.[0]}
+            longitude={editingProject.longitude ?? editingProject.coords?.[1]}
+            onChange={({ latitude, longitude }) => setEditingProject((current) => ({ ...current, latitude, longitude }))}
+            layoutPolygon={editingProject.layoutPolygon}
+            onLayoutChange={(geometry) => setEditingProject((current) => ({ ...current, ...geometry }))}
+          />
           <div className="seller-form-grid">
+            <label className="seller-field">
+              <span>Latitude</span>
+              <input type="number" step="0.000001" className="form-input" value={editingProject.latitude ?? editingProject.coords?.[0] ?? ''} onChange={(e) => setEditingProject({ ...editingProject, latitude: e.target.value })} />
+            </label>
+            <label className="seller-field">
+              <span>Longitude</span>
+              <input type="number" step="0.000001" className="form-input" value={editingProject.longitude ?? editingProject.coords?.[1] ?? ''} onChange={(e) => setEditingProject({ ...editingProject, longitude: e.target.value })} />
+            </label>
             <label className="seller-field">
               <span>Starting price (INR)</span>
               <input
@@ -408,13 +592,13 @@ function SellerDashboard({
               />
             </label>
             <label className="seller-field">
-              <span>Price per sq.ft</span>
-              <input
-                type="number"
-                className="form-input"
-                value={editingProject.pricePerSqFt}
-                onChange={(e) => setEditingProject({ ...editingProject, pricePerSqFt: e.target.value })}
-              />
+              <span>Minimum plot area (sq.ft.)</span>
+              <input type="number" min="0" className="form-input" value={editingProject.plotAreaMinSqFt ?? editingProject.sizeMin ?? ''} onChange={(e) => setEditingProject({ ...editingProject, plotAreaMinSqFt: e.target.value })} />
+              <small>1 Guntha equals 900 sq.ft.</small>
+            </label>
+            <label className="seller-field">
+              <span>Maximum plot area (sq.ft.)</span>
+              <input type="number" min="0" className="form-input" value={editingProject.plotAreaMaxSqFt ?? editingProject.sizeMax ?? ''} onChange={(e) => setEditingProject({ ...editingProject, plotAreaMaxSqFt: e.target.value })} />
             </label>
             <label className="seller-field">
               <span>Remaining plots</span>
@@ -426,7 +610,7 @@ function SellerDashboard({
               />
             </label>
             <label className="seller-field">
-              <span>Cashback amount</span>
+              <span>Cashback per Guntha</span>
               <input
                 type="number"
                 min="0"
@@ -434,10 +618,10 @@ function SellerDashboard({
                 inputMode="numeric"
                 className="form-input"
                 placeholder="₹ 25,000"
-                value={editingProject.cashbackAmount ?? ''}
-                onChange={(e) => setEditingProject({ ...editingProject, cashbackAmount: e.target.value })}
+                value={editingProject.cashbackPerGuntha ?? editingProject.cashbackAmount ?? ''}
+                onChange={(e) => setEditingProject({ ...editingProject, cashbackPerGuntha: e.target.value })}
               />
-              <small>Enter the fixed cashback amount offered for this project.</small>
+              <small>Fixed cashback rate for every 900 sq.ft. purchased.</small>
             </label>
             <label className="seller-field">
               <span>Availability status</span>
@@ -448,6 +632,20 @@ function SellerDashboard({
               >
                 <option value="Active">Active</option>
                 <option value="Sold Out">Sold Out</option>
+              </select>
+            </label>
+            <label className="seller-field">
+              <span>Land zone</span>
+              <select className="form-input" required value={editingProject.landZone || ''} onChange={(e) => setEditingProject({ ...editingProject, landZone: e.target.value })}>
+                <option value="">Select land zone</option>
+                {LAND_ZONE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="seller-field">
+              <span>NA status</span>
+              <select className="form-input" required value={editingProject.naStatus || ''} onChange={(e) => setEditingProject({ ...editingProject, naStatus: e.target.value })}>
+                <option value="">Select NA status</option>
+                {NA_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
           </div>
@@ -464,10 +662,15 @@ function SellerDashboard({
               <span className="seller-section-kicker">Project overview</span>
               <h3>Your plotting projects</h3>
             </div>
-            <button type="button" className="btn-secondary" onClick={() => setActiveTab('add')}>
-              <Plus size={16} /> Add another
-            </button>
           </div>
+
+          {isAdminView && selectedSeller && (
+            <div className="seller-managed-owner-summary">
+              <span>Project owner</span>
+              <strong>{selectedSeller.businessName || selectedSeller.displayName || selectedSeller.name}</strong>
+              <small>Created on behalf of this Seller by Admin. Ownership cannot be changed here.</small>
+            </div>
+          )}
 
           {myProjects.length === 0 ? (
             <div className="seller-empty-state">
@@ -477,9 +680,6 @@ function SellerDashboard({
               <div className="seller-empty-list">
                 {onboardingItems.map((item) => <span key={item}>{item}</span>)}
               </div>
-              <button type="button" className="btn-primary" onClick={() => setActiveTab('add')}>
-                <Plus size={16} /> Create first project
-              </button>
             </div>
           ) : (
             <div className="seller-project-grid">
@@ -490,8 +690,8 @@ function SellerDashboard({
                       <h4>{project.name}</h4>
                       <p><MapPin size={14} /> {project.village} {project.area ? `• ${project.area}` : ''}</p>
                     </div>
-                    <span className={`badge ${getProjectBadgeClass(project.status)}`}>
-                      {formatProjectStatus(project.status)}
+                    <span className={`badge ${getProjectBadgeClass(project)}`}>
+                      {formatProjectStatus(project)}
                     </span>
                   </div>
 
@@ -516,7 +716,8 @@ function SellerDashboard({
 
                   <div className="seller-project-tags">
                     {project.developer && <span>Projected by {project.developer}</span>}
-                    {project.naPlot && <span>NA Certified</span>}
+                    <span>{getLandZoneLabel(project)}</span>
+                    <span>{getNaStatusLabel(project)}</span>
                     {project.bankLoan && <span>Bank Loan Ready</span>}
                     {formatCashback(project) && <span>{formatCashback(project)}</span>}
                     {normalizeAmenities(project.amenities).slice(0, 2).map((item) => <span key={item}>{item}</span>)}
@@ -555,6 +756,14 @@ function SellerDashboard({
             <span className="seller-muted-chip">Required fields marked by context</span>
           </div>
 
+          {isAdminView && selectedSeller && (
+            <div className="seller-managed-owner-summary">
+              <span>Project owner</span>
+              <strong>{selectedSeller.businessName || selectedSeller.displayName || selectedSeller.name}</strong>
+              <small>Created on behalf of this Seller by Admin. Ownership cannot be changed here.</small>
+            </div>
+          )}
+
           <div className="seller-form-section">
             <h4>Basic details</h4>
             <div className="seller-form-grid">
@@ -574,11 +783,32 @@ function SellerDashboard({
                 <span>Projected by</span>
                 <input type="text" className="form-input" disabled value={newProject.developer} />
               </label>
+              <label className="seller-field">
+                <span>Land zone</span>
+                <select className="form-input" required value={newProject.landZone} onChange={(e) => setNewProject({ ...newProject, landZone: e.target.value })}>
+                  {LAND_ZONE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <small>Choose the statutory zoning classification for the land.</small>
+              </label>
+              <label className="seller-field">
+                <span>NA status</span>
+                <select className="form-input" required value={newProject.naStatus} onChange={(e) => setNewProject({ ...newProject, naStatus: e.target.value })}>
+                  {NA_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <small>NA approval is tracked separately from the land zone.</small>
+              </label>
             </div>
           </div>
 
           <div className="seller-form-section">
             <h4>Location and pricing</h4>
+            <ProjectLocationPicker
+              latitude={newProject.latitude}
+              longitude={newProject.longitude}
+              onChange={({ latitude, longitude }) => setNewProject((current) => ({ ...current, latitude, longitude }))}
+              layoutPolygon={newProject.layoutPolygon}
+              onLayoutChange={(geometry) => setNewProject((current) => ({ ...current, ...geometry }))}
+            />
             <div className="seller-form-grid">
               <label className="seller-field">
                 <span>Latitude</span>
@@ -591,10 +821,6 @@ function SellerDashboard({
               <label className="seller-field">
                 <span>Starting price (INR)</span>
                 <input type="number" className="form-input" value={newProject.startingPrice} onChange={(e) => setNewProject({ ...newProject, startingPrice: e.target.value })} />
-              </label>
-              <label className="seller-field">
-                <span>Price per sq.ft</span>
-                <input type="number" className="form-input" value={newProject.pricePerSqFt} onChange={(e) => setNewProject({ ...newProject, pricePerSqFt: e.target.value })} />
               </label>
               <label className="seller-field">
                 <span>Distance from Chakan circle</span>
@@ -619,16 +845,23 @@ function SellerDashboard({
                 <input type="number" className="form-input" value={newProject.remainingPlots} onChange={(e) => setNewProject({ ...newProject, remainingPlots: e.target.value })} />
               </label>
               <label className="seller-field">
-                <span>Hero image URL</span>
-                <input type="url" className="form-input" value={newProject.heroImage} onChange={(e) => setNewProject({ ...newProject, heroImage: e.target.value })} />
+                <span>Minimum plot area (sq.ft.)</span>
+                <input type="number" min="0" className="form-input" value={newProject.sizeMin} onChange={(e) => setNewProject({ ...newProject, sizeMin: e.target.value })} />
+                <small>1 Guntha equals 900 sq.ft.</small>
               </label>
               <label className="seller-field">
-                <span>Thumbnail URL</span>
-                <input type="url" className="form-input" value={newProject.thumbnail} onChange={(e) => setNewProject({ ...newProject, thumbnail: e.target.value })} />
+                <span>Maximum plot area (sq.ft.)</span>
+                <input type="number" min="0" className="form-input" value={newProject.sizeMax} onChange={(e) => setNewProject({ ...newProject, sizeMax: e.target.value })} />
               </label>
               <label className="seller-field">
-                <span>Layout plan URL</span>
-                <input type="url" className="form-input" value={newProject.layoutPlanUrl} onChange={(e) => setNewProject({ ...newProject, layoutPlanUrl: e.target.value })} />
+                <span>Hero image</span>
+                <input type="file" className="form-input seller-document-file" accept="image/jpeg,image/png,image/webp" disabled={mediaUploading === 'heroImage'} onChange={(event) => handleMediaUpload(event.target.files?.[0], 'heroImage')} />
+                <small>{mediaUploading === 'heroImage' ? 'Uploading…' : newProject.heroImageMetadata?.fileName || 'JPG, PNG, or WebP · maximum 10 MB.'}</small>
+              </label>
+              <label className="seller-field">
+                <span>Card thumbnail</span>
+                <input type="file" className="form-input seller-document-file" accept="image/jpeg,image/png,image/webp" disabled={mediaUploading === 'thumbnail'} onChange={(event) => handleMediaUpload(event.target.files?.[0], 'thumbnail')} />
+                <small>{mediaUploading === 'thumbnail' ? 'Uploading…' : newProject.thumbnailMetadata?.fileName || 'Optional card image · maximum 10 MB.'}</small>
               </label>
               <label className="seller-field seller-field-full">
                 <span>Amenities</span>
@@ -645,9 +878,9 @@ function SellerDashboard({
             <h4>Business details</h4>
             <div className="seller-form-grid">
               <label className="seller-field">
-                <span>Cashback amount</span>
+                <span>Cashback per Guntha</span>
                 <input type="number" min="0" step="1" inputMode="numeric" className="form-input" placeholder="₹ 25,000" value={newProject.cashbackAmount} onChange={(e) => setNewProject({ ...newProject, cashbackAmount: e.target.value })} />
-                <small>Enter the fixed cashback amount offered for this project.</small>
+                <small>Enter the fixed cashback rate offered per 900 sq.ft. (1 Guntha).</small>
               </label>
               <label className="seller-field">
                 <span>WhatsApp number</span>
@@ -670,12 +903,22 @@ function SellerDashboard({
                 <input type="text" className="form-input" value={newProject.reraNumber} onChange={(e) => setNewProject({ ...newProject, reraNumber: e.target.value })} />
               </label>
             </div>
+            {mediaError && <p className="seller-document-error" role="alert">{mediaError}</p>}
           </div>
 
           <div className="seller-form-section">
             <h4>Project documents</h4>
-            <p className="seller-section-copy">Add document links for review. Newly added documents remain pending until Druvio verifies them.</p>
+            <p className="seller-section-copy">Upload legal and project files securely. Every document remains pending until Druvio verifies it.</p>
             <div className="seller-form-grid">
+              <label className="seller-field seller-field-full">
+                <span>Approved Layout document</span>
+                <input type="file" className="form-input seller-document-file" accept="application/pdf,image/jpeg,image/png" disabled={documentUploading} onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) handleDocumentUpload(file, 'approved_layout');
+                  event.target.value = '';
+                }} />
+                <small>Upload the project layout as PDF, JPG, or PNG. Druvio verification is required before Buyer visibility.</small>
+              </label>
               <label className="seller-field">
                 <span>Document type</span>
                 <select className="form-input" value={documentDraft.type} onChange={(event) => setDocumentDraft({ ...documentDraft, type: event.target.value })}>
@@ -683,32 +926,46 @@ function SellerDashboard({
                 </select>
               </label>
               <label className="seller-field">
-                <span>Document URL</span>
-                <input type="url" className="form-input" placeholder="https://..." value={documentDraft.url} onChange={(event) => setDocumentDraft({ ...documentDraft, url: event.target.value })} />
+                <span>Document file</span>
+                <input type="file" className="form-input seller-document-file" accept="application/pdf,image/jpeg,image/png" onChange={(event) => {
+                  const file = event.target.files?.[0] || null;
+                  setDocumentDraft((current) => ({
+                    ...current,
+                    file,
+                    previewUrl: file && getDocumentContentType(file).startsWith('image/') ? URL.createObjectURL(file) : ''
+                  }));
+                }} />
+                <small>PDF, JPG, or PNG · maximum 15 MB.</small>
               </label>
             </div>
+            {documentDraft.file && (
+              <div className="seller-document-draft-preview">
+                <span className="seller-document-preview" aria-hidden="true">
+                  {documentDraft.previewUrl ? <img src={documentDraft.previewUrl} alt="" /> : <b>PDF</b>}
+                </span>
+                <span><strong>{documentDraft.file.name}</strong><small>Ready to upload as {getProjectDocumentLabel(documentDraft.type)}.</small></span>
+              </div>
+            )}
+            {documentError && <p className="seller-document-error" role="alert">{documentError}</p>}
             <div className="seller-form-actions">
               <button
                 type="button"
                 className="btn-secondary"
-                disabled={!documentDraft.url.trim()}
-                onClick={() => {
-                  setNewProject({
-                    ...newProject,
-                    documents: [...newProject.documents, { type: documentDraft.type, url: documentDraft.url.trim(), status: 'pending' }]
-                  });
-                  setDocumentDraft({ type: PROJECT_DOCUMENT_OPTIONS[0].value, url: '' });
-                }}
+                disabled={!documentDraft.file || documentUploading}
+                onClick={() => handleDocumentUpload()}
               >
-                Add document
+                {documentUploading ? 'Uploading…' : 'Upload document'}
               </button>
             </div>
             {newProject.documents.length > 0 && (
               <div className="seller-document-list">
                 {newProject.documents.map((document, index) => (
                   <div key={`${document.type}-${index}`}>
-                    <span>{getProjectDocumentLabel(document.type)}</span>
-                    <button type="button" onClick={() => setNewProject({ ...newProject, documents: newProject.documents.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button>
+                    <span className="seller-document-preview" aria-hidden="true">
+                      {document.previewUrl ? <img src={document.previewUrl} alt="" /> : <b>PDF</b>}
+                    </span>
+                    <span><strong>{getProjectDocumentLabel(document.type)}</strong><small>{document.fileName || 'Uploaded document'} · Pending review</small></span>
+                    <button type="button" onClick={() => removeDraftDocument(document, index)}>Remove</button>
                   </div>
                 ))}
               </div>
@@ -716,13 +973,13 @@ function SellerDashboard({
           </div>
 
           <div className="seller-toggle-row">
-            <label><input type="checkbox" checked={newProject.naPlot} onChange={(e) => setNewProject({ ...newProject, naPlot: e.target.checked })} /> Collector NA certified</label>
             <label><input type="checkbox" checked={newProject.bankLoan} onChange={(e) => setNewProject({ ...newProject, bankLoan: e.target.checked })} /> Bank loan pre-approved</label>
             <label><input type="checkbox" checked={newProject.verified} onChange={(e) => setNewProject({ ...newProject, verified: e.target.checked })} /> Mark as verified</label>
           </div>
 
           <div className="seller-form-actions">
-            <button type="submit" className="btn-primary"><Plus size={16} /> Submit for approval</button>
+            {projectSubmitError && <p className="seller-document-error" role="alert">{projectSubmitError}</p>}
+            <button type="submit" className="btn-primary" disabled={Boolean(mediaUploading || documentUploading)}><Plus size={16} /> Submit for approval</button>
             <button type="button" className="btn-secondary" onClick={() => setNewProject(createProjectDraft(developerName))}>Reset</button>
           </div>
         </form>

@@ -45,7 +45,7 @@ The codebase follows a component-based React architecture with Firebase integrat
 - **Styling**: CSS with CSS variables and responsive design
 - **Database**: Firebase Firestore with real-time synchronization
 - **Authentication**: Firebase Auth (Google + Phone OTP)
-- **Map**: Leaflet.js with react-leaflet integration
+- **Map**: Google Maps JavaScript API with `AdvancedMarkerElement` and `MarkerClusterer`
 - **Service Worker**: PWA support for offline functionality
 - **Icons**: Lucide React for component icons
 

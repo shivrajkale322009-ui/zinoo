@@ -39,10 +39,22 @@ export const normalizeProjectDocuments = (project) => {
     }))
     .filter((document) => document.url)
     .map((document) => ({
+      id: document.id || null,
       type: PROJECT_DOCUMENT_TYPES[document.type] ? document.type : 'other',
       url: document.url,
-      status: document.status === 'verified' || document.verified === true ? 'verified' : 'pending',
-      updatedAt: document.updatedAt || document.verifiedAt || null
+      path: document.path || document.storagePath || '',
+      fileName: document.fileName || document.name || '',
+      contentType: document.contentType || '',
+      size: Number(document.size) || 0,
+      status: document.status === 'verified' || document.verified === true
+        ? 'verified'
+        : document.status === 'rejected'
+          ? 'rejected'
+          : 'pending',
+      uploadedAt: document.uploadedAt || null,
+      updatedAt: document.updatedAt || document.verifiedAt || document.reviewedAt || null,
+      reviewedAt: document.reviewedAt || document.verifiedAt || null,
+      reviewedBy: document.reviewedBy || null
     }));
 
   if (!normalized.some((document) => document.type === 'approved_layout') && typeof projectRecord.layoutPlanUrl === 'string' && projectRecord.layoutPlanUrl.trim()) {

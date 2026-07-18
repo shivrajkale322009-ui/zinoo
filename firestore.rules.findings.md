@@ -1,0 +1,25 @@
+## Firestore Rules Findings
+
+- Database target: `default`
+- Firestore edition: `ENTERPRISE`
+- Collections in active frontend flows:
+  - `users`
+  - `sellerRequests`
+  - `projects`
+  - `leads`
+  - `visits`
+  - `cashbacks`
+- Relevant live queries:
+  - `collection(db, 'sellerRequests')`
+  - `collection(db, 'users')`
+  - `query(collection(db, 'projects'), where('ownerId', '==', selectedSeller.id))`
+  - `query(collection(db, 'leads'), where('projectOwnerId', '==', selectedSeller.id))`
+  - `query(collection(db, 'visits'), where('projectOwnerId', '==', selectedSeller.id))`
+  - `query(collection(db, name), limit(500))` for admin reads
+  - `query(collection(db, 'projects'), where('status', '==', 'approved'))`
+  - `query(collection(db, name), where('createdBy', '==', user.uid))`
+  - `query(collection(db, name), where('projectOwnerId', '==', user.uid))`
+- Known compatibility issue:
+  - Frontend normalizes legacy user docs with `role: 'admin'` or `role: 'seller'`.
+  - Firestore rules only trusted `permissions.admin` and `permissions.seller`.
+  - Result: UI can render admin mode while Firestore denies admin-only collection reads.

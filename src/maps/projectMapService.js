@@ -11,6 +11,8 @@ import {
   deleteDoc 
 } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
+import { getProjectCoordinates, isProjectPublishable } from '../utils/projectVisibility';
+import { CHAKAN_LOCATION } from '../utils/chakanLocation';
 
 const projects = 'projects';
 const layouts = 'layouts';
@@ -43,8 +45,8 @@ const buildProjectPayload = (project = {}) => {
 
   return {
     ...project,
-    latitude: toRequiredNumber(project.latitude),
-    longitude: toRequiredNumber(project.longitude),
+    latitude: toRequiredNumber(project.latitude, CHAKAN_LOCATION.latitude),
+    longitude: toRequiredNumber(project.longitude, CHAKAN_LOCATION.longitude),
     priceFrom: priceValue,
     startingPrice: priceValue,
     remainingPlots: toOptionalNumber(project.remainingPlots),
@@ -65,16 +67,6 @@ export async function loadProjectLayout(layoutId) {
   const snapshot = await getDoc(doc(db, layouts, layoutId));
   if (!snapshot.exists()) throw new Error('This layout is no longer available.');
   return snapshot.data().polygonCoordinates || [];
-}
-
-export async function createMapProject(project) {
-  const reference = doc(collection(db, projects));
-  await setDoc(reference, {
-    ...buildProjectPayload(project),
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp()
-  });
-  return reference.id;
 }
 
 export async function createProjectLayout(projectId, layoutData) {
@@ -131,9 +123,29 @@ export async function updateProjectMarker(projectId, position) {
   });
 }
 
-export async function updateProjectDetails(projectId, projectData) {
+export async function updateProjectBoundary(projectId, geometry) {
   await updateDoc(doc(db, projects, projectId), {
-    ...buildProjectPayload(projectData),
+    layoutPolygon: geometry.layoutPolygon,
+    layoutCenter: geometry.layoutCenter,
+    layoutBounds: geometry.layoutBounds,
+    layoutAreaSqFt: geometry.layoutAreaSqFt,
+    updatedAt: serverTimestamp()
+  });
+}
+
+export async function updateProjectDetails(projectId, projectData) {
+  const { lastEditedAt: _lastEditedAt, ...payload } = projectData;
+  const adminAudit = payload.lastEditedByRole === 'admin'
+    ? {
+      lastEditedBy: payload.lastEditedBy || '',
+      lastEditedByRole: 'admin',
+      lastEditedAt: serverTimestamp()
+    }
+    : {};
+
+  await updateDoc(doc(db, projects, projectId), {
+    ...buildProjectPayload(payload),
+    ...adminAudit,
     updatedAt: serverTimestamp()
   });
 }
@@ -144,13 +156,17 @@ export async function deleteProject(projectId) {
 
 export async function loadProjectsInBounds(sw, ne) {
   const ref = collection(db, projects);
-  const q = query(
-    ref,
-    where('latitude', '>=', sw.lat),
-    where('latitude', '<=', ne.lat)
-  );
+  const q = query(ref, where('status', 'in', ['approved', 'Active']));
   const snapshot = await getDocs(q);
   return snapshot.docs
     .map(item => ({ id: item.id, ...item.data() }))
-    .filter(p => p.longitude >= sw.lng && p.longitude <= ne.lng);
+    .filter(isProjectPublishable)
+    .filter((project) => {
+      const position = getProjectCoordinates(project);
+      return position
+        && position.lat >= sw.lat
+        && position.lat <= ne.lat
+        && position.lng >= sw.lng
+        && position.lng <= ne.lng;
+    });
 }

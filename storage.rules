@@ -11,5 +11,25 @@ service firebase.storage {
       allow update: if false;
       allow delete: if request.auth != null && request.auth.uid == userId;
     }
+
+    match /project-documents/{uploaderId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.auth.uid == uploaderId
+        && request.resource.size <= 15 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|image/jpeg|image/png');
+      allow update: if false;
+      allow delete: if request.auth != null && request.auth.uid == uploaderId;
+    }
+
+    match /project-media/{uploaderId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.auth.uid == uploaderId
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/jpeg|image/png|image/webp');
+      allow update: if false;
+      allow delete: if request.auth != null && request.auth.uid == uploaderId;
+    }
   }
 }

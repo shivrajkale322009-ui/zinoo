@@ -13,6 +13,12 @@ This document tracks the current project status and records changes made to the 
 
 ## Recent Changes
 
+### July 18, 2026
+- Refined the Buyer workspace into Home, Map, Feed, and Cashback destinations.
+- Added a derived nearby-activity feed using existing approved project fields; no activity metrics are fabricated.
+- Added compact map Quick Peek, zoom-state utilities, optional Discovery Mode, and deterministic natural-language project filtering.
+- Kept the existing `projects` Firestore collection as the discovery source of truth; no indexes or environment variables were added.
+
 ### July 13, 2026
 - Created comprehensive PRD.md with product requirements
 - Created ROADMAP.md with detailed development milestones

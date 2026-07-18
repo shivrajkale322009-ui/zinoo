@@ -1,5 +1,6 @@
-import React, { useContext, useEffect, useState, useCallback } from 'react';
+import React, { useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import {
   addDoc,
   collection,
@@ -19,16 +20,18 @@ import SellerDashboard from './components/SellerDashboard';
 import AdminPanel from './components/AdminPanel';
 import LoginScreen from './components/LoginScreen';
 import ProfileDropdown from './components/ProfileDropdown';
-import { auth, db } from './firebaseConfig';
+import { auth, db, functions } from './firebaseConfig';
 import {
   canAccessView,
   DEFAULT_PERMISSIONS,
   getDefaultView,
+  isApprovedSellerAccount,
   normalizePermissions
 } from './utils/permissions';
 import ThemeContext from './components/ThemeProvider';
 
 const collections = ['projects', 'leads', 'visits', 'cashbacks'];
+const MANAGED_SELLER_CONTEXT_KEY = 'druvio-managed-seller-context';
 
 function App() {
   const { isDarkMode, toggleTheme } = useContext(ThemeContext);
@@ -40,6 +43,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [data, setData] = useState({ projects: [], leads: [], visits: [], cashbacks: [] });
+  const restoredManagedSellerRef = useRef(false);
 
   const handleViewChange = useCallback((nextView) => {
     if (!permissions) return;
@@ -50,8 +54,31 @@ function App() {
     setCurrentView(resolvedView);
     if (resolvedView !== 'seller') {
       setSelectedSeller(null);
+      window.sessionStorage.removeItem(MANAGED_SELLER_CONTEXT_KEY);
     }
   }, [permissions]);
+
+  useEffect(() => {
+    if (restoredManagedSellerRef.current || !user || !permissions?.admin || selectedSeller) return;
+    restoredManagedSellerRef.current = true;
+    const stored = window.sessionStorage.getItem(MANAGED_SELLER_CONTEXT_KEY);
+    if (!stored) return;
+    let context;
+    try { context = JSON.parse(stored); } catch { window.sessionStorage.removeItem(MANAGED_SELLER_CONTEXT_KEY); return; }
+    if (!context?.sellerUid || context.enteredByAdminUid !== user.uid) {
+      window.sessionStorage.removeItem(MANAGED_SELLER_CONTEXT_KEY);
+      return;
+    }
+    getDoc(doc(db, 'users', context.sellerUid)).then((snapshot) => {
+      const seller = snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null;
+      if (!isApprovedSellerAccount(seller)) {
+        window.sessionStorage.removeItem(MANAGED_SELLER_CONTEXT_KEY);
+        return;
+      }
+      setSelectedSeller({ ...seller, uid: seller.uid || seller.id, initialSellerTab: context.initialSellerTab || 'listings' });
+      setCurrentView('seller');
+    }).catch(() => window.sessionStorage.removeItem(MANAGED_SELLER_CONTEXT_KEY));
+  }, [user, permissions, selectedSeller]);
 
   useEffect(() => {
     let unsubscribeProfile = null;
@@ -162,7 +189,7 @@ function App() {
       // Buyer mode reuses the existing buyer app with approved listings plus the
       // signed-in account's own activity records.
       if (currentView === 'buyer') {
-        if (name === 'projects') return query(ref, where('status', '==', 'approved'));
+        if (name === 'projects') return query(ref, where('status', 'in', ['approved', 'Active']));
         return query(ref, where('createdBy', '==', user.uid));
       }
 
@@ -205,12 +232,51 @@ function App() {
   const updateLead = (lead) => updateRecord('leads', lead.id, lead);
   const addVisit = (visit) => createRecord('visits', visit);
   const addCashback = (cashback) => createRecord('cashbacks', cashback);
-  const addProject = (project) => createRecord('projects', {
-    ...project,
-    ownerId: selectedSeller?.id || user.uid,
-    status: permissions?.admin && currentView === 'seller' && selectedSeller ? 'approved' : 'pending',
-    createdByAdmin: Boolean(permissions?.admin && currentView === 'seller' && selectedSeller)
-  });
+  const addProject = async (project) => {
+    const adminCreatingForSeller = Boolean(permissions?.admin && currentView === 'seller');
+    let authoritativeSeller = selectedSeller;
+    if (adminCreatingForSeller) {
+      if (!selectedSeller?.id) {
+        const ownershipError = new Error('Choose an approved Seller before creating this project.');
+        setError(ownershipError.message);
+        throw ownershipError;
+      }
+      const sellerSnapshot = await getDoc(doc(db, 'users', selectedSeller.id));
+      authoritativeSeller = sellerSnapshot.exists() ? { id: sellerSnapshot.id, ...sellerSnapshot.data() } : null;
+      if (!isApprovedSellerAccount(authoritativeSeller)) {
+        const ownershipError = new Error('This Seller is no longer approved to own new projects.');
+        setError(ownershipError.message);
+        throw ownershipError;
+      }
+    }
+    if (adminCreatingForSeller) {
+      const result = await httpsCallable(functions, 'createProjectForSeller')({
+        sellerUid: authoritativeSeller.id,
+        projectData: project
+      });
+      return result.data;
+    }
+
+    const ownerId = user.uid;
+    return createRecord('projects', {
+      ...project,
+      ownerId,
+      sellerUid: ownerId,
+      status: 'pending',
+      createdBy: user.uid,
+      createdByRole: 'seller',
+      createdByAdmin: false,
+      createdOnBehalfOfSeller: false,
+      approvalStatus: 'pending',
+      reviewStatus: 'pending',
+      isApproved: false,
+      isPublished: false,
+      reviewedBy: null,
+      reviewedAt: null,
+      approvedAt: null,
+      publishedAt: null
+    });
+  };
   const updateProject = (project) => updateRecord('projects', project.id, project);
   const updateCashbackStatus = async (id, status) => {
     await updateRecord('cashbacks', id, { status });
@@ -233,10 +299,16 @@ function App() {
     handleViewChange('admin');
   }, [handleViewChange]);
 
-  const handleAdminSelectSeller = useCallback((seller) => {
-    setSelectedSeller({ ...seller, uid: seller.uid || seller.id });
+  const handleAdminSelectSeller = useCallback((seller, initialSellerTab = 'listings') => {
+    if (!isApprovedSellerAccount(seller)) {
+      setError('Only approved Seller accounts can own Admin-created projects.');
+      return;
+    }
+    const context = { sellerUid: seller.uid || seller.id, sellerName: seller.displayName || seller.name || '', businessName: seller.businessName || '', enteredByAdminUid: user.uid, initialSellerTab };
+    window.sessionStorage.setItem(MANAGED_SELLER_CONTEXT_KEY, JSON.stringify(context));
+    setSelectedSeller({ ...seller, uid: seller.uid || seller.id, initialSellerTab, managedSellerContext: context });
     setCurrentView('seller');
-  }, []);
+  }, [user]);
 
   const handleBackToAdmin = useCallback(() => {
     handleViewChange('admin');
@@ -270,6 +342,7 @@ function App() {
     ? (
       <AdminPanel
         projects={data.projects}
+        updateProject={updateProject}
         user={user}
         isDarkMode={isDarkMode}
         onThemeToggle={toggleTheme}
@@ -285,6 +358,7 @@ function App() {
           ? (
             <AdminPanel
               projects={data.projects}
+              updateProject={updateProject}
               user={user}
               initialTab="seller_selection"
               isDarkMode={isDarkMode}
@@ -298,6 +372,7 @@ function App() {
           : (
             <SellerDashboard
               {...data}
+              user={user}
               updateProject={updateProject}
               addProject={addProject}
               isAdminView={Boolean(permissions?.admin && selectedSeller)}

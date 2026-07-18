@@ -13,7 +13,9 @@ import {
   Store,
   Sun,
   User,
-  Users
+  Users,
+  FileText,
+  ExternalLink
 } from 'lucide-react';
 import {
   collection,
@@ -24,7 +26,10 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import EditProfileModal from './EditProfileModal';
 import { auth, db, functions } from '../firebaseConfig';
-import { normalizePermissions } from '../utils/permissions';
+import { isApprovedSellerAccount, normalizePermissions } from '../utils/permissions';
+import { isProjectPublishable } from '../utils/projectVisibility';
+import { getLandZoneLabel, getNaStatusLabel } from '../utils/projectLand';
+import { getProjectDocumentLabel, normalizeProjectDocuments } from '../utils/projectDocuments';
 
 const getName = (account) => account?.displayName || account?.name || account?.businessName || account?.userName || account?.email || 'Unknown';
 
@@ -35,6 +40,7 @@ const getProjectOwnerName = (project, sellers) => {
 
 function AdminPanel({
   projects,
+  updateProject,
   user,
   isDarkMode,
   onThemeToggle,
@@ -80,7 +86,7 @@ function AdminPanel({
 
         const sellerList = accounts.filter((account) => {
           const permissions = normalizePermissions(account.permissions);
-          return permissions.seller && !permissions.admin;
+          return permissions.seller && !permissions.admin && isApprovedSellerAccount(account);
         });
 
         const buyerList = accounts.filter((account) => {
@@ -108,8 +114,8 @@ function AdminPanel({
     return () => clearTimeout(timeout);
   }, [statusMessage, errorMessage]);
 
-  const approvedProjects = useMemo(
-    () => projects.filter((project) => project.status === 'approved').length,
+  const approvedProjectList = useMemo(
+    () => projects.filter(isProjectPublishable),
     [projects]
   );
   const pendingProjects = useMemo(
@@ -216,6 +222,51 @@ function AdminPanel({
     } finally {
       setWorkingKey('');
     }
+  };
+
+  const handleDocumentDecision = async (project, documentIndex, status) => {
+    const actionKey = `document-${project.id}-${documentIndex}-${status}`;
+    const sourceDocuments = Array.isArray(project.documents) && project.documents.length
+      ? project.documents
+      : normalizeProjectDocuments(project);
+    setWorkingKey(actionKey);
+    resetFeedback();
+    try {
+      await updateProject({
+        ...project,
+        documents: sourceDocuments.map((document, index) => index === documentIndex ? {
+          ...document,
+          status,
+          reviewedAt: new Date().toISOString(),
+          reviewedBy: user.uid,
+          verifiedAt: status === 'verified' ? new Date().toISOString() : null
+        } : document)
+      });
+      setStatusMessage(status === 'verified' ? 'Document verified successfully.' : 'Document rejected.');
+    } catch (error) {
+      console.error('Failed to review project document:', error);
+      setErrorMessage('Unable to update the document review status.');
+    } finally {
+      setWorkingKey('');
+    }
+  };
+
+  const renderDocumentReview = (project) => {
+    const documents = normalizeProjectDocuments(project);
+    if (documents.length === 0) return <span className="admin-document-empty">No documents uploaded</span>;
+    return (
+      <div className="admin-document-review-list">
+        {documents.map((document, index) => (
+          <div key={`${document.id || document.type}-${index}`} className="admin-document-review-row">
+            <FileText size={15} />
+            <span><strong>{getProjectDocumentLabel(document.type)}</strong><small className={`document-review-status ${document.status}`}>{document.status}</small></span>
+            <a href={document.url} target="_blank" rel="noreferrer" aria-label={`Open ${getProjectDocumentLabel(document.type)}`}><ExternalLink size={14} /></a>
+            <button type="button" disabled={workingKey.startsWith(`document-${project.id}-${index}`) || document.status === 'verified'} onClick={() => handleDocumentDecision(project, index, 'verified')}>Verify</button>
+            <button type="button" className="danger" disabled={workingKey.startsWith(`document-${project.id}-${index}`) || document.status === 'rejected'} onClick={() => handleDocumentDecision(project, index, 'rejected')}>Reject</button>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   const openSellerWorkspace = (seller) => {
@@ -376,7 +427,7 @@ function AdminPanel({
               </article>
               <article className="admin-metric-card">
                 <span>Approved properties</span>
-                <strong>{approvedProjects}</strong>
+                <strong>{approvedProjectList.length}</strong>
               </article>
               <article className="admin-metric-card">
                 <span>Pending requests</span>
@@ -519,12 +570,8 @@ function AdminPanel({
                             <span className="badge badge-success">Active</span>
                           </td>
                           <td>
-                            <button
-                              type="button"
-                              className="btn-secondary seller-inline-button"
-                              onClick={() => openSellerWorkspace(seller)}
-                            >
-                              <Users size={14} /> Open Seller Side
+                            <button type="button" className="btn-secondary seller-inline-button" onClick={() => openSellerWorkspace(seller)}>
+                              <Users size={14} /> Go to Seller Side
                             </button>
                           </td>
                         </tr>
@@ -602,6 +649,7 @@ function AdminPanel({
         )}
 
         {activeTab === 'listings' && (
+          <div className="admin-panel-stack">
           <div className="admin-panel-section">
             <div className="table-container">
               <table className="dash-table">
@@ -610,6 +658,8 @@ function AdminPanel({
                     <th>Project</th>
                     <th>Projected by</th>
                     <th>Village</th>
+                    <th>Land Zone</th>
+                    <th>NA Status</th>
                     <th>Status</th>
                     <th>Actions</th>
                   </tr>
@@ -617,7 +667,7 @@ function AdminPanel({
                 <tbody>
                   {pendingProjects.length === 0 ? (
                     <tr>
-                      <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No property listings are waiting for approval.</td>
+                      <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No property listings are waiting for approval.</td>
                     </tr>
                   ) : (
                     pendingProjects.map((project) => {
@@ -628,9 +678,12 @@ function AdminPanel({
                           <td>
                             <strong>{project.name}</strong>
                             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>{project.area || 'Area not provided'}</div>
+                            {renderDocumentReview(project)}
                           </td>
                           <td>{getProjectOwnerName(project, sellers)}</td>
                           <td>{project.village || 'N/A'}</td>
+                          <td>{getLandZoneLabel(project)}</td>
+                          <td>{getNaStatusLabel(project)}</td>
                           <td><span className="badge badge-warning">Pending Review</span></td>
                           <td>
                             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -668,6 +721,33 @@ function AdminPanel({
                 </tbody>
               </table>
             </div>
+          </div>
+          <div className="admin-panel-section">
+            <div className="admin-panel-section-head">
+              <div>
+                <span className="admin-panel-kicker">Approved</span>
+                <h3>Approved projects</h3>
+              </div>
+              <span>{approvedProjectList.length}</span>
+            </div>
+            <div className="table-container">
+              <table className="dash-table">
+                <thead><tr><th>Project</th><th>Projected by</th><th>Location</th><th>Land Zone</th><th>NA Status</th><th>Status</th></tr></thead>
+                <tbody>
+                  {approvedProjectList.map((project) => (
+                    <tr key={project.id}>
+                      <td><strong>{project.name || 'Unnamed project'}</strong>{renderDocumentReview(project)}</td>
+                      <td>{getProjectOwnerName(project, sellers)}</td>
+                      <td>{[project.village, project.area].filter(Boolean).join(', ') || 'Location not provided'}</td>
+                      <td>{getLandZoneLabel(project)}</td>
+                      <td>{getNaStatusLabel(project)}</td>
+                      <td><span className="badge badge-success">Approved</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
           </div>
         )}
 

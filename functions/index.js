@@ -27,6 +27,86 @@ const getPermissions = (profile = {}) => {
   };
 };
 
+const isApprovedSeller = (profile = {}) => {
+  const permissions = getPermissions(profile);
+  const statuses = [profile.status, profile.sellerStatus, profile.approvalStatus, profile.reviewStatus]
+    .map((value) => String(value || '').trim().toLowerCase());
+  return permissions.seller && !permissions.admin
+    && !statuses.some((status) => ['pending', 'rejected', 'suspended', 'disabled', 'inactive', 'revoked'].includes(status));
+};
+
+const assertValidProjectPayload = (project = {}) => {
+  if (!project || typeof project !== 'object' || Array.isArray(project)) {
+    throw new HttpsError('invalid-argument', 'A project payload is required.');
+  }
+  if (typeof project.name !== 'string' || project.name.trim().length < 2) {
+    throw new HttpsError('invalid-argument', 'A valid project name is required.');
+  }
+  const latitude = Number(project.latitude);
+  const longitude = Number(project.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+    throw new HttpsError('invalid-argument', 'A valid project location is required.');
+  }
+  const totalPlots = Number(project.totalPlots);
+  const remainingPlots = Number(project.remainingPlots);
+  if (!Number.isFinite(totalPlots) || totalPlots < 0 || !Number.isFinite(remainingPlots) || remainingPlots < 0 || remainingPlots > totalPlots) {
+    throw new HttpsError('invalid-argument', 'Available plots must be between zero and total plots.');
+  }
+};
+
+exports.createProjectForSeller = onCall(callableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in to create a project for a Seller.');
+  const { sellerUid, projectData } = request.data || {};
+  if (typeof sellerUid !== 'string' || !sellerUid || sellerUid.includes('/')) {
+    throw new HttpsError('invalid-argument', 'A valid Seller is required.');
+  }
+  assertValidProjectPayload(projectData);
+
+  const adminRef = db.collection('users').doc(request.auth.uid);
+  const sellerRef = db.collection('users').doc(sellerUid);
+  const projectRef = db.collection('projects').doc();
+
+  await db.runTransaction(async (transaction) => {
+    const [adminSnapshot, sellerSnapshot] = await Promise.all([transaction.get(adminRef), transaction.get(sellerRef)]);
+    if (!adminSnapshot.exists || !getPermissions(adminSnapshot.data()).admin) {
+      throw new HttpsError('permission-denied', 'Only Admin users can create projects for Sellers.');
+    }
+    if (!sellerSnapshot.exists || !isApprovedSeller(sellerSnapshot.data())) {
+      throw new HttpsError('failed-precondition', 'This Seller is not approved to own projects.');
+    }
+
+    const { ownerId, sellerUid: ignoredSellerUid, createdBy, createdByRole, createdByAdmin, createdForSellerUid,
+      createdOnBehalfOfSeller, status, approvalStatus, reviewStatus, reviewedBy, reviewedAt, approvedAt,
+      publishedAt, isApproved, isPublished, ...safeProjectData } = projectData;
+    const now = FieldValue.serverTimestamp();
+    transaction.create(projectRef, {
+      ...safeProjectData,
+      name: safeProjectData.name.trim(),
+      ownerId: sellerUid,
+      sellerUid,
+      createdBy: request.auth.uid,
+      createdByRole: 'admin',
+      createdByAdmin: true,
+      createdByAdminUid: request.auth.uid,
+      createdForSellerUid: sellerUid,
+      createdOnBehalfOfSeller: true,
+      status: 'approved',
+      approvalStatus: 'approved',
+      reviewStatus: 'approved',
+      isApproved: true,
+      isPublished: true,
+      reviewedBy: request.auth.uid,
+      reviewedAt: now,
+      approvedAt: now,
+      publishedAt: now,
+      createdAt: now,
+      updatedAt: now
+    });
+  });
+
+  return { projectId: projectRef.id, status: 'approved' };
+});
+
 exports.reviewSellerRequest = onCall(callableOptions, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'You must be signed in to review seller requests.');

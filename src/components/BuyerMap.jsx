@@ -1,6 +1,8 @@
 import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import { getProjectCoordinates, isProjectPublishable } from '../utils/projectVisibility';
+import { CHAKAN_LOCATION } from '../utils/chakanLocation';
 
 // Fix for default Leaflet icon references in bundlers
 delete L.Icon.Default.prototype._getIconUrl;
@@ -21,18 +23,17 @@ function ChangeMapView({ center, zoom }) {
 
 function BuyerMap({ projects, onSelectProject, selectedProject }) {
   // Chakan coordinates
-  const chakanCenter = [18.7889, 73.8568];
+  const chakanCenter = [CHAKAN_LOCATION.latitude, CHAKAN_LOCATION.longitude];
   
   // Decide map center
-  const mapCenter = selectedProject && selectedProject.coords 
-    ? selectedProject.coords 
-    : chakanCenter;
+  const selectedCoordinates = getProjectCoordinates(selectedProject);
+  const mapCenter = selectedCoordinates ? [selectedCoordinates.lat, selectedCoordinates.lng] : chakanCenter;
     
   const mapZoom = selectedProject ? 14 : 12;
 
   // Custom marker creation
   const createCustomIcon = (project) => {
-    const isActive = project.status === 'Active';
+    const isActive = isProjectPublishable(project);
     const markerColorClass = isActive ? 'marker-active' : 'marker-sold';
     const pulseHtml = isActive ? '<div class="marker-pulse"></div>' : '';
 
@@ -67,10 +68,13 @@ function BuyerMap({ projects, onSelectProject, selectedProject }) {
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
         />
 
-        {projects.map((project) => (
+        {projects.filter(isProjectPublishable).map((project) => {
+          const coordinates = getProjectCoordinates(project);
+          if (!coordinates) return null;
+          return (
           <Marker
             key={project.id}
-            position={project.coords}
+            position={[coordinates.lat, coordinates.lng]}
             icon={createCustomIcon(project)}
             eventHandlers={{
               click: () => {
@@ -108,7 +112,8 @@ function BuyerMap({ projects, onSelectProject, selectedProject }) {
               </div>
             </Popup>
           </Marker>
-        ))}
+          );
+        })}
       </MapContainer>
 
       {/* Custom Zoom Control Indicator on Map */}
