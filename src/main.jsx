@@ -13,9 +13,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 // Register Custom PWA Service Worker
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
       .then((registration) => {
         console.log('Druvio Service Worker registered with scope:', registration.scope);
+        return registration.update();
       })
       .catch((error) => {
         console.error('Druvio Service Worker registration failed:', error);

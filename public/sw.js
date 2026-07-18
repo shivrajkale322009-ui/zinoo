@@ -1,6 +1,5 @@
-const CACHE_NAME = 'Druvio-cache-v1';
+const CACHE_NAME = 'druvio-app-shell-v2';
 const ASSETS_TO_CACHE = [
-  '/',
   '/index.html',
   '/manifest.json',
   '/icon.svg',
@@ -29,39 +28,30 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    }).then(() => self.clients.claim())
+    })
+      .then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then((clients) => Promise.all(clients.map((client) => client.navigate(client.url))))
   );
 });
 
 // Fetch Requests
 self.addEventListener('fetch', (event) => {
-  // Let the browser handle external requests like maps, google fonts, etc. dynamically,
-  // but cache-first for local static assets
+  if (event.request.method !== 'GET') return;
+
   const url = new URL(event.request.url);
-  if (ASSETS_TO_CACHE.includes(url.pathname) || url.pathname === '/') {
+  if (url.origin !== self.location.origin) return;
+
+  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
     event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        return fetch(event.request).then((response) => {
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
-          }
-          const responseToCache = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
-          return response;
-        });
-      })
+      fetch(event.request, { cache: 'no-store' }).catch(() => caches.match('/index.html'))
     );
-  } else {
-    // Network-first policy for dynamic APIs or maps
+    return;
+  }
+
+  if (ASSETS_TO_CACHE.includes(url.pathname)) {
     event.respondWith(
-      fetch(event.request).catch(() => {
-        return caches.match(event.request);
-      })
+      caches.match(event.request).then((cachedResponse) => cachedResponse || fetch(event.request))
     );
   }
 });
