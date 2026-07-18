@@ -26,7 +26,6 @@ import {
   getDefaultView,
   normalizePermissions
 } from './utils/permissions';
-import { withTimeout } from './utils/async';
 import ThemeContext from './components/ThemeProvider';
 
 const collections = ['projects', 'leads', 'visits', 'cashbacks'];
@@ -56,9 +55,28 @@ function App() {
 
   useEffect(() => {
     let unsubscribeProfile = null;
+    let profileLoadTimer = null;
+
+    const clearProfileLoadTimer = () => {
+      if (profileLoadTimer) {
+        window.clearTimeout(profileLoadTimer);
+        profileLoadTimer = null;
+      }
+    };
+
+    const useBuyerFallback = (message) => {
+      clearProfileLoadTimer();
+      setPermissions({ ...DEFAULT_PERMISSIONS });
+      setProfileData(null);
+      setCurrentView('buyer');
+      setSelectedSeller(null);
+      setError(message);
+      setLoading(false);
+    };
 
     const unsubscribeAuth = onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
+      clearProfileLoadTimer();
       if (!nextUser) {
         setProfileData(null);
         setPermissions(null);
@@ -72,52 +90,55 @@ function App() {
         return;
       }
 
+      setLoading(true);
+      profileLoadTimer = window.setTimeout(() => {
+        console.error(`Timed out loading profile for UID: ${nextUser.uid}`);
+        useBuyerFallback('Your account profile took too long to load. Buyer access is available while you retry.');
+      }, 12000);
+
       unsubscribeProfile = onSnapshot(
         doc(db, 'users', nextUser.uid),
         (profile) => {
-          if (!profile.exists()) {
-            console.error(`User profile not found for UID: ${nextUser.uid}`);
-            setPermissions(DEFAULT_PERMISSIONS);
-            setProfileData(null);
-            setCurrentView('buyer');
-            setSelectedSeller(null);
-            setError('We could not load your profile, so you have been signed in as a buyer.');
-            setLoading(false);
-            return;
-          }
-
-          const profileData = profile.data();
-          const userPermissions = normalizePermissions(profileData.permissions ?? profileData);
-
-          setProfileData(profileData);
-          setPermissions(userPermissions);
-          setCurrentView((current) => {
-            if (canAccessView(userPermissions, current)) {
-              return current;
+          clearProfileLoadTimer();
+          try {
+            if (!profile.exists()) {
+              console.error(`User profile not found for UID: ${nextUser.uid}`);
+              useBuyerFallback('We could not load your profile, so you have been signed in as a buyer.');
+              return;
             }
-            return getDefaultView(userPermissions);
-          });
-          
-          if (!userPermissions.admin && !userPermissions.seller) {
-            setSelectedSeller(null);
+
+            const nextProfileData = profile.data() || {};
+            const userPermissions = normalizePermissions(nextProfileData.permissions ?? nextProfileData);
+
+            setProfileData(nextProfileData);
+            setPermissions(userPermissions);
+            setCurrentView((current) => {
+              if (canAccessView(userPermissions, current)) {
+                return current;
+              }
+              return getDefaultView(userPermissions);
+            });
+
+            if (!userPermissions.admin && !userPermissions.seller) {
+              setSelectedSeller(null);
+            }
+            setError('');
+            setLoading(false);
+          } catch (profileError) {
+            console.error('Unable to process account profile', profileError);
+            useBuyerFallback('We could not process your profile, so you have been signed in as a buyer.');
           }
-          setLoading(false);
         },
         (err) => {
           console.error('PROFILE LOAD FAILED', err);
-          alert(err?.message);
-          setPermissions(DEFAULT_PERMISSIONS);
-          setProfileData(null);
-          setCurrentView('buyer');
-          setSelectedSeller(null);
-          setError('We could not load your profile, so you have been signed in as a buyer.');
-          setLoading(false);
+          useBuyerFallback('We could not load your profile, so you have been signed in as a buyer.');
         }
       );
     });
 
     return () => {
       unsubscribeAuth();
+      clearProfileLoadTimer();
       if (unsubscribeProfile) unsubscribeProfile();
     };
   }, []);
