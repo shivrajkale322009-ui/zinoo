@@ -32,17 +32,3 @@ export function deriveNearbyUpdates(projects = [], maxItems = 8) {
     .sort((left, right) => right.sortValue - left.sortValue)
     .slice(0, maxItems);
 }
-
-export function getDailyActivitySummary(projects = []) {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const sinceToday = (value) => dateValue(value) >= todayStart.getTime();
-  const newProjects = projects.filter((project) => sinceToday(project.createdAt)).length;
-  const updatedProjects = projects.filter((project) => sinceToday(project.updatedAt)).length;
-  const verifiedProjects = projects.filter((project) => getVerifiedDocumentCount(project) > 0 && sinceToday(project.reviewedAt || project.updatedAt)).length;
-  return [
-    newProjects && { label: 'New projects', value: newProjects },
-    updatedProjects && { label: 'Project updates', value: updatedProjects },
-    verifiedProjects && { label: 'Verification updates', value: verifiedProjects }
-  ].filter(Boolean);
-}

@@ -17,7 +17,7 @@ import {
 } from './projectMapService';
 import { buildProjectGeometry, normalizeProjectPolygon } from '../utils/projectGeometry';
 import { CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
-import { getMarkerVisualState } from './mapZoom';
+import { calculateMarkerPriority, getProjectMarkerState, MAP_MARKER_ZOOM, MARKER_COLLISION_PIXELS } from './mapZoom';
 import { createProjectPopupElement } from './projectPopupOverlay';
 import './mapScreen.css';
 
@@ -25,21 +25,34 @@ const DEFAULT_CENTER = CHAKAN_MAP_POSITION;
 const DEFAULT_ZOOM = 12;
 const pointFor = (project) => getProjectCoordinates(project);
 
-const priceLabel = (value) =>
-  value ? `₹${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(value)}` : 'View';
+const priceLabel = (value) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return 'Price on request';
+  if (amount >= 10000000) return `₹${(amount / 10000000).toFixed(1).replace('.0', '')}Cr`;
+  if (amount >= 100000) return `₹${(amount / 100000).toFixed(1).replace('.0', '')}L`;
+  return `₹${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(amount)}`;
+};
 
-function markerContent(project, zoomTier = 'medium') {
-  const price = project.priceFrom || project.startingPrice;
-  const label = zoomTier === 'low'
-    ? '●'
-    : zoomTier === 'medium'
-      ? '●'
-      : priceLabel(price);
+function markerContent(project, state) {
   const marker = document.createElement('div');
-  marker.className = `druvio-project-marker druvio-project-marker-${zoomTier}`;
-  marker.textContent = String(label || 'View');
+  marker.className = `druvio-project-marker druvio-project-marker-${state.mode}${state.selectedStyle ? ' druvio-project-marker-selected' : ''}`;
+  if (state.mode === 'full-label') {
+    const name = document.createElement('span');
+    name.className = 'druvio-project-marker-name';
+    name.textContent = project.name || 'Project';
+    const price = document.createElement('strong');
+    price.className = 'druvio-project-marker-price';
+    price.textContent = priceLabel(project.priceFrom || project.startingPrice);
+    marker.append(name, price);
+  } else if (state.mode === 'price-only') {
+    marker.classList.add('druvio-project-marker-price-only');
+    marker.textContent = priceLabel(project.priceFrom || project.startingPrice);
+  } else {
+    marker.textContent = '●';
+  }
   marker.setAttribute('role', 'button');
   marker.setAttribute('tabindex', '0');
+  marker.setAttribute('aria-label', `${project.name || 'Project'}, starting at ${priceLabel(project.priceFrom || project.startingPrice)}`);
   return marker;
 }
 
@@ -82,7 +95,7 @@ export default function MapScreen({
   onVisibleProjectsChange = null,
   externalOverlayOpen = false,
   onLayersOpen = null,
-  filters = { budgetMax: 3000000, distanceMax: 10, naPlot: false, bankLoan: false, minScore: 0 }
+  filters = { budgetMax: 3000000, naPlot: false, bankLoan: false, minScore: 0 }
 }) {
   const mapElement = useRef(null);
   const mapRef = useRef(null);
@@ -99,6 +112,7 @@ export default function MapScreen({
   const [mapError, setMapError] = useState('');
   const [mapReady, setMapReady] = useState(false);
   const [zoomTier, setZoomTier] = useState('low');
+  const [viewportRevision, setViewportRevision] = useState(0);
   // Layer toggles
   const [showLayers, setShowLayers] = useState(false);
   const [layerVisibility, setLayerVisibility] = useState({
@@ -140,6 +154,7 @@ export default function MapScreen({
     if (!map) return;
     const bounds = map.getBounds();
     if (!bounds) return;
+    setViewportRevision((current) => current + 1);
     const sw = bounds.getSouthWest().toJSON();
     const ne = bounds.getNorthEast().toJSON();
 
@@ -160,6 +175,49 @@ export default function MapScreen({
       console.error('[Druvio] Visible bounds load error:', err);
     }
   }, [filters, onVisibleProjectsChange]);
+
+  const markerStates = useMemo(() => {
+    const map = mapRef.current;
+    const states = new Map();
+    if (!map || !mapReady) return states;
+    const zoom = Number(zoomTier) || 0;
+    const bounds = map.getBounds();
+    const projection = map.getProjection();
+    if (!bounds || !projection) return states;
+    const center = map.getCenter();
+    if (!center) return states;
+    const scale = 2 ** zoom;
+    const worldCenter = projection.fromLatLngToPoint(center);
+    const mapSize = map.getDiv();
+    const visible = projects
+      .filter((project) => isProjectPublishable(project) && pointFor(project) && bounds.contains(pointFor(project)))
+      .map((project) => {
+        const position = pointFor(project);
+        const world = projection.fromLatLngToPoint(new window.google.maps.LatLng(position));
+        return {
+          project,
+          x: (world.x - worldCenter.x) * scale + mapSize.clientWidth / 2,
+          y: (world.y - worldCenter.y) * scale + mapSize.clientHeight / 2,
+          priority: calculateMarkerPriority(project, { isSelected: project.id === selectedProject?.id })
+        };
+      })
+      .sort((left, right) => right.priority - left.priority || String(left.project.id).localeCompare(String(right.project.id)));
+    const acceptedLabels = [];
+    visible.forEach((entry) => {
+      const collision = acceptedLabels.some((accepted) => Math.abs(accepted.x - entry.x) < MARKER_COLLISION_PIXELS.LABEL_WIDTH && Math.abs(accepted.y - entry.y) < MARKER_COLLISION_PIXELS.LABEL_HEIGHT);
+      const selected = entry.project.id === selectedProject?.id;
+      const state = getProjectMarkerState({
+        zoom,
+        project: entry.project,
+        selectedProjectId: selectedProject?.id,
+        collisionGroup: collision && !selected,
+        visibleRank: collision ? 1 : 0
+      });
+      states.set(entry.project.id, state);
+      if (state.mode === 'full-label') acceptedLabels.push(entry);
+    });
+    return states;
+  }, [projects, selectedProject?.id, mapReady, zoomTier, viewportRevision]);
 
   // Keep one Druvio basemap and expose only useful discovery overlays.
   useEffect(() => {
@@ -315,7 +373,7 @@ export default function MapScreen({
   useEffect(() => {
     if (activeLayout && activeLayout.polygonCoordinates) {
       drawPolygon(activeLayout.polygonCoordinates, editingLayout, activeLayout.color);
-    } else if (zoomTier === 'high' && selectedProject?.layoutPolygon) {
+    } else if (selectedProject && getProjectMarkerState({ zoom: zoomTier, project: selectedProject, selectedProjectId: selectedProject.id }).showPolygon) {
       const path = normalizeProjectPolygon(selectedProject.layoutPolygon);
       drawPolygon(path, editingLayout, '#2563eb');
       if (path.length >= 3 && mapRef.current) {
@@ -388,7 +446,7 @@ export default function MapScreen({
         map.setMapTypeId(window.google.maps.MapTypeId.HYBRID);
         const updateZoomTier = () => {
           const zoom = map.getZoom() || DEFAULT_ZOOM;
-          setZoomTier(getMarkerVisualState(zoom).tier);
+          setZoomTier(zoom);
         };
         updateZoomTier();
         zoomListener = map.addListener('zoom_changed', updateZoomTier);
@@ -463,16 +521,20 @@ export default function MapScreen({
 
     if (!layerVisibility.markers) return;
 
+    const bounds = map.getBounds();
     markersRef.current = projects.map((project) => {
       const position = pointFor(project);
-      if (!isProjectPublishable(project) || !position) return null;
+      if (!isProjectPublishable(project) || !position || (bounds && !bounds.contains(position))) return null;
 
+      const state = markerStates.get(project.id) || getProjectMarkerState({ zoom: zoomTier, project, selectedProjectId: selectedProject?.id });
       const marker = new window.google.maps.marker.AdvancedMarkerElement({
         position,
         title: project.name,
-        content: markerContent(project, zoomTier),
+        content: markerContent(project, state),
         gmpClickable: true,
-        gmpDraggable: false
+        gmpDraggable: false,
+        zIndex: state.zIndex,
+        collisionBehavior: window.google.maps.CollisionBehavior?.OPTIONAL_AND_HIDES_LOWER_PRIORITY
       });
 
       marker.addEventListener('gmp-click', () => {
@@ -486,7 +548,7 @@ export default function MapScreen({
       return marker;
     }).filter(Boolean);
 
-    if (zoomTier === 'high') {
+    if (zoomTier > MAP_MARKER_ZOOM.LOCATION_PIN_MAX) {
       markersRef.current.forEach((marker) => { marker.map = map; });
     } else {
       clusterRef.current = new MarkerClusterer({
@@ -502,7 +564,7 @@ export default function MapScreen({
         }
       });
     }
-  }, [projects, clearPolygon, mapReady, onSelectProject, layerVisibility.markers, zoomTier]);
+  }, [projects, clearPolygon, mapReady, onSelectProject, layerVisibility.markers, zoomTier, markerStates, selectedProject?.id]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -510,12 +572,12 @@ export default function MapScreen({
     projectPopupRef.current?.setMap(null);
     selectedMarkerRef.current = null;
     projectPopupRef.current = null;
-    if (!selectedProject || !showProjectPopup || !map || !window.google?.maps?.marker?.AdvancedMarkerElement) return undefined;
+    if (!selectedProject || !map || !window.google?.maps?.marker?.AdvancedMarkerElement) return undefined;
     const position = pointFor(selectedProject);
     if (!position) return undefined;
 
-    const content = markerContent(selectedProject, 'high');
-    content.classList.add('druvio-project-marker-selected');
+    const selectedState = getProjectMarkerState({ zoom: zoomTier, project: selectedProject, selectedProjectId: selectedProject.id });
+    const content = markerContent(selectedProject, selectedState);
     const marker = new window.google.maps.marker.AdvancedMarkerElement({
       map,
       position,
@@ -526,19 +588,28 @@ export default function MapScreen({
     });
     selectedMarkerRef.current = marker;
     map.panTo(position);
+    if (!showProjectPopup) return () => { marker.map = null; };
+
     class ProjectPopupOverlay extends window.google.maps.OverlayView {
       constructor() {
         super();
-        this.element = createProjectPopupElement(selectedProject, onViewProjectDetails);
+        this.element = createProjectPopupElement(selectedProject, {
+          onViewDetails: onViewProjectDetails,
+          onClose: () => onSelectProject?.(null)
+        });
       }
       onAdd() { this.getPanes().floatPane.appendChild(this.element); }
       draw() {
         const point = this.getProjection().fromLatLngToDivPixel(new window.google.maps.LatLng(position));
         if (!point) return;
-        const popupWidth = 288;
-        const flipLeft = point.x + popupWidth + 18 > map.getDiv().clientWidth;
+        const popupWidth = 258;
+        const popupHeight = 144;
+        const mapSize = map.getDiv();
+        const flipLeft = point.x + popupWidth + 18 > mapSize.clientWidth - 56;
+        const placeBelow = point.y - popupHeight < 74;
         this.element.classList.toggle('flip-left', flipLeft);
-        this.element.style.transform = `translate(${flipLeft ? point.x - popupWidth - 18 : point.x + 18}px, ${point.y - 148}px)`;
+        this.element.classList.toggle('flip-below', placeBelow);
+        this.element.style.transform = `translate(${flipLeft ? point.x - popupWidth - 18 : point.x + 18}px, ${placeBelow ? point.y + 18 : point.y - popupHeight}px)`;
       }
       onRemove() { this.element.remove(); }
     }
@@ -547,7 +618,7 @@ export default function MapScreen({
     projectPopupRef.current = popup;
 
     return () => { marker.map = null; popup.setMap(null); };
-  }, [selectedProject, mapReady, onViewProjectDetails, showProjectPopup]);
+  }, [selectedProject, mapReady, onViewProjectDetails, onSelectProject, showProjectPopup, zoomTier]);
 
   // Click listeners for placing projects or drawing polygons
   useEffect(() => {
@@ -565,6 +636,15 @@ export default function MapScreen({
 
     return () => clickListener.remove();
   }, [drawing, drawingFinished, onSelectProject]);
+
+  useEffect(() => {
+    if (!selectedProject) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') onSelectProject?.(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [selectedProject, onSelectProject]);
 
   // Live preview polyline/polygon drawing
   useEffect(() => {

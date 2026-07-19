@@ -6,15 +6,16 @@ export const LAND_ZONE_OPTIONS = [
 
 export const NA_STATUS_OPTIONS = [
   { value: 'na_approved', label: 'NA Approved' },
-  { value: 'pending', label: 'NA Approval Pending' },
-  { value: 'not_na', label: 'Not NA' }
+  { value: 'non_na', label: 'Non NA' }
 ];
 
-const normalizeToken = (value) => String(value ?? '')
-  .trim()
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, '_')
-  .replace(/^_|_$/g, '');
+function normalizeToken(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '');
+}
 
 const optionValue = (options, value) => {
   const token = normalizeToken(value);
@@ -47,13 +48,11 @@ export function getNaStatusLabel(projectOrValue) {
 
 export function matchesProjectFilters(project, filters = {}) {
   const startingPrice = Number(project?.priceFrom ?? project?.startingPrice ?? 0);
-  const distance = Number(project?.distance ?? 0);
   const score = Number(project?.DruvioScore ?? project?.plotItScore ?? 0);
   const selectedZones = Array.isArray(filters.landZones) ? filters.landZones : [];
   const selectedNaStatuses = Array.isArray(filters.naStatuses) ? filters.naStatuses : [];
 
   if (Number.isFinite(filters.budgetMax) && startingPrice > filters.budgetMax) return false;
-  if (Number.isFinite(filters.distanceMax) && distance > filters.distanceMax) return false;
   if (filters.bankLoan && project?.bankLoan !== true) return false;
   if (Number.isFinite(filters.minScore) && score < filters.minScore) return false;
   if (selectedZones.length && !selectedZones.includes(getProjectLandZone(project))) return false;

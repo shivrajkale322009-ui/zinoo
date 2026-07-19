@@ -1,12 +1,55 @@
-export const MAP_ZOOM_LEVELS = Object.freeze({
-  CLUSTER_MAX: 12,
-  MINIMAL_PROJECT_MIN: 13,
-  POLYGON_MIN: 16
+export const MAP_MARKER_ZOOM = Object.freeze({
+  HIDDEN_MAX: 10,
+  LOCATION_PIN_MAX: 13,
+  PROJECT_LABEL_MIN: 14,
+  POLYGON_MIN: 17
 });
 
-export function getMarkerVisualState(zoom, project, selected = false) {
-  if (selected) return { tier: 'high', showPolygon: zoom >= MAP_ZOOM_LEVELS.POLYGON_MIN, clusterEligible: false };
-  if (zoom <= MAP_ZOOM_LEVELS.CLUSTER_MAX) return { tier: 'low', showPolygon: false, clusterEligible: true };
-  if (zoom < MAP_ZOOM_LEVELS.POLYGON_MIN) return { tier: 'medium', showPolygon: false, clusterEligible: true };
-  return { tier: 'high', showPolygon: Boolean(project?.layoutPolygon), clusterEligible: false };
+export const MARKER_COLLISION_PIXELS = Object.freeze({
+  LABEL_WIDTH: 120,
+  LABEL_HEIGHT: 56,
+  PIN_RADIUS: 28
+});
+
+export function calculateMarkerPriority(project = {}, { isSelected = false } = {}) {
+  const record = project && typeof project === 'object' ? project : {};
+  const score = Number(record.DruvioScore ?? record.druvioScore ?? record.plotItScore ?? 0) || 0;
+  const verified = record.isVerified === true || record.verified === true;
+  const hasPrice = Number(record.priceFrom ?? record.startingPrice ?? 0) > 0;
+  const hasPolygon = Array.isArray(record.polygonCoordinates)
+    ? record.polygonCoordinates.length >= 3
+    : Boolean(record.layoutPolygon);
+  return score + (isSelected ? 10000 : 0) + (verified ? 300 : 0) + (record.isFeatured ? 150 : 0) + (hasPrice ? 40 : 0) + (hasPolygon ? 30 : 0);
 }
+
+export function getProjectMarkerState({ zoom, project, selectedProjectId, collisionGroup = false, visibleRank = 0 } = {}) {
+  const normalizedZoom = Number(zoom) || 0;
+  const selected = Boolean(project?.id && project.id === selectedProjectId);
+  const labelVisible = normalizedZoom >= MAP_MARKER_ZOOM.PROJECT_LABEL_MIN && (!collisionGroup || selected || visibleRank === 0);
+  const mode = normalizedZoom <= MAP_MARKER_ZOOM.HIDDEN_MAX
+    ? 'cluster'
+    : labelVisible || selected
+      ? 'full-label'
+      : normalizedZoom >= MAP_MARKER_ZOOM.POLYGON_MIN && collisionGroup
+        ? 'price-only'
+        : 'pin';
+  const priority = calculateMarkerPriority(project, { isSelected: selected });
+
+  return {
+    mode,
+    showProjectName: mode === 'full-label',
+    showPrice: mode === 'full-label' || mode === 'price-only',
+    showPolygon: normalizedZoom >= MAP_MARKER_ZOOM.POLYGON_MIN && Boolean(project?.layoutPolygon),
+    priority,
+    markerScale: selected ? 1.08 : 1,
+    zIndex: selected ? 9999 : Math.round(priority),
+    interactive: mode !== 'cluster',
+    selectedStyle: selected,
+    clusterEligible: normalizedZoom <= MAP_MARKER_ZOOM.LOCATION_PIN_MAX
+  };
+}
+
+export const getMarkerVisualState = (zoom, project, selected = false) => {
+  const state = getProjectMarkerState({ zoom, project, selectedProjectId: selected ? project?.id : undefined });
+  return { ...state, tier: state.mode === 'full-label' ? 'label' : 'pin' };
+};
