@@ -202,19 +202,23 @@ function SellerDashboard({
   };
 
   const handleApproveProject = async (projectId) => {
-    await httpsCallable(functions, 'reviewProject')({
-      projectId,
-      decision: 'approved'
-    });
-    showToast();
+    try {
+      await httpsCallable(functions, 'reviewProject')({ projectId, decision: 'approved' });
+      showToast();
+    } catch (error) {
+      console.error('Failed to approve project:', error);
+      alert(error?.message || 'This project cannot be approved right now.');
+    }
   };
 
   const handleRejectProject = async (projectId) => {
-    await httpsCallable(functions, 'reviewProject')({
-      projectId,
-      decision: 'rejected'
-    });
-    showToast();
+    try {
+      await httpsCallable(functions, 'reviewProject')({ projectId, decision: 'rejected' });
+      showToast();
+    } catch (error) {
+      console.error('Failed to reject project:', error);
+      alert(error?.message || 'This project cannot be rejected right now.');
+    }
   };
 
   const handleDocumentUpload = async (fileOverride, typeOverride) => {
@@ -726,12 +730,12 @@ function SellerDashboard({
                   <div className="seller-project-footer">
                     <span>Updated {project.updated || 'recently'}</span>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                      {isAdminView && project.status !== 'approved' && (
+                      {isAdminView && ['pending', 'pending_review'].includes(project.status) && (
                         <button type="button" className="btn-primary seller-inline-button" onClick={() => handleApproveProject(project.id)}>
                           <ShieldCheck size={14} /> Approve
                         </button>
                       )}
-                      {isAdminView && project.status !== 'rejected' && (
+                      {isAdminView && ['pending', 'pending_review'].includes(project.status) && (
                         <button type="button" className="btn-secondary seller-inline-button" onClick={() => handleRejectProject(project.id)}>
                           <ShieldX size={14} /> Reject
                         </button>

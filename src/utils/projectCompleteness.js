@@ -21,7 +21,6 @@ export function getProjectCompleteness(project) {
   if (!positive(project?.startingPrice ?? project?.priceFrom)) missingRequired.push(entry('startingPrice', 'Starting price', 'Pricing'));
   if (!positive(project?.cashbackPerGuntha ?? project?.cashbackAmount)) missingRequired.push(entry('cashbackPerGuntha', 'Cashback per Guntha', 'Pricing'));
   if (!positive(project?.totalPlots)) missingRequired.push(entry('totalPlots', 'Total plots', 'Inventory'));
-  if (!positive(project?.plotAreaMinSqFt ?? project?.sizeMin)) missingRequired.push(entry('plotAreaMinSqFt', 'Minimum plot area', 'Inventory'));
   if (!hasText(project?.landZone)) missingRequired.push(entry('landZone', 'Land Zone', 'Land details'));
   if (!hasText(project?.naStatus)) missingRequired.push(entry('naStatus', 'NA Status', 'Land details'));
   if (!hasText(project?.thumbnail || project?.heroImage)) missingRequired.push(entry('mainImage', 'Main project image', 'Media'));

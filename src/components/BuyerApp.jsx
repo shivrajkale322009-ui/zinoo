@@ -27,6 +27,7 @@ import {
   Copy,
   LayoutGrid,
   Image as ImageIcon,
+  Upload,
   Globe,
   ExternalLink,
   Building2,
@@ -759,16 +760,16 @@ function BuyerApp({
     }));
   };
 
-  const uploadProjectManagerFile = async (file, kind) => {
+  const uploadProjectManagerFile = async (file, kind, documentType = projectUploadType) => {
     if (!file || !selectedProject?.id || !user?.uid) return;
     const isDocument = kind === 'document';
     const allowedTypes = isDocument
-      ? ['application/pdf', 'image/jpeg', 'image/png']
+      ? ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
       : ['image/jpeg', 'image/png', 'image/webp'];
-    const maximumSize = isDocument ? 15 * 1024 * 1024 : 10 * 1024 * 1024;
+    const maximumSize = 10 * 1024 * 1024;
     setProjectUploadError('');
     if (!allowedTypes.includes(file.type) || file.size > maximumSize) {
-      setProjectUploadError(isDocument ? 'Upload a PDF, JPG, or PNG up to 15 MB.' : 'Upload a JPG, PNG, or WebP image up to 10 MB.');
+      setProjectUploadError(isDocument ? 'Upload a PDF, JPG, PNG, or WebP file up to 10 MB.' : 'Upload a JPG, PNG, or WebP image up to 10 MB.');
       return;
     }
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
@@ -787,7 +788,7 @@ function BuyerApp({
           ...current,
           documents: [...current.documents, {
             id: assetId,
-            type: projectUploadType,
+            type: documentType,
             url,
             path: snapshot.ref.fullPath,
             fileName: file.name,
@@ -905,11 +906,11 @@ function BuyerApp({
               </div>
             </div>
             <p className="project-manager-copy">Upload files for review. Verification decisions remain in the Admin Property Review workspace.</p>
-            <div className="project-manager-upload-row">
-              <select className="project-manager-input" value={projectUploadType} onChange={(event) => setProjectUploadType(event.target.value)}>
-                {PROJECT_DOCUMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-              <input type="file" className="project-manager-input" accept="application/pdf,image/jpeg,image/png" disabled={projectUploadBusy === 'document'} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'document')} />
+            <div className="project-document-upload-grid">
+              {[{ type: 'approved_layout', title: 'Layout Plan', copy: 'Upload the approved layout or blueprint.' }, { type: 'seven_twelve_extract', title: '7/12 Zone Certificate', copy: 'Upload the latest 7/12 extract or zone certificate.' }].map(({ type, title, copy }) => (
+                <label key={type} className="project-document-upload-card"><FileText size={22} /><strong>{title}</strong><span>{copy}</span><small>PDF, JPG, PNG or WebP · 10 MB max</small><b><Upload size={15} /> {projectUploadBusy === 'document' ? 'Uploading…' : 'Choose file'}</b><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" disabled={Boolean(projectUploadBusy)} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'document', type)} /></label>
+              ))}
+              <label className="project-document-upload-card"><FileCheck size={22} /><strong>Additional Documents</strong><span>Add a brochure or another project document.</span><small>PDF, JPG, PNG or WebP · 10 MB max</small><b><Upload size={15} /> Choose file</b><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" disabled={Boolean(projectUploadBusy)} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'document', 'other')} /></label>
             </div>
             {projectUploadBusy === 'document' && <p className="project-manager-copy">Uploading document…</p>}
             {projectUploadError && <p className="seller-document-error" role="alert">{projectUploadError}</p>}
@@ -1061,20 +1062,16 @@ function BuyerApp({
                   <h4>Thumbnail and preview</h4>
                 </div>
               </div>
-              <label className={`project-manager-field${projectValidationAttempted && missingRequiredKeys.has('mainImage') ? ' is-invalid' : ''}`}>
-                <span>Project thumbnail<em aria-hidden="true"> *</em></span>
-                <input type="file" className={`project-manager-input${projectValidationAttempted && missingRequiredKeys.has('mainImage') ? ' is-invalid' : ''}`} accept="image/jpeg,image/png,image/webp" aria-invalid={projectValidationAttempted && missingRequiredKeys.has('mainImage')} disabled={projectUploadBusy === 'thumbnail'} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'thumbnail')} />
-                <small>{projectUploadBusy === 'thumbnail' ? 'Uploading…' : editForm.thumbnailMetadata?.fileName || 'JPG, PNG, or WebP · maximum 10 MB.'}</small>
-              </label>
               {projectUploadError && <p className="seller-document-error" role="alert">{projectUploadError}</p>}
-              <div className="project-media-preview">
+              <div className={`project-media-preview${projectValidationAttempted && missingRequiredKeys.has('mainImage') ? ' is-invalid' : ''}`}>
                 {hasValue(editForm.thumbnail) ? (
-                  <img src={editForm.thumbnail} alt={`${editForm.name || 'Project'} preview`} />
+                  <><img src={editForm.thumbnail} alt={`${editForm.name || 'Project'} preview`} /><label className="project-media-replace" title="Replace image" aria-label="Replace cover image"><Upload size={17} /><input type="file" accept="image/jpeg,image/png,image/webp" disabled={projectUploadBusy === 'thumbnail'} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'thumbnail')} /></label></>
                 ) : (
-                  <div className="project-media-placeholder">
+                  <label className="project-media-placeholder">
                     <ImageIcon size={22} />
-                    <span>No image selected yet</span>
-                  </div>
+                    <strong>Add cover image</strong><span>JPG, PNG or WebP · 10 MB max</span><b><Upload size={15} /> {projectUploadBusy === 'thumbnail' ? 'Uploading…' : 'Choose image'}</b>
+                    <input type="file" accept="image/jpeg,image/png,image/webp" disabled={projectUploadBusy === 'thumbnail'} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'thumbnail')} />
+                  </label>
                 )}
               </div>
             </div>
