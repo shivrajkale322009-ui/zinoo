@@ -151,7 +151,7 @@ export function validateProperty(property) {
   }
 
   // 7. Invalid Property Status
-  const validStatuses = ["active", "draft", "inactive", "Active", "Draft", "Inactive"];
+  const validStatuses = ["draft", "pending", "approved", "active", "inactive", "sold", "rejected"];
   if (property.status && !validStatuses.includes(property.status)) {
     errors.push({
       id: `err_status_${Date.now()}`,

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, Expand, LocateFixed, MapPin, Pencil, RotateCcw, Undo2, X } from 'lucide-react';
 import { loadGoogleMaps } from '../maps/googleMaps';
+import { googleMapsConfig, googleMapsMissingMessage, googleMapsUnavailableMessage } from '../maps/googleMapsConfig';
 import { buildProjectGeometry, normalizeProjectPolygon } from '../utils/projectGeometry';
 import { CHAKAN_LOCATION, CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
 
@@ -19,6 +20,7 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
   const [drawing, setDrawing] = useState(false);
   const [draftPoints, setDraftPoints] = useState([]);
   const [error, setError] = useState('');
+  const [mapStatus, setMapStatus] = useState(googleMapsConfig.isConfigured ? 'loading' : 'configuration-missing');
 
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   useEffect(() => { drawingRef.current = drawing; }, [drawing]);
@@ -59,6 +61,11 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
 
   useEffect(() => {
     let cancelled = false;
+    if (!googleMapsConfig.isConfigured) {
+      setError(googleMapsMissingMessage);
+      setMapStatus('configuration-missing');
+      return () => { cancelled = true; };
+    }
     loadGoogleMaps().then((maps) => {
       if (cancelled || !containerRef.current) return;
       const position = validCoordinate(latitude) && validCoordinate(longitude)
@@ -78,6 +85,7 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
       map.setMapTypeId(maps.MapTypeId.HYBRID);
       const marker = new maps.marker.AdvancedMarkerElement({ map, position, gmpDraggable: true, title: 'Project entrance' });
       mapRef.current = map;
+      setMapStatus('ready');
       markerRef.current = marker;
       const publish = (location) => onChangeRef.current?.({ latitude: location.lat(), longitude: location.lng() });
       listenersRef.current = [
@@ -89,7 +97,11 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
       ];
       const savedPath = normalizeProjectPolygon(layoutPolygon);
       if (savedPath.length >= 3) showPolygon(savedPath, false);
-    }).catch((loadError) => setError(loadError.message));
+    }).catch(() => {
+      if (cancelled) return;
+      setError(googleMapsUnavailableMessage);
+      setMapStatus('load-error');
+    });
     return () => {
       cancelled = true;
       listenersRef.current.forEach((listener) => listener.remove());
@@ -192,12 +204,19 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
         {drawing && <button type="button" className="btn-secondary seller-inline-button" disabled={!draftPoints.length} onClick={() => setDraftPoints((points) => points.slice(0, -1))}><Undo2 size={16} /> Undo point</button>}
         <button type="button" className="btn-secondary seller-inline-button" onClick={clearBoundary}><RotateCcw size={16} /> Clear</button>
       </div>}
-      <div ref={containerRef} className="project-location-map" aria-label="Satellite map for the project entrance and boundary" />
+      <div className="project-location-map-frame">
+        <div ref={containerRef} className="project-location-map" aria-label="Satellite map for the project entrance and boundary" />
+        {mapStatus !== 'ready' && (
+          <div className="project-location-map-state" role={mapStatus === 'loading' ? 'status' : 'alert'}>
+            {mapStatus === 'loading' ? 'Loading map…' : error}
+          </div>
+        )}
+      </div>
       <div className="project-location-editor-footer">
         <small>{drawing ? `Boundary points: ${draftPoints.length}. Click the satellite map to add points.` : 'The marker is the entrance. The polygon is the actual project boundary.'}</small>
         {fullscreen && polygonRef.current && <button type="button" className="btn-primary seller-inline-button" onClick={saveBoundary}><Check size={16} /> Save layout</button>}
       </div>
-      {error && <p className="seller-document-error" role="alert">{error}</p>}
+      {error && mapStatus === 'ready' && <p className="seller-document-error" role="alert">{error}</p>}
     </div>
   );
 }

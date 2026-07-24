@@ -28,7 +28,7 @@ import EditProfileModal from './EditProfileModal';
 import ProjectLocationPicker from './ProjectLocationPicker';
 import { PROJECT_DOCUMENT_OPTIONS, getProjectDocumentLabel } from '../utils/projectDocuments';
 import { getCashbackPerGuntha, withCanonicalPlotArea } from '../utils/projectArea';
-import { getProjectApprovalStatus, isProjectPublishable } from '../utils/projectVisibility';
+import { getProjectApprovalStatus, isProjectPublishable, PROPERTY_STATUS } from '../utils/projectVisibility';
 import {
   LAND_ZONE_OPTIONS,
   NA_STATUS_OPTIONS,
@@ -114,17 +114,23 @@ const stageClassName = (stage) => {
 
 const getProjectBadgeClass = (project) => {
   const status = getProjectApprovalStatus(project);
-  if (status === 'approved') return 'badge-success';
-  if (status === 'rejected') return 'badge-danger';
+  if (status === PROPERTY_STATUS.ACTIVE || status === PROPERTY_STATUS.APPROVED) return 'badge-success';
+  if (status === PROPERTY_STATUS.REJECTED || status === PROPERTY_STATUS.SOLD) return 'badge-danger';
   return 'badge-warning';
 };
 
 const formatProjectStatus = (project) => {
   const status = getProjectApprovalStatus(project);
-  if (status === 'approved') return 'Approved';
-  if (status === 'pending' || status === 'pending_review') return 'Pending Review';
-  if (status === 'rejected') return 'Rejected';
-  return status || 'Active';
+  const labels = {
+    [PROPERTY_STATUS.DRAFT]: 'Draft',
+    [PROPERTY_STATUS.PENDING]: 'Pending Review',
+    [PROPERTY_STATUS.APPROVED]: 'Approved',
+    [PROPERTY_STATUS.ACTIVE]: 'Active',
+    [PROPERTY_STATUS.INACTIVE]: 'Inactive',
+    [PROPERTY_STATUS.SOLD]: 'Sold',
+    [PROPERTY_STATUS.REJECTED]: 'Rejected'
+  };
+  return labels[status] || 'Draft';
 };
 
 function SellerDashboard({
@@ -168,7 +174,7 @@ function SellerDashboard({
   );
   const totalLeads = myLeads.length;
   const pendingVisits = myVisits.filter((visit) => visit.status === 'Scheduled').length;
-  const pendingReviewCount = myProjects.filter((project) => project.status === 'pending' || project.status === 'pending_review').length;
+  const pendingReviewCount = myProjects.filter((project) => project.status === PROPERTY_STATUS.PENDING).length;
   const conversionRate = totalLeads ? Math.round((myLeads.filter((lead) => lead.stage === 'Purchased').length / totalLeads) * 100) : 0;
   const fillRate = totalInventory ? Math.round((totalPlotsForSale / totalInventory) * 100) : 0;
 
@@ -195,7 +201,7 @@ function SellerDashboard({
       plotAreaMinSqFt: toNumber(editingProject.plotAreaMinSqFt ?? editingProject.sizeMin),
       plotAreaMaxSqFt: toNumber(editingProject.plotAreaMaxSqFt ?? editingProject.sizeMax),
       cashbackPerGuntha: Math.max(0, toNumber(editingProject.cashbackPerGuntha ?? editingProject.cashbackAmount)),
-      status: isAdminView ? editingProject.status : 'pending'
+      status: isAdminView ? editingProject.status : PROPERTY_STATUS.PENDING
     })));
     setEditingProject(null);
     showToast();
@@ -203,17 +209,28 @@ function SellerDashboard({
 
   const handleApproveProject = async (projectId) => {
     try {
-      await httpsCallable(functions, 'reviewProject')({ projectId, decision: 'approved' });
+      await httpsCallable(functions, 'reviewProject')({ projectId, decision: PROPERTY_STATUS.APPROVED });
+      alert('Property approved. Activate it separately when it is ready for buyers.');
       showToast();
     } catch (error) {
       console.error('Failed to approve project:', error);
-      alert(error?.message || 'This project cannot be approved right now.');
+      alert(error?.message || 'This property cannot be approved right now.');
+    }
+  };
+
+  const handleListingStatus = async (projectId, status) => {
+    try {
+      await httpsCallable(functions, 'setProjectStatus')({ projectId, status });
+      showToast();
+    } catch (error) {
+      console.error('Failed to update listing status:', error);
+      alert(error?.message || 'This listing status cannot be changed right now.');
     }
   };
 
   const handleRejectProject = async (projectId) => {
     try {
-      await httpsCallable(functions, 'reviewProject')({ projectId, decision: 'rejected' });
+      await httpsCallable(functions, 'reviewProject')({ projectId, decision: PROPERTY_STATUS.REJECTED });
       showToast();
     } catch (error) {
       console.error('Failed to reject project:', error);
@@ -373,7 +390,7 @@ function SellerDashboard({
         highway: newProject.nearbyHighway || 'Pune-Nashik Highway (2.0 km)'
       },
       updated: 'Just now',
-      status: isAdminView ? 'approved' : 'pending',
+      status: PROPERTY_STATUS.PENDING,
       thumbnail: newProject.thumbnail || newProject.heroImage,
       heroImage: newProject.heroImage,
       description: newProject.description || 'Freshly listed residential plotting development near Chakan.',
@@ -419,7 +436,7 @@ function SellerDashboard({
         icon: <Layers size={20} color="var(--accent-gold)" />
       },
       {
-        label: 'Approved Listings',
+        label: 'Active Listings',
         value: myProjects.filter(isProjectPublishable).length,
         helper: 'Visible to buyers',
         icon: <ShieldCheck size={20} color="#10b981" />
@@ -628,15 +645,8 @@ function SellerDashboard({
               <small>Fixed cashback rate for every 900 sq.ft. purchased.</small>
             </label>
             <label className="seller-field">
-              <span>Availability status</span>
-              <select
-                className="form-input"
-                value={editingProject.status}
-                onChange={(e) => setEditingProject({ ...editingProject, status: e.target.value })}
-              >
-                <option value="Active">Active</option>
-                <option value="Sold Out">Sold Out</option>
-              </select>
+              <span>Property status</span>
+              <input className="form-input" value={formatProjectStatus(editingProject)} disabled />
             </label>
             <label className="seller-field">
               <span>Land zone</span>
@@ -730,14 +740,29 @@ function SellerDashboard({
                   <div className="seller-project-footer">
                     <span>Updated {project.updated || 'recently'}</span>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                      {isAdminView && ['pending', 'pending_review'].includes(project.status) && (
+                      {isAdminView && project.status === PROPERTY_STATUS.PENDING && (
                         <button type="button" className="btn-primary seller-inline-button" onClick={() => handleApproveProject(project.id)}>
                           <ShieldCheck size={14} /> Approve
                         </button>
                       )}
-                      {isAdminView && ['pending', 'pending_review'].includes(project.status) && (
+                      {isAdminView && project.status === PROPERTY_STATUS.PENDING && (
                         <button type="button" className="btn-secondary seller-inline-button" onClick={() => handleRejectProject(project.id)}>
-                          <ShieldX size={14} /> Reject
+                          <ShieldX size={14} /> Reject Submission
+                        </button>
+                      )}
+                      {isAdminView && (project.status === PROPERTY_STATUS.APPROVED || project.status === PROPERTY_STATUS.INACTIVE) && (
+                        <button type="button" className="btn-primary seller-inline-button" onClick={() => handleListingStatus(project.id, PROPERTY_STATUS.ACTIVE)}>
+                          <ShieldCheck size={14} /> Activate
+                        </button>
+                      )}
+                      {isAdminView && project.status === PROPERTY_STATUS.ACTIVE && (
+                        <button type="button" className="btn-secondary seller-inline-button" onClick={() => handleListingStatus(project.id, PROPERTY_STATUS.INACTIVE)}>
+                          Deactivate
+                        </button>
+                      )}
+                      {isAdminView && [PROPERTY_STATUS.ACTIVE, PROPERTY_STATUS.INACTIVE, PROPERTY_STATUS.APPROVED].includes(project.status) && (
+                        <button type="button" className="btn-secondary seller-inline-button" onClick={() => handleListingStatus(project.id, PROPERTY_STATUS.SOLD)}>
+                          Mark Sold
                         </button>
                       )}
                       <button type="button" className="btn-secondary seller-inline-button" onClick={() => handleEditClick(project)}>

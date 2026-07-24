@@ -17,6 +17,15 @@ service cloud.firestore {
         (('role' in profile()) && profile().role == 'seller')
       );
     }
+    function validProjectStatus(data) {
+      return data.status in ['draft', 'pending', 'approved', 'active', 'inactive', 'sold', 'rejected'];
+    }
+    function validProject(data) {
+      return data.ownerId is string && data.ownerId.size() > 0
+        && data.sellerUid is string && data.sellerUid == data.ownerId
+        && data.name is string && data.name.size() >= 2
+        && validProjectStatus(data);
+    }
     match /users/{userId} {
       allow create: if signedIn() && request.auth.uid == userId
         && request.resource.data.permissions.buyer == true
@@ -45,20 +54,24 @@ service cloud.firestore {
     }
 
     match /projects/{projectId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && (resource.data.status == 'active' || admin() || resource.data.ownerId == request.auth.uid);
       allow create: if !admin()
         && seller()
+        && validProject(request.resource.data)
         && request.resource.data.ownerId == request.auth.uid
         && request.resource.data.sellerUid == request.auth.uid
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdByRole == 'seller'
-        && request.resource.data.status == 'pending'
-        && request.resource.data.approvalStatus == 'pending'
-        && request.resource.data.reviewStatus == 'pending'
-        && request.resource.data.isApproved == false
-        && request.resource.data.isPublished == false;
-      allow update, delete: if admin() || (seller() && resource.data.ownerId == request.auth.uid && request.resource.data.ownerId == resource.data.ownerId);
+        && request.resource.data.status == 'pending';
+      allow update: if (admin() && validProject(request.resource.data) && request.resource.data.status == resource.data.status)
+        || (seller() && resource.data.ownerId == request.auth.uid
+          && request.resource.data.ownerId == resource.data.ownerId
+          && validProject(request.resource.data)
+          && request.resource.data.status == 'pending');
+      allow delete: if admin();
     }
+
+    match /propertyAuditLogs/{auditId} { allow read: if admin(); allow write: if false; }
 
     match /leads/{recordId} {
       allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;

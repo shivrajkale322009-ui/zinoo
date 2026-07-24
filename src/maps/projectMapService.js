@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { getProjectCoordinates, isProjectPublishable } from '../utils/projectVisibility';
+import { PROPERTY_STATUS } from '../utils/projectVisibility';
 import { CHAKAN_LOCATION } from '../utils/chakanLocation';
 
 const projects = 'projects';
@@ -52,7 +53,7 @@ const buildProjectPayload = (project = {}) => {
     remainingPlots: toOptionalNumber(project.remainingPlots),
     cashbackAmount: Math.max(0, toOptionalNumber(project.cashbackAmount) || 0),
     amenities: normalizeAmenities(project.amenities),
-    status: project.status || 'approved'
+    status: project.status || PROPERTY_STATUS.DRAFT
   };
 };
 
@@ -156,7 +157,7 @@ export async function deleteProject(projectId) {
 
 export async function loadProjectsInBounds(sw, ne) {
   const ref = collection(db, projects);
-  const q = query(ref, where('status', 'in', ['approved', 'Active']));
+  const q = query(ref, where('status', '==', PROPERTY_STATUS.ACTIVE));
   const snapshot = await getDocs(q);
   return snapshot.docs
     .map(item => ({ id: item.id, ...item.data() }))

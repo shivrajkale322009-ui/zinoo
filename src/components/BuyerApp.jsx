@@ -47,7 +47,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { storage } from '../firebaseConfig';
-import { isProjectPublishable } from '../utils/projectVisibility';
+import { isProjectPublishable, PROPERTY_STATUS, PROPERTY_STATUSES } from '../utils/projectVisibility';
 import { calculateCashbackForArea, getCashbackPerGuntha, squareFeetToGuntha } from '../utils/projectArea';
 import { CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
 import { getProjectCompleteness } from '../utils/projectCompleteness';
@@ -88,7 +88,7 @@ const createEmptyProjectForm = () => ({
   thumbnailPath: '',
   thumbnailMetadata: null,
   amenities: '',
-  status: 'approved',
+  status: 'draft',
   cashbackAmount: '',
   whatsappNumber: '',
   siteVisitContact: '',
@@ -141,7 +141,7 @@ const getProjectFormFromRecord = (project) => ({
   thumbnailPath: project?.thumbnailPath || '',
   thumbnailMetadata: project?.thumbnailMetadata || null,
   amenities: normalizeAmenities(project?.amenities).join(', '),
-  status: project?.status || 'approved',
+  status: project?.status || 'draft',
   cashbackAmount: project?.cashbackAmount ?? '',
   whatsappNumber: project?.whatsappNumber || '',
   siteVisitContact: project?.siteVisitContact || '',
@@ -244,15 +244,27 @@ function BuyerApp({
   const [projectManagerError, setProjectManagerError] = useState('');
   const [projectValidationAttempted, setProjectValidationAttempted] = useState(false);
 
-  const approvedProjects = useMemo(
+  const activeProjects = useMemo(
     () => projects.filter(isProjectPublishable),
     [projects]
   );
   const filteredProjects = useMemo(
-    () => approvedProjects.filter((project) => matchesProjectFilters(project, mapFilters)),
-    [approvedProjects, mapFilters]
+    () => activeProjects.filter((project) => matchesProjectFilters(project, mapFilters)),
+    [activeProjects, mapFilters]
   );
   const nearbyUpdates = useMemo(() => deriveNearbyUpdates(filteredProjects), [filteredProjects]);
+
+  useEffect(() => {
+    console.debug('[Druvio listings] Buyer filters applied', {
+      fetchedCount: projects.length,
+      fetchedStatuses: projects.map(({ id, status }) => ({ id, status })),
+      publicStatus: PROPERTY_STATUS.ACTIVE,
+      publicCount: activeProjects.length,
+      filters: mapFilters,
+      resultCount: filteredProjects.length,
+      results: filteredProjects.map(({ id, name, status }) => ({ id, name, status }))
+    });
+  }, [projects, activeProjects, mapFilters, filteredProjects]);
 
   const refreshLayouts = useCallback(async (projectId, preservedLayoutId = activeLayout?.id) => {
     if (!projectId) {
@@ -498,10 +510,10 @@ function BuyerApp({
     if (!selectedProject) return;
 
     const completeness = getProjectCompleteness({ ...selectedProject, ...editForm });
-    const publishing = ['approved', 'Active'].includes(editForm.status);
+    const publishing = editForm.status === PROPERTY_STATUS.ACTIVE;
     if (publishing && !completeness.isComplete) {
       setProjectValidationAttempted(true);
-      setProjectManagerError('Complete the required fields highlighted in red before publishing. Once saved by an Admin, this project stays approved without another review.');
+      setProjectManagerError('Complete the required fields highlighted in red before publishing.');
       return;
     }
 
@@ -719,8 +731,8 @@ function BuyerApp({
   };
 
   const cashbackProjects = useMemo(
-    () => approvedProjects.filter((project) => formatCashbackLabel(project)),
-    [approvedProjects]
+    () => activeProjects.filter((project) => formatCashbackLabel(project)),
+    [activeProjects]
   );
   const cashbackProject = useMemo(
     () => cashbackProjects.find((project) => project.id === cashbackForm.projectId) || null,
@@ -1009,7 +1021,7 @@ function BuyerApp({
                 {selectField('landZone', 'Land Zone', LAND_ZONE_OPTIONS)}
                 {selectField('naStatus', 'NA Status', NA_STATUS_OPTIONS)}
                 <div className="project-manager-field"><span>Verification Status</span><div className="project-manager-readonly">{getVerifiedDocumentCount(selectedProject)} verified document{getVerifiedDocumentCount(selectedProject) === 1 ? '' : 's'}</div></div>
-                <label className="project-manager-field"><span>Project Status</span><select className="project-manager-input" value={editForm.status} onChange={(event) => setEditForm({ ...editForm, status: event.target.value })}><option value="draft">Draft</option><option value="approved">Active</option><option value="pending_review">Pending Review</option><option value="rejected">Rejected</option><option value="Sold Out">Sold Out</option></select></label>
+                <label className="project-manager-field"><span>Project Status</span><select className="project-manager-input" value={editForm.status} disabled title="Use Admin review and listing actions to change status.">{PROPERTY_STATUSES.map((status) => <option key={status} value={status}>{status.replace(/_/g, ' ')}</option>)}</select></label>
                 {field('cashbackAmount', 'Cashback Available', 'number', true, 'Fixed amount in ₹', 'cashbackPerGuntha')}
               </div>
             </div>
@@ -1093,13 +1105,10 @@ function BuyerApp({
                   <select
                     className="project-manager-input"
                     value={editForm.status}
-                    onChange={(event) => setEditForm({ ...editForm, status: event.target.value })}
+                    disabled
+                    title="Use Admin review and listing actions to change status."
                   >
-                    <option value="draft">Draft</option>
-                    <option value="approved">Active</option>
-                    <option value="rejected">Rejected</option>
-                    <option value="Sold Out">Sold Out</option>
-                    <option value="Active">Legacy Active</option>
+                    {PROPERTY_STATUSES.map((status) => <option key={status} value={status}>{status.replace(/_/g, ' ')}</option>)}
                   </select>
                 </label>
               </div>
@@ -1205,7 +1214,7 @@ function BuyerApp({
         {filteredProjects.length === 0 ? (
           <div className="feed-empty-state slim">
             <Compass size={24} color="var(--text-muted)" />
-            <p>No approved projects match these filters.</p>
+            <p>No active projects match these filters.</p>
           </div>
         ) : (
           <div className="feed-listings-grid buyer-panel-list">
@@ -1626,7 +1635,7 @@ function BuyerApp({
           <div className="buyer-map-search-results" role="listbox" aria-label="Search suggestions">
             {searchableProjects.map((project) => (
               <button key={`project-${project.id}`} type="button" onClick={() => { handleProjectSelect(project); setPlaceSuggestions([]); }}>
-                <Building2 size={18} /><span><strong>{project.name}</strong><small>{getDisplayLocation(project) || 'Druvio approved project'}</small></span>
+                <Building2 size={18} /><span><strong>{project.name}</strong><small>{getDisplayLocation(project) || 'Druvio active project'}</small></span>
               </button>
             ))}
             {placeSuggestions.map((suggestion) => (

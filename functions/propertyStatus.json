@@ -1,0 +1,25 @@
+{
+  "statuses": {
+    "DRAFT": "draft",
+    "PENDING": "pending",
+    "APPROVED": "approved",
+    "ACTIVE": "active",
+    "INACTIVE": "inactive",
+    "SOLD": "sold",
+    "REJECTED": "rejected"
+  },
+  "legacyMap": {
+    "active": "active",
+    "approved": "approved",
+    "changes_pending_review": "pending",
+    "draft": "draft",
+    "inactive": "inactive",
+    "pending": "pending",
+    "pending_review": "pending",
+    "published": "pending",
+    "rejected": "rejected",
+    "sold": "sold",
+    "sold out": "sold",
+    "unpublished": "inactive"
+  }
+}

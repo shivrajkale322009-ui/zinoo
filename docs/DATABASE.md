@@ -98,8 +98,8 @@ Druvio uses Firestore as the primary database, organized into five core collecti
   // Description
   description: "Freshly listed residential plotting development near Chakan.",
   
-  // Status
-  status: "Active" || "Sold Out",             // Project listing status
+  // Property workflow and listing status
+  status: "draft" || "pending" || "approved" || "active" || "inactive" || "sold" || "rejected",
   updated: "Just now",                        // Human-readable timestamp
   
   // Timestamps
@@ -312,7 +312,7 @@ service cloud.firestore {
     // Projects Collection
     match /projects/{projectId} {
       // Public read access for active projects
-      allow get, list: if resource.data.status == 'Active' || isAdmin();
+      allow get, list: if resource.data.status == 'active' || isAdmin();
       
       // Sellers can create their own projects
       allow create: if request.auth != null && 
@@ -431,7 +431,8 @@ The security rules enforce:
 - Timestamp fields suffixed with `At`: `createdAt`, `updatedAt`, `submittedAt`
 
 ### 7.4 Enum Values
-- PascalCase for status enums: `Active`, `Sold Out`, `Pending Verification`, `Approved`, `Rejected`
+- Lowercase for property statuses: `draft`, `pending`, `approved`, `active`, `inactive`, `sold`, `rejected`
+- Other collections retain their existing domain-specific status values.
 - Descriptive strings for categories: `East`, `North`, `West`, `South`
 
 ## 8. Data Migration Strategy

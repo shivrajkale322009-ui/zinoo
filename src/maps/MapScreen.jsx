@@ -7,6 +7,7 @@ import {
   Route, Building2
 } from 'lucide-react';
 import { loadGoogleMaps } from './googleMaps';
+import { googleMapsConfig, googleMapsMissingMessage, googleMapsUnavailableMessage } from './googleMapsConfig';
 import { getProjectCoordinates, isProjectPublishable } from '../utils/projectVisibility';
 import { matchesProjectFilters } from '../utils/projectLand';
 import {
@@ -110,6 +111,7 @@ export default function MapScreen({
 
   // States
   const [mapError, setMapError] = useState('');
+  const [mapStatus, setMapStatus] = useState(googleMapsConfig.isConfigured ? 'loading' : 'configuration-missing');
   const [mapReady, setMapReady] = useState(false);
   const [zoomTier, setZoomTier] = useState('low');
   const [viewportRevision, setViewportRevision] = useState(0);
@@ -422,6 +424,13 @@ export default function MapScreen({
     let idleListener;
     let zoomListener;
 
+    if (!googleMapsConfig.isConfigured) {
+      setMapStatus('configuration-missing');
+      setMapError(googleMapsMissingMessage);
+      return () => { disposed = true; };
+    }
+
+    setMapStatus('loading');
     loadGoogleMaps().then(() => {
       if (disposed) return;
       const container = mapElement.current;
@@ -462,11 +471,17 @@ export default function MapScreen({
         resizeObserver.observe(container);
 
         setMapReady(true);
+        setMapStatus('ready');
       } catch (error) {
-        console.error('[Druvio Maps] Initialization failed:', error);
-        setMapError(error.message || 'Google Maps could not be initialized.');
+        if (import.meta.env.DEV) console.error('[Druvio Maps] Initialization failed.');
+        setMapStatus('load-error');
+        setMapError(googleMapsUnavailableMessage);
       }
-    }).catch((error) => setMapError(error.message));
+    }).catch(() => {
+      if (disposed) return;
+      setMapStatus('load-error');
+      setMapError(googleMapsUnavailableMessage);
+    });
 
     return () => {
       disposed = true;
@@ -765,6 +780,12 @@ export default function MapScreen({
 
       {/* MAP CANVAS */}
       <div ref={mapElement} className="druvio-google-map" />
+      {mapStatus !== 'ready' && (
+        <div className="map-availability-state" role={mapStatus === 'loading' ? 'status' : 'alert'}>
+          <MapPin size={24} />
+          <span>{mapStatus === 'loading' ? 'Loading map…' : mapError}</span>
+        </div>
+      )}
 
       {/* FLOATING GLASSMORPHISM CONTROLS */}
       <div className="map-floating-overlay-container">
@@ -794,7 +815,7 @@ export default function MapScreen({
               <span className="layers-section-title">Project overlays</span>
               <div className="gis-toggles">
                 {[
-                  { key: 'markers', label: 'Project markers', description: 'Approved projects on the map', icon: MapPin },
+                  { key: 'markers', label: 'Project markers', description: 'Active projects on the map', icon: MapPin },
                   { key: 'layouts', label: 'Project layouts', description: 'Plot and phase outlines', icon: Building2 },
                   { key: 'roads', label: 'Road network', description: 'Road geometry and labels', icon: Route }
                 ].map(({ key, label, description, icon: Icon }) => (
@@ -838,7 +859,7 @@ export default function MapScreen({
       )}
 
       {/* MAP ALERTS */}
-      {mapError && (
+      {mapError && mapStatus === 'ready' && (
         <div className="map-alert-card" role="alert">
           <ShieldAlert size={18} />
           <span>{mapError}</span>
