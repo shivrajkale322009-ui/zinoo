@@ -5,8 +5,8 @@ service firebase.storage {
     function admin() {
       return request.auth != null
         && (
-          firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.permissions.admin == true
-          || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          firestore.get(/databases/default/documents/users/$(request.auth.uid)).data.permissions.admin == true
+          || firestore.get(/databases/default/documents/users/$(request.auth.uid)).data.role == 'admin'
         );
     }
     match /cashback-claims/{userId}/{fileName} {
@@ -37,6 +37,13 @@ service firebase.storage {
         && request.resource.contentType.matches('image/jpeg|image/png|image/webp');
       allow update: if false;
       allow delete: if request.auth != null && (request.auth.uid == uploaderId || admin());
+    }
+
+    match /feed-banners/{fileName} {
+      allow read: if request.auth != null;
+      // Feed assets are written only by manageFeedBannerAsset after it verifies
+      // the caller against the named `default` Firestore database.
+      allow write: if false;
     }
   }
 }

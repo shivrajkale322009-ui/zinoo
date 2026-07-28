@@ -24,7 +24,27 @@ service cloud.firestore {
       return data.ownerId is string && data.ownerId.size() > 0
         && data.sellerUid is string && data.sellerUid == data.ownerId
         && data.name is string && data.name.size() >= 2
+        && (!('display' in data) || (data.display is map && data.display.schemaVersion is int))
         && validProjectStatus(data);
+    }
+    function validFeedBanner(data) {
+      return data.keys().hasOnly([
+          'imageUrl', 'displayOrder', 'isActive', 'storagePath', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'imageUrl', 'displayOrder', 'isActive', 'storagePath', 'createdAt', 'updatedAt'
+        ])
+        && data.imageUrl is string
+        && data.imageUrl.size() <= 2000
+        && data.imageUrl.matches('https://firebasestorage.googleapis.com/.*')
+        && data.storagePath is string
+        && data.storagePath.matches('feed-banners/[a-f0-9-]+\\.(jpg|png|webp)')
+        && data.displayOrder is int
+        && data.displayOrder >= 1
+        && data.displayOrder <= 5
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
     match /users/{userId} {
       allow create: if signedIn() && request.auth.uid == userId
@@ -71,6 +91,29 @@ service cloud.firestore {
       allow delete: if admin();
     }
 
+    match /layouts/{layoutId} {
+      allow read: if signedIn() && (
+        admin() ||
+        get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.status == 'active' ||
+        get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.ownerId == request.auth.uid
+      );
+      allow create: if signedIn() && (
+        admin() ||
+        (seller() && request.resource.data.projectId != null &&
+         get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)).data.ownerId == request.auth.uid)
+      );
+      allow update: if signedIn() && (
+        admin() ||
+        (seller() && resource.data.projectId != null &&
+         get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.ownerId == request.auth.uid)
+      );
+      allow delete: if signedIn() && (
+        admin() ||
+        (seller() && resource.data.projectId != null &&
+         get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.ownerId == request.auth.uid)
+      );
+    }
+
     match /propertyAuditLogs/{auditId} { allow read: if admin(); allow write: if false; }
 
     match /leads/{recordId} {
@@ -98,13 +141,36 @@ service cloud.firestore {
     }
 
     match /cashbacks/{recordId} {
-      allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
+      // Creation and every lifecycle transition are performed by transactional
+      // callable functions so clients cannot forge amounts, timestamps or roles.
+      allow create: if false;
       allow read: if signedIn() && (
         resource.data.createdBy == request.auth.uid ||
         resource.data.projectOwnerId == request.auth.uid ||
         admin()
       );
-      allow update: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid && request.resource.data.createdBy == resource.data.createdBy);
+      allow update, delete: if false;
+    }
+
+    match /cashbackAuditLogs/{recordId} {
+      allow read: if admin();
+      allow write: if false;
+    }
+
+    match /notifications/{recordId} {
+      allow read: if signedIn() && (resource.data.recipientId == request.auth.uid || admin());
+      allow update: if signedIn()
+        && resource.data.recipientId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
+      allow create, delete: if false;
+    }
+
+    match /feed/{bannerId} {
+      allow read: if signedIn() && (resource.data.isActive == true || admin());
+      allow create: if admin() && validFeedBanner(request.resource.data);
+      allow update: if admin()
+        && validFeedBanner(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt;
       allow delete: if admin();
     }
   }

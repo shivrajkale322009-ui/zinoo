@@ -4,6 +4,7 @@ import {
   Building,
   ClipboardList,
   Home,
+  IndianRupee,
   LayoutDashboard,
   LogOut,
   Moon,
@@ -15,6 +16,7 @@ import {
   User,
   Users,
   FileText,
+  Images,
   ExternalLink,
   Search,
   Filter,
@@ -30,29 +32,33 @@ import {
   ArrowRight,
   Save,
   AlertCircle,
+  Menu,
   X
 } from 'lucide-react';
 import {
   collection,
-  deleteField,
   doc,
   onSnapshot,
   query,
   limit,
   updateDoc
 } from 'firebase/firestore';
-import { deleteObject, getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
 import EditProfileModal from './EditProfileModal';
-import { auth, db, functions, storage } from '../firebaseConfig';
+import { auth, db, functions } from '../firebaseConfig';
 import { isApprovedSellerAccount, normalizePermissions } from '../utils/permissions';
 import { isProjectPublishable, PROPERTY_STATUS, PROPERTY_STATUSES } from '../utils/projectVisibility';
 import { getLandZoneLabel, getNaStatusLabel, LAND_ZONE_OPTIONS, NA_STATUS_OPTIONS } from '../utils/projectLand';
 import { getProjectDocumentLabel, normalizeProjectDocuments } from '../utils/projectDocuments';
 import { validateProperty, validatePropertyLocation } from '../utils/adminPropertyUtils';
 import ProjectLocationPicker from './ProjectLocationPicker';
-import ImageUploadCropper from './ImageUploadCropper';
+import PropertyMediaDocumentsManager, { InAppDocumentViewer } from './PropertyMediaDocumentsManager';
 import AdminPropertyDetails from './AdminPropertyDetails';
+import useMediaQuery from '../utils/useMediaQuery';
+import CashbackWorkspace from './CashbackWorkspace';
+import FeedBannerManager from './FeedBannerManager';
+import PropertyDisplayEditor from './PropertyDisplayEditor';
+import { withPropertyDisplayModel } from '../utils/propertyDisplayModel';
 
 const getName = (account) => account?.displayName || account?.name || account?.businessName || account?.userName || account?.email || 'Unknown';
 
@@ -64,6 +70,7 @@ const getProjectOwnerName = (project, sellers) => {
 function AdminPanel({
   projects,
   leads = [],
+  cashbacks = [],
   updateProject,
   user,
   isDarkMode,
@@ -72,9 +79,12 @@ function AdminPanel({
   onSwitchToBuyer,
   onSwitchToSeller,
   onSelectSeller,
+  onListenerDebug,
   initialTab = 'home'
 }) {
+  const isAndroidLayout = useMediaQuery('(max-width: 768px)');
   const [activeTab, setActiveTab] = useState(initialTab);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [sellerRequests, setSellerRequests] = useState([]);
   const [buyers, setBuyers] = useState([]);
   const [sellers, setSellers] = useState([]);
@@ -98,8 +108,6 @@ function AdminPanel({
   const [editingProperty, setEditingProperty] = useState(null);
   const [isDirty, setIsDirty] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState({ legal: true, amenities: true, media: true, siteVisit: true });
-  const [thumbnailUploading, setThumbnailUploading] = useState(false);
-  const [thumbnailProgress, setThumbnailProgress] = useState(0);
 
   // Pending media files (held in memory until Save Changes succeeds)
   const [pendingCoverFile, setPendingCoverFile] = useState(null);
@@ -118,7 +126,6 @@ function AdminPanel({
   const zoneCertFileInputRef = useRef(null);
   const brochureFileInputRef = useRef(null);
 
-  const mediaUploadUrl = ''; // kept for legacy compat – no longer used in UI
   const [sortField, setSortField] = useState('name');
   const [sortDirection, setSortDirection] = useState('asc');
   const [currentPage, setCurrentPage] = useState(1);
@@ -129,24 +136,39 @@ function AdminPanel({
   }, [initialTab]);
 
   useEffect(() => {
+    const path = 'sellerRequests';
+    const filters = 'unfiltered';
+    console.info('[Druvio Firestore] Admin listener starting', { path, filters, uid: auth.currentUser?.uid });
+    onListenerDebug?.(path, { status: 'connecting', path, filters });
     const unsubscribe = onSnapshot(
       collection(db, 'sellerRequests'),
       (snapshot) => {
+        const lastSnapshotTime = new Date().toISOString();
+        console.info('[Druvio Firestore] Admin snapshot received', { path, filters, documentCount: snapshot.size, lastSnapshotTime });
         const requests = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
         setSellerRequests(requests);
+        onListenerDebug?.(path, { status: 'connected', path, filters, documentCount: snapshot.size, lastSnapshotTime });
       },
       (error) => {
-        console.error('Failed to load seller requests:', error);
-        setErrorMessage('Your signed-in account is not authorized to load Admin seller requests.');
+        const detail = { code: error?.code || 'unknown', message: error?.message || String(error) };
+        console.error('[Druvio Firestore] Admin listener failed', { path, filters, uid: auth.currentUser?.uid, ...detail, error });
+        onListenerDebug?.(path, { status: 'error', path, filters, error: detail });
+        setErrorMessage(`Firestore ${path} sync failed [${detail.code}]: ${detail.message}`);
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [onListenerDebug]);
 
   useEffect(() => {
+    const path = 'users';
+    const filters = 'unfiltered (Admin Buyer Accounts)';
+    console.info('[Druvio Firestore] Admin listener starting', { path, filters, uid: auth.currentUser?.uid });
+    onListenerDebug?.(path, { status: 'connecting', path, filters });
     const unsubscribe = onSnapshot(
       collection(db, 'users'),
       (snapshot) => {
+        const lastSnapshotTime = new Date().toISOString();
+        console.info('[Druvio Firestore] Admin snapshot received', { path, filters, documentCount: snapshot.size, lastSnapshotTime });
         const accounts = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
 
         const sellerList = accounts.filter((account) => {
@@ -161,23 +183,25 @@ function AdminPanel({
 
         setSellers(sellerList);
         setBuyers(buyerList);
+        onListenerDebug?.(path, { status: 'connected', path, filters, documentCount: snapshot.size, lastSnapshotTime });
       },
       (error) => {
-        console.error('Failed to load Admin accounts:', error);
-        setErrorMessage('Your signed-in account is not authorized to load Admin account data.');
+        const detail = { code: error?.code || 'unknown', message: error?.message || String(error) };
+        console.error('[Druvio Firestore] Admin listener failed', { path, filters, uid: auth.currentUser?.uid, ...detail, error });
+        onListenerDebug?.(path, { status: 'error', path, filters, error: detail });
+        setErrorMessage(`Firestore ${path} sync failed [${detail.code}]: ${detail.message}`);
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [onListenerDebug]);
 
   useEffect(() => {
-    if (!statusMessage && !errorMessage) return undefined;
+    if (!statusMessage) return undefined;
     const timeout = setTimeout(() => {
       setStatusMessage('');
-      setErrorMessage('');
     }, 3000);
     return () => clearTimeout(timeout);
-  }, [statusMessage, errorMessage]);
+  }, [statusMessage]);
 
   const propertiesMetrics = useMemo(() => {
     let total = 0;
@@ -308,10 +332,11 @@ function AdminPanel({
   const totalPages = Math.ceil(filteredProperties.length / itemsPerPage) || 1;
 
   const handleSaveProperty = async (updatedData) => {
-    const valResult = validateProperty(updatedData);
+    const displayReadyData = withPropertyDisplayModel(updatedData);
+    const valResult = validateProperty(displayReadyData);
 
     const updatedRecord = {
-      ...updatedData,
+      ...displayReadyData,
       hasErrors: valResult.hasErrors,
       errors: valResult.errors,
       locationStatus: valResult.locationStatus,
@@ -321,7 +346,7 @@ function AdminPanel({
     };
 
     const changes = [];
-    const original = projects.find(p => p.id === updatedData.id) || {};
+    const original = projects.find(p => p.id === displayReadyData.id) || {};
 
     if (original.name !== updatedData.name) changes.push(`Name changed: "${original.name || ''}" -> "${updatedData.name || ''}"`);
     if (Number(original.startingPrice ?? original.priceFrom) !== Number(updatedData.startingPrice ?? updatedData.priceFrom)) {
@@ -349,98 +374,30 @@ function AdminPanel({
     try {
       const originalSellerId = original.sellerId || original.sellerUid || original.ownerId || '';
       const nextSellerId = updatedData.sellerId || updatedData.sellerUid || updatedData.ownerId || '';
+      console.info('[Druvio Admin Save] Started', {
+        projectId: updatedData.id,
+        sellerChanged: originalSellerId !== nextSellerId,
+        coordinates: {
+          latitude: updatedData.latitude,
+          longitude: updatedData.longitude
+        }
+      });
       if (originalSellerId !== nextSellerId) {
-        await httpsCallable(functions, 'assignProjectSeller')({ projectId: updatedData.id, sellerId: nextSellerId });
+        const assignmentResult = await httpsCallable(functions, 'assignProjectSeller')({ projectId: updatedData.id, sellerId: nextSellerId });
+        console.info('[Druvio Admin Save] Seller assignment completed', assignmentResult.data);
       }
       await updateProject(updatedRecord);
+      console.info('[Druvio Admin Save] Project update completed', { projectId: updatedData.id });
       setStatusMessage("Property details updated and revalidated successfully.");
       setIsDirty(false);
       setEditingProperty(null);
     } catch (err) {
+      console.error('[Druvio Admin Save] Failed', {
+        projectId: updatedData.id,
+        code: err?.code,
+        message: err?.message
+      });
       setErrorMessage("Failed to save property changes: " + err.message);
-    }
-  };
-
-  const handleThumbnailUpload = async (file) => {
-    if (!editingProperty?.id || !user?.uid || thumbnailUploading) return;
-    const previousPath = editingProperty.thumbnailPath || '';
-    const assetId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const assetRef = ref(storage, `project-media/${user.uid}/${editingProperty.id}/thumbnails/${assetId}.webp`);
-    setThumbnailUploading(true);
-    setThumbnailProgress(0);
-    setErrorMessage('');
-
-    let uploadedRef;
-    try {
-      const task = uploadBytesResumable(assetRef, file, {
-        contentType: 'image/webp',
-        customMetadata: { projectId: editingProperty.id, uploadedBy: user.uid, kind: 'thumbnail' }
-      });
-      const snapshot = await new Promise((resolve, reject) => {
-        task.on('state_changed', ({ bytesTransferred, totalBytes }) => {
-          setThumbnailProgress(totalBytes ? (bytesTransferred / totalBytes) * 100 : 0);
-        }, reject, () => resolve(task.snapshot));
-      });
-      uploadedRef = snapshot.ref;
-      const thumbnailUrl = await getDownloadURL(snapshot.ref);
-      const thumbnailMetadata = {
-        fileName: file.name,
-        contentType: file.type,
-        size: file.size,
-        uploadedAt: new Date().toISOString(),
-        uploadedBy: user.uid
-      };
-      await updateDoc(doc(db, 'projects', editingProperty.id), {
-        thumbnailUrl,
-        thumbnail: thumbnailUrl,
-        thumbnailPath: snapshot.ref.fullPath,
-        thumbnailMetadata,
-        updatedAt: new Date().toISOString(),
-        updatedBy: user.uid
-      });
-      setEditingProperty((current) => current ? { ...current, thumbnailUrl, thumbnail: thumbnailUrl, thumbnailPath: snapshot.ref.fullPath, thumbnailMetadata } : current);
-      if (previousPath && previousPath !== snapshot.ref.fullPath) {
-        await deleteObject(ref(storage, previousPath)).catch((error) => console.warn('Previous thumbnail cleanup failed:', error));
-      }
-      setStatusMessage('Thumbnail updated successfully.');
-    } catch (error) {
-      if (uploadedRef) await deleteObject(uploadedRef).catch(() => undefined);
-      console.error('Thumbnail upload failed:', error);
-      setErrorMessage(error?.code === 'storage/unauthorized' ? 'You do not have permission to upload this thumbnail.' : 'Unable to upload the thumbnail. Please try again.');
-      throw error;
-    } finally {
-      setThumbnailUploading(false);
-      setThumbnailProgress(0);
-    }
-  };
-
-  const handleThumbnailDelete = async () => {
-    if (!editingProperty?.id || thumbnailUploading) return;
-    const previousPath = editingProperty.thumbnailPath || '';
-    setThumbnailUploading(true);
-    setThumbnailProgress(0);
-    setErrorMessage('');
-    try {
-      await updateDoc(doc(db, 'projects', editingProperty.id), {
-        thumbnailUrl: deleteField(),
-        thumbnail: deleteField(),
-        thumbnailPath: deleteField(),
-        thumbnailMetadata: deleteField(),
-        updatedAt: new Date().toISOString(),
-        updatedBy: user.uid
-      });
-      setEditingProperty((current) => {
-        if (!current) return current;
-        const { thumbnailUrl, thumbnail, thumbnailPath, thumbnailMetadata, ...rest } = current;
-        return rest;
-      });
-      if (previousPath) await deleteObject(ref(storage, previousPath)).catch((error) => console.warn('Thumbnail cleanup failed:', error));
-      setStatusMessage('Thumbnail deleted successfully.');
-    } catch (error) {
-      console.error('Thumbnail deletion failed:', error);
-      setErrorMessage('Unable to delete the thumbnail. Please try again.');
-    } finally {
-      setThumbnailUploading(false);
     }
   };
 
@@ -612,7 +569,7 @@ function AdminPanel({
           <div key={`${document.id || document.type}-${index}`} className="admin-document-review-row">
             <FileText size={15} />
             <span><strong>{getProjectDocumentLabel(document.type)}</strong><small className={`document-review-status ${document.status}`}>{document.status}</small></span>
-            <a href={document.url} target="_blank" rel="noreferrer" aria-label={`Open ${getProjectDocumentLabel(document.type)}`}><ExternalLink size={14} /></a>
+            <button type="button" onClick={() => setPreviewModal(document)} aria-label={`Preview ${getProjectDocumentLabel(document.type)}`}><Eye size={14} /></button>
             <button type="button" disabled={workingKey.startsWith(`document-${project.id}-${index}`) || document.status === 'verified'} onClick={() => handleDocumentDecision(project, index, 'verified')}>Verify</button>
             <button type="button" className="danger" disabled={workingKey.startsWith(`document-${project.id}-${index}`) || document.status === 'rejected'} onClick={() => handleDocumentDecision(project, index, 'rejected')}>Reject</button>
           </div>
@@ -676,7 +633,14 @@ function AdminPanel({
         { key: 'buyers', label: 'Buyers', icon: Users, count: buyers.length },
         { key: 'sellers', label: 'Sellers', icon: Store, count: sellers.length },
         { key: 'requests', label: 'Seller Requests', icon: ClipboardList, count: pendingSellerRequests },
-        { key: 'listings', label: 'Property Reviews', icon: Building, count: pendingProjects.length }
+        { key: 'listings', label: 'Property Reviews', icon: Building, count: pendingProjects.length },
+        { key: 'cashbacks', label: 'Cashback Management', icon: IndianRupee, count: cashbacks.filter(item => item.status === 'Pending Admin Review').length }
+      ]
+    },
+    {
+      label: 'Content Management',
+      items: [
+        { key: 'feed', label: 'Feed', icon: Images, count: null }
       ]
     },
     {
@@ -719,43 +683,82 @@ function AdminPanel({
   const viewMeta = {
     home: {
       title: 'Dashboard',
-      description: 'Monitor buyers, sellers, approvals, and review queues from one primary admin workspace.'
     },
     properties: {
       title: 'Properties',
-      description: 'Manage, review, edit, and resolve issues across all plotting projects.'
     },
     buyers: {
       title: 'Buyer Accounts',
-      description: 'Review buyer accounts while keeping the existing buyer application unchanged.'
     },
     sellers: {
       title: 'Seller Accounts',
-      description: 'Select a seller to open the current seller dashboard and manage that seller with existing components.'
+
     },
     requests: {
       title: 'Seller Requests',
-      description: 'Approve or reject incoming seller applications from the primary admin interface.'
+
     },
     listings: {
       title: 'Property Review Queue',
-      description: 'Approve pending property submissions or jump into the seller workspace for deeper edits.'
+
+    },
+    cashbacks: {
+      title: 'Cashback Management',
+
+    },
+    feed: {
+      title: 'Feed',
+      description: 'Manage the promotional banners shown on Buyer Home.'
     },
     profile: {
       title: 'Profile',
-      description: 'Review your admin account details and open the existing profile editor when needed.'
     },
     settings: {
       title: 'Settings',
-      description: 'Adjust interface preferences for the admin workspace without leaving the dashboard.'
     }
   };
 
   const currentMeta = viewMeta[activeTab] || viewMeta.home;
+  const selectAdminDestination = (key) => {
+    handleSidebarAction(key);
+    setMobileDrawerOpen(false);
+  };
 
   return (
     <div className="admin-shell">
-      <aside className="admin-sidebar">
+      {isAndroidLayout && (
+        <header className="admin-mobile-top-app-bar m3-mobile-top-app-bar">
+          <button type="button" className="m3-icon-button" onClick={() => setMobileDrawerOpen(true)} aria-label="Open admin navigation">
+            <Menu size={24} />
+          </button>
+          <div><span>Admin</span><strong>{currentMeta.title}</strong></div>
+          <button type="button" className="m3-icon-button" onClick={() => setShowProfileModal(true)} aria-label="Open profile">
+            <User size={24} />
+          </button>
+        </header>
+      )}
+      {isAndroidLayout && mobileDrawerOpen && (
+        <div className="admin-mobile-drawer-scrim" role="presentation" onClick={() => setMobileDrawerOpen(false)}>
+          <aside className="admin-mobile-drawer" role="dialog" aria-modal="true" aria-label="Admin navigation" onClick={(event) => event.stopPropagation()}>
+            <div className="admin-mobile-drawer-head">
+              <div><span>Druvio</span><strong>Admin workspace</strong></div>
+              <button type="button" className="m3-icon-button" onClick={() => setMobileDrawerOpen(false)} aria-label="Close navigation"><X size={24} /></button>
+            </div>
+            <nav>
+              {sidebarGroups.flatMap((group) => group.items).map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button key={item.key} type="button" className={activeTab === item.key ? 'active' : ''} onClick={() => selectAdminDestination(item.key)}>
+                    <Icon size={22} /><span>{item.label}</span>
+                    {typeof item.count === 'number' && <b>{item.count}</b>}
+                  </button>
+                );
+              })}
+            </nav>
+          </aside>
+        </div>
+      )}
+      {!isAndroidLayout && <aside className="admin-sidebar">
         <nav className="admin-sidebar-nav" aria-label="Admin navigation">
           {sidebarGroups.map((group) => (
             <div key={group.label} className="admin-sidebar-group">
@@ -786,7 +789,7 @@ function AdminPanel({
             </div>
           ))}
         </nav>
-      </aside>
+      </aside>}
 
       <section className="admin-content">
         <div className="admin-content-header">
@@ -798,6 +801,9 @@ function AdminPanel({
 
         {statusMessage && <div className="app-success" role="status">{statusMessage}</div>}
         {errorMessage && <div className="app-error" role="alert">{errorMessage}</div>}
+
+        {activeTab === 'cashbacks' && <CashbackWorkspace role="admin" cashbacks={cashbacks} />}
+        {activeTab === 'feed' && <FeedBannerManager user={user} onSuccess={setStatusMessage} onError={setErrorMessage} />}
 
         {activeTab === 'home' && (
           <div className="admin-panel-stack">
@@ -1072,14 +1078,14 @@ function AdminPanel({
               // Returns true if the section has no errors, false if it has at least one.
               const isSectionValid = (sectionId) => {
                 const sectionErrorTypes = {
-                  basic:     ['missing_name', 'invalid_property_status'],
-                  pricing:   ['missing_price'],
-                  location:  ['exact_location_missing', 'invalid_coordinates', 'marker_not_confirmed'],
-                  legal:     ['missing_legal_information'],
+                  basic: ['missing_name', 'invalid_property_status'],
+                  pricing: ['missing_price'],
+                  location: ['exact_location_missing', 'invalid_coordinates', 'marker_not_confirmed'],
+                  legal: ['missing_legal_information'],
                   amenities: [],
-                  media:     ['missing_cover_image', 'media_error'],
+                  media: ['missing_cover_image', 'media_error'],
                   siteVisit: ['incomplete_contact'],
-                  contact:   ['incomplete_contact'],
+                  contact: ['incomplete_contact'],
                 };
                 const relevantTypes = sectionErrorTypes[sectionId] || [];
                 if (relevantTypes.length === 0) return true;
@@ -1162,11 +1168,18 @@ function AdminPanel({
                     </div>
 
                     <form onSubmit={(e) => { e.preventDefault(); handleSaveProperty(editingProperty); }} className="admin-redesigned-form-body">
+                      <PropertyDisplayEditor
+                        property={editingProperty}
+                        onChange={(nextProperty) => {
+                          setEditingProperty(nextProperty);
+                          setIsDirty(true);
+                        }}
+                      />
                       {/* Basic Info Section */}
                       <section className="form-section form-section-basic">
                         <h2 className="section-title">Basic Information</h2>
                         <p className="section-description">Core details regarding the plotting property name, developer, and overall status.</p>
-                        
+
                         <div className="form-grid-3">
                           <label className="admin-field">
                             <span className="form-label">Property Name *</span>
@@ -1262,7 +1275,7 @@ function AdminPanel({
 
                         <div className="coordinates-confirm-box" style={{ marginTop: '24px' }}>
                           <h3>Map Coordinates Validation</h3>
-                          
+
                           {/* Exact Map Location Alert Banner */}
                           {val.locationStatus !== 'verified' ? (
                             <div className="exact-location-alert red-banner">
@@ -1496,36 +1509,14 @@ function AdminPanel({
 
                         {!isMediaCollapsed && (
                           <div className="collapsible-content-body" style={{ marginTop: '20px' }}>
-                            <div className="thumbnail-section">
-                              <div className="thumbnail-section-heading">
-                                <div>
-                                  <h3>Thumbnail</h3>
-                                  <p>Shown on property cards and search results.</p>
-                                </div>
-                                <span>16:9</span>
-                              </div>
-                              <ImageUploadCropper
-                                value={editingProperty.thumbnailUrl || editingProperty.thumbnail || ''}
-                                alt={`${editingProperty.name || 'Property'} thumbnail`}
-                                uploading={thumbnailUploading}
-                                progress={thumbnailProgress}
-                                onUpload={handleThumbnailUpload}
-                                onDelete={handleThumbnailDelete}
-                                onError={setErrorMessage}
-                              />
-                            </div>
-
-                            <div className="media-inputs-list" style={{ marginTop: '24px' }}>
-                              <label className="admin-field" style={{ marginTop: '16px' }}>
-                                <span className="form-label">Layout Blueprint Image URL</span>
-                                <input type="text" className="form-control" value={editingProperty.layoutPlan || ''} onChange={e => { setEditingProperty({ ...editingProperty, layoutPlan: e.target.value }); setIsDirty(true); }} />
-                              </label>
-
-                              <label className="admin-field" style={{ marginTop: '16px' }}>
-                                <span className="form-label">Brochure Document URL</span>
-                                <input type="text" className="form-control" value={editingProperty.brochure || ''} onChange={e => { setEditingProperty({ ...editingProperty, brochure: e.target.value }); setIsDirty(true); }} />
-                              </label>
-                            </div>
+                            <PropertyMediaDocumentsManager
+                              property={editingProperty}
+                              user={user}
+                              onChange={(nextProperty) => {
+                                setEditingProperty(nextProperty);
+                                setIsDirty(true);
+                              }}
+                            />
                           </div>
                         )}
                       </section>
@@ -1828,10 +1819,10 @@ function AdminPanel({
                                 <td>
                                   <span className={`badge location-status-${property.locationStatus || 'missing'}`}>
                                     {property.locationStatus === 'verified' ? 'Verified' :
-                                     property.locationStatus === 'missing' ? 'Location Missing' :
-                                     property.locationStatus === 'invalid' ? 'Invalid Coordinates' :
-                                     property.locationStatus === 'not_confirmed' ? 'Marker Not Confirmed' :
-                                     'Needs Review'}
+                                      property.locationStatus === 'missing' ? 'Location Missing' :
+                                        property.locationStatus === 'invalid' ? 'Invalid Coordinates' :
+                                          property.locationStatus === 'not_confirmed' ? 'Marker Not Confirmed' :
+                                            'Needs Review'}
                                   </span>
                                 </td>
                                 <td>
@@ -2115,104 +2106,104 @@ function AdminPanel({
 
         {activeTab === 'listings' && (
           <div className="admin-panel-stack">
-          <div className="admin-panel-section">
-            <div className="table-container">
-              <table className="dash-table">
-                <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Projected by</th>
-                    <th>Village</th>
-                    <th>Land Zone</th>
-                    <th>NA Status</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pendingProjects.length === 0 ? (
+            <div className="admin-panel-section">
+              <div className="table-container">
+                <table className="dash-table">
+                  <thead>
                     <tr>
-                      <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No property listings are waiting for approval.</td>
+                      <th>Project</th>
+                      <th>Projected by</th>
+                      <th>Village</th>
+                      <th>Land Zone</th>
+                      <th>NA Status</th>
+                      <th>Status</th>
+                      <th>Actions</th>
                     </tr>
-                  ) : (
-                    pendingProjects.map((project) => {
-                      const seller = sellers.find((item) => item.id === project.ownerId);
+                  </thead>
+                  <tbody>
+                    {pendingProjects.length === 0 ? (
+                      <tr>
+                        <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No property listings are waiting for approval.</td>
+                      </tr>
+                    ) : (
+                      pendingProjects.map((project) => {
+                        const seller = sellers.find((item) => item.id === project.ownerId);
 
-                      return (
-                        <tr key={project.id}>
-                          <td>
-                            <strong>{project.name}</strong>
-                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>{project.area || 'Area not provided'}</div>
-                            {renderDocumentReview(project)}
-                          </td>
-                          <td>{getProjectOwnerName(project, sellers)}</td>
-                          <td>{project.village || 'N/A'}</td>
-                          <td>{getLandZoneLabel(project)}</td>
-                          <td>{getNaStatusLabel(project)}</td>
-                          <td><span className="badge badge-warning">Pending Review</span></td>
-                          <td>
-                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                className="btn-primary seller-inline-button"
-                                disabled={workingKey === `approve-project-${project.id}`}
-                                onClick={() => handleApproveProject({ ...project, sellerAssociationValid: Boolean((project.sellerId || project.sellerUid || project.ownerId) && sellers.some((seller) => seller.id === (project.sellerId || project.sellerUid || project.ownerId))) })}
-                              >
-                                <ShieldCheck size={14} /> Approve
-                              </button>
-                              <button
-                                type="button"
-                                className="btn-secondary seller-inline-button"
-                                disabled={workingKey === `reject-project-${project.id}`}
-                                onClick={() => handleRejectProject(project.id)}
-                              >
-                                <ShieldX size={14} /> Reject
-                              </button>
-                              {seller && (
+                        return (
+                          <tr key={project.id}>
+                            <td>
+                              <strong>{project.name}</strong>
+                              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>{project.area || 'Area not provided'}</div>
+                              {renderDocumentReview(project)}
+                            </td>
+                            <td>{getProjectOwnerName(project, sellers)}</td>
+                            <td>{project.village || 'N/A'}</td>
+                            <td>{getLandZoneLabel(project)}</td>
+                            <td>{getNaStatusLabel(project)}</td>
+                            <td><span className="badge badge-warning">Pending Review</span></td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="btn-primary seller-inline-button"
+                                  disabled={workingKey === `approve-project-${project.id}`}
+                                  onClick={() => handleApproveProject({ ...project, sellerAssociationValid: Boolean((project.sellerId || project.sellerUid || project.ownerId) && sellers.some((seller) => seller.id === (project.sellerId || project.sellerUid || project.ownerId))) })}
+                                >
+                                  <ShieldCheck size={14} /> Approve
+                                </button>
                                 <button
                                   type="button"
                                   className="btn-secondary seller-inline-button"
-                                  onClick={() => openSellerWorkspace(seller)}
+                                  disabled={workingKey === `reject-project-${project.id}`}
+                                  onClick={() => handleRejectProject(project.id)}
                                 >
-                                  <Store size={14} /> Open Seller Side
+                                  <ShieldX size={14} /> Reject
                                 </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div className="admin-panel-section">
-            <div className="admin-panel-section-head">
-              <div>
-                <span className="admin-panel-kicker">Active</span>
-                <h3>Active projects</h3>
+                                {seller && (
+                                  <button
+                                    type="button"
+                                    className="btn-secondary seller-inline-button"
+                                    onClick={() => openSellerWorkspace(seller)}
+                                  >
+                                    <Store size={14} /> Open Seller Side
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
               </div>
-              <span>{activeProjectList.length}</span>
             </div>
-            <div className="table-container">
-              <table className="dash-table">
-                <thead><tr><th>Project</th><th>Projected by</th><th>Location</th><th>Land Zone</th><th>NA Status</th><th>Status</th></tr></thead>
-                <tbody>
-                  {activeProjectList.map((project) => (
-                    <tr key={project.id}>
-                      <td><strong>{project.name || 'Unnamed project'}</strong>{renderDocumentReview(project)}</td>
-                      <td>{getProjectOwnerName(project, sellers)}</td>
-                      <td>{[project.village, project.area].filter(Boolean).join(', ') || 'Location not provided'}</td>
-                      <td>{getLandZoneLabel(project)}</td>
-                      <td>{getNaStatusLabel(project)}</td>
-                      <td><span className="badge badge-success">Active</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="admin-panel-section">
+              <div className="admin-panel-section-head">
+                <div>
+                  <span className="admin-panel-kicker">Active</span>
+                  <h3>Active projects</h3>
+                </div>
+                <span>{activeProjectList.length}</span>
+              </div>
+              <div className="table-container">
+                <table className="dash-table">
+                  <thead><tr><th>Project</th><th>Projected by</th><th>Location</th><th>Land Zone</th><th>NA Status</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {activeProjectList.map((project) => (
+                      <tr key={project.id}>
+                        <td><strong>{project.name || 'Unnamed project'}</strong>{renderDocumentReview(project)}</td>
+                        <td>{getProjectOwnerName(project, sellers)}</td>
+                        <td>{[project.village, project.area].filter(Boolean).join(', ') || 'Location not provided'}</td>
+                        <td>{getLandZoneLabel(project)}</td>
+                        <td>{getNaStatusLabel(project)}</td>
+                        <td><span className="badge badge-success">Active</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
           </div>
         )}
 
@@ -2270,6 +2261,7 @@ function AdminPanel({
           onClose={() => setShowProfileModal(false)}
         />
       )}
+      <InAppDocumentViewer document={previewModal} onClose={() => setPreviewModal(null)} />
     </div>
   );
 }

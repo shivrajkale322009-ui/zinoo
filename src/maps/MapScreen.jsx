@@ -105,6 +105,7 @@ export default function MapScreen({
   const projectPopupRef = useRef(null);
   const clusterRef = useRef(null);
   const polygonRef = useRef(null);
+  const nearbyPolygonRefs = useRef([]);
 
   // Drawing overlays
   const draftLineRef = useRef(null);
@@ -333,7 +334,7 @@ export default function MapScreen({
   }, []);
 
   // Draw polygon layout
-  const drawPolygon = useCallback((coordinates, editable = false, color = '#22c55e') => {
+  const drawPolygon = useCallback((coordinates, editable = false, color = '#16a34a') => {
     const map = mapRef.current;
     if (!map || coordinates.length < 3 || !layerVisibility.layouts) return;
     clearPolygon();
@@ -342,14 +343,26 @@ export default function MapScreen({
       paths: coordinates,
       map,
       strokeColor: color,
-      strokeOpacity: 1,
+      strokeOpacity: 0,
       strokeWeight: 3,
       fillColor: color,
-      fillOpacity: 0.22,
+      fillOpacity: 0,
       editable,
       draggable: editable,
       zIndex: 4
     });
+
+    const startedAt = performance.now();
+    const fadePolygon = (now) => {
+      if (!polygonRef.current) return;
+      const progress = Math.min(1, (now - startedAt) / 200);
+      polygonRef.current.setOptions({
+        strokeOpacity: progress,
+        fillOpacity: 0.18 * progress
+      });
+      if (progress < 1) requestAnimationFrame(fadePolygon);
+    };
+    requestAnimationFrame(fadePolygon);
 
     if (editable) {
       // Attach history listeners
@@ -374,19 +387,47 @@ export default function MapScreen({
   // Load layout from prop activeLayout
   useEffect(() => {
     if (activeLayout && activeLayout.polygonCoordinates) {
-      drawPolygon(activeLayout.polygonCoordinates, editingLayout, activeLayout.color);
-    } else if (selectedProject && getProjectMarkerState({ zoom: zoomTier, project: selectedProject, selectedProjectId: selectedProject.id }).showPolygon) {
+      drawPolygon(activeLayout.polygonCoordinates, editingLayout, editingLayout ? activeLayout.color : '#16a34a');
+    } else if (selectedProject) {
       const path = normalizeProjectPolygon(selectedProject.layoutPolygon);
-      drawPolygon(path, editingLayout, '#2563eb');
-      if (path.length >= 3 && mapRef.current) {
-        const bounds = new window.google.maps.LatLngBounds();
-        path.forEach((point) => bounds.extend(point));
-        mapRef.current.fitBounds(bounds, 64);
-      }
+      drawPolygon(path, editingLayout, '#16a34a');
     } else {
       clearPolygon();
     }
   }, [activeLayout, editingLayout, drawPolygon, clearPolygon, selectedProject, zoomTier]);
+
+  // Preserve geographic context: when exploring at neighborhood zoom levels,
+  // render surrounding Druvio layouts as a quiet secondary layer.
+  useEffect(() => {
+    const map = mapRef.current;
+    nearbyPolygonRefs.current.forEach((polygon) => polygon.setMap(null));
+    nearbyPolygonRefs.current = [];
+    if (!map || !mapReady || !layerVisibility.layouts || !selectedProject || zoomTier < 12 || zoomTier > 17) return;
+    const bounds = map.getBounds();
+    nearbyPolygonRefs.current = projects
+      .filter((project) => project.id !== selectedProject.id && isProjectPublishable(project))
+      .map((project) => {
+        const path = normalizeProjectPolygon(project.layoutPolygon);
+        const position = pointFor(project);
+        if (path.length < 3 || (bounds && position && !bounds.contains(position))) return null;
+        return new window.google.maps.Polygon({
+          paths: path,
+          map,
+          strokeColor: '#22c55e',
+          strokeOpacity: 0.48,
+          strokeWeight: 1.5,
+          fillColor: '#86efac',
+          fillOpacity: 0.07,
+          clickable: true,
+          zIndex: 2
+        });
+      })
+      .filter(Boolean);
+    return () => {
+      nearbyPolygonRefs.current.forEach((polygon) => polygon.setMap(null));
+      nearbyPolygonRefs.current = [];
+    };
+  }, [layerVisibility.layouts, mapReady, projects, selectedProject, viewportRevision, zoomTier]);
 
   // Listen to the custom sidebar layout-adding event
   useEffect(() => {
@@ -473,12 +514,21 @@ export default function MapScreen({
         setMapReady(true);
         setMapStatus('ready');
       } catch (error) {
-        if (import.meta.env.DEV) console.error('[Druvio Maps] Initialization failed.');
+        console.error('[Druvio Maps] Buyer map initialization failed', {
+          code: error?.code,
+          message: error?.message,
+          projectCount: projects.length
+        });
         setMapStatus('load-error');
         setMapError(googleMapsUnavailableMessage);
       }
-    }).catch(() => {
+    }).catch((loadError) => {
       if (disposed) return;
+      console.error('[Druvio Maps] Buyer map loader failed', {
+        code: loadError?.code,
+        message: loadError?.message,
+        projectCount: projects.length
+      });
       setMapStatus('load-error');
       setMapError(googleMapsUnavailableMessage);
     });
@@ -494,6 +544,8 @@ export default function MapScreen({
       selectedMarkerRef.current && (selectedMarkerRef.current.map = null);
       projectPopupRef.current?.setMap(null);
       polygonRef.current?.setMap(null);
+      nearbyPolygonRefs.current.forEach((polygon) => polygon.setMap(null));
+      nearbyPolygonRefs.current = [];
       villageBoundaryRefs.current.forEach((polygon) => polygon.setMap(null));
     };
   }, [handleBoundsIdle]);
@@ -519,6 +571,7 @@ export default function MapScreen({
       const bounds = new window.google.maps.LatLngBounds();
       path.forEach((point) => bounds.extend(point));
       mapRef.current.fitBounds(bounds, 64);
+      if (event.detail?.preserveMap) return;
       const container = mapElement.current?.parentElement;
       if (container && !document.fullscreenElement) container.requestFullscreen?.();
     };
@@ -553,11 +606,9 @@ export default function MapScreen({
       });
 
       marker.addEventListener('gmp-click', () => {
-        clearPolygon();
         if (onSelectProject) {
           onSelectProject(project);
         }
-        map.panTo(position);
       });
 
       return marker;
@@ -579,7 +630,7 @@ export default function MapScreen({
         }
       });
     }
-  }, [projects, clearPolygon, mapReady, onSelectProject, layerVisibility.markers, zoomTier, markerStates, selectedProject?.id]);
+  }, [projects, mapReady, onSelectProject, layerVisibility.markers, zoomTier, markerStates, selectedProject?.id]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -602,7 +653,12 @@ export default function MapScreen({
       zIndex: 9999
     });
     selectedMarkerRef.current = marker;
-    map.panTo(position);
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      map.panTo(position);
+      if ((map.getZoom() || DEFAULT_ZOOM) < 15) {
+        window.setTimeout(() => map.setZoom(15), 220);
+      }
+    }
     if (!showProjectPopup) return () => { marker.map = null; };
 
     class ProjectPopupOverlay extends window.google.maps.OverlayView {

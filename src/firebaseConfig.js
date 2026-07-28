@@ -15,9 +15,21 @@ const firebaseConfig = {
   appId: "1:23103959226:web:7a333301896a8e5bce9283",
   measurementId: "G-JY2H8DJQW4"
 };
+export const firebaseProjectId = firebaseConfig.projectId;
+export const firebaseConfigDiagnostics = Object.freeze({
+  apiKey: Boolean(firebaseConfig.apiKey),
+  authDomain: firebaseConfig.authDomain,
+  projectId: firebaseConfig.projectId,
+  storageBucket: firebaseConfig.storageBucket,
+  messagingSenderId: Boolean(firebaseConfig.messagingSenderId),
+  appId: Boolean(firebaseConfig.appId)
+});
 
 // Initialize Firebase app
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+if (app.options.projectId !== firebaseConfig.projectId) {
+  throw new Error(`Firebase project mismatch: expected ${firebaseConfig.projectId}, received ${app.options.projectId || 'missing'}.`);
+}
 
 // Export individual Firebase services
 export const auth = getAuth(app);

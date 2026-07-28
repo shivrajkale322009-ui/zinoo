@@ -29,6 +29,10 @@ import ProjectLocationPicker from './ProjectLocationPicker';
 import { PROJECT_DOCUMENT_OPTIONS, getProjectDocumentLabel } from '../utils/projectDocuments';
 import { getCashbackPerGuntha, withCanonicalPlotArea } from '../utils/projectArea';
 import { getProjectApprovalStatus, isProjectPublishable, PROPERTY_STATUS } from '../utils/projectVisibility';
+import useMediaQuery from '../utils/useMediaQuery';
+import CashbackWorkspace from './CashbackWorkspace';
+import PropertyDisplayEditor from './PropertyDisplayEditor';
+import { withPropertyDisplayModel } from '../utils/propertyDisplayModel';
 import {
   LAND_ZONE_OPTIONS,
   NA_STATUS_OPTIONS,
@@ -137,6 +141,7 @@ function SellerDashboard({
   projects,
   leads,
   visits,
+  cashbacks = [],
   user,
   updateProject,
   addProject,
@@ -146,7 +151,9 @@ function SellerDashboard({
   onBackToAdmin,
   onSelectedSellerChange
 }) {
+  const isAndroidLayout = useMediaQuery('(max-width: 768px)');
   const [activeTab, setActiveTab] = useState(initialTab);
+  const [mobileDashboardOnly, setMobileDashboardOnly] = useState(true);
   const [editingProject, setEditingProject] = useState(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showSellerProfileEditor, setShowSellerProfileEditor] = useState(false);
@@ -189,7 +196,7 @@ function SellerDashboard({
 
   const handleEditSave = (e) => {
     e.preventDefault();
-    updateProject(withCanonicalPlotArea(withCanonicalLandFields({
+    updateProject(withPropertyDisplayModel(withCanonicalPlotArea(withCanonicalLandFields({
       ...editingProject,
       startingPrice: toNumber(editingProject.startingPrice),
       latitude: toNumber(editingProject.latitude ?? editingProject.coords?.[0], CHAKAN_LOCATION.latitude),
@@ -202,7 +209,7 @@ function SellerDashboard({
       plotAreaMaxSqFt: toNumber(editingProject.plotAreaMaxSqFt ?? editingProject.sizeMax),
       cashbackPerGuntha: Math.max(0, toNumber(editingProject.cashbackPerGuntha ?? editingProject.cashbackAmount)),
       status: isAdminView ? editingProject.status : PROPERTY_STATUS.PENDING
-    })));
+    }))));
     setEditingProject(null);
     showToast();
   };
@@ -355,7 +362,7 @@ function SellerDashboard({
     if (!newProject.name.trim()) return;
     setProjectSubmitError('');
 
-    const createdProject = {
+    const createdProject = withPropertyDisplayModel({
       name: newProject.name.trim(),
       developer: newProject.developer,
       village: newProject.village.trim(),
@@ -407,7 +414,7 @@ function SellerDashboard({
       thumbnailMetadata: newProject.thumbnailMetadata,
       documents: newProject.documents,
       DruvioScore: 4.6
-    };
+    });
 
     try {
       await addProject(createdProject);
@@ -483,12 +490,13 @@ function SellerDashboard({
 
   const selectTab = (tab) => {
     setActiveTab(tab);
+    setMobileDashboardOnly(false);
     setEditingProject(null);
   };
 
   return (
-    <div className="seller-dashboard seller-workspace">
-      <aside className="seller-desktop-sidebar" aria-label="Seller workspace navigation">
+    <div className={`seller-dashboard seller-workspace ${isAndroidLayout && mobileDashboardOnly ? 'seller-mobile-dashboard-only' : ''}`}>
+      {!isAndroidLayout && <aside className="seller-desktop-sidebar" aria-label="Seller workspace navigation">
         <nav className="seller-sidebar-nav">
           <button type="button" className={`seller-sidebar-link ${activeTab === 'listings' ? 'active' : ''}`} onClick={() => selectTab('listings')}>
             <LayoutDashboard size={17} /> Dashboard
@@ -506,15 +514,18 @@ function SellerDashboard({
               <Calendar size={17} /> Site visits <span>{myVisits.length}</span>
             </button>
           )}
+          <button type="button" className={`seller-sidebar-link ${activeTab === 'cashbacks' ? 'active' : ''}`} onClick={() => selectTab('cashbacks')}>
+            <IndianRupee size={17} /> Cashback requests <span>{cashbacks.filter(item => item.status === 'Pending Seller Approval').length}</span>
+          </button>
         </nav>
 
-      </aside>
+      </aside>}
 
       <main className="seller-workspace-main">
-        <header className="seller-desktop-topbar">
+        <header className={isAndroidLayout ? 'm3-mobile-top-app-bar seller-mobile-top-app-bar' : 'seller-desktop-topbar'}>
           <div>
             <span className="seller-topbar-kicker">{isAdminView ? 'Admin view' : 'Seller workspace'}</span>
-            <h1>{activeTab === 'add' ? 'Create a listing' : activeTab === 'leads' ? 'Lead pipeline' : activeTab === 'visits' ? 'Visit calendar' : 'Portfolio overview'}</h1>
+            <h1>{activeTab === 'add' ? 'Create a listing' : activeTab === 'leads' ? 'Lead pipeline' : activeTab === 'visits' ? 'Visit calendar' : activeTab === 'cashbacks' ? 'Cashback requests' : 'Portfolio overview'}</h1>
           </div>
         </header>
         <div className="metric-grid seller-metric-grid">
@@ -594,6 +605,7 @@ function SellerDashboard({
             layoutPolygon={editingProject.layoutPolygon}
             onLayoutChange={(geometry) => setEditingProject((current) => ({ ...current, ...geometry }))}
           />
+          <PropertyDisplayEditor property={editingProject} onChange={setEditingProject} />
           <div className="seller-form-grid">
             <label className="seller-field">
               <span>Latitude</span>
@@ -669,6 +681,8 @@ function SellerDashboard({
             <button type="button" className="btn-secondary" onClick={() => setEditingProject(null)}>Cancel</button>
           </div>
         </form>
+      ) : activeTab === 'cashbacks' ? (
+        <CashbackWorkspace role="seller" cashbacks={cashbacks} />
       ) : activeTab === 'listings' ? (
         <section className="seller-panel seller-content-panel">
           <div className="seller-panel-heading">
@@ -792,6 +806,10 @@ function SellerDashboard({
               <small>Created on behalf of this Seller by Admin. Ownership cannot be changed here.</small>
             </div>
           )}
+
+          <div className="seller-form-section">
+            <PropertyDisplayEditor property={newProject} onChange={setNewProject} />
+          </div>
 
           <div className="seller-form-section">
             <h4>Basic details</h4>
@@ -1104,17 +1122,33 @@ function SellerDashboard({
         </section>
       )}
 
-      {showSellerProfileEditor && selectedSeller && (
+      {showSellerProfileEditor && (
         <EditProfileModal
-          user={selectedSeller}
-          allowAuthUpdate={false}
-          title="Edit Seller Profile"
+          user={selectedSeller || user}
+          allowAuthUpdate={!selectedSeller}
+          title="Seller Profile"
           successMessage="Seller profile updated successfully!"
           onSave={onSelectedSellerChange}
           onClose={() => setShowSellerProfileEditor(false)}
         />
       )}
       </main>
+      {isAndroidLayout && !isAdminView && (
+        <nav className="seller-mobile-nav m3-bottom-navigation" aria-label="Seller navigation">
+          <button type="button" className={mobileDashboardOnly ? 'active' : ''} onClick={() => { setActiveTab('listings'); setMobileDashboardOnly(true); setEditingProject(null); }}>
+            <LayoutDashboard size={24} /><span>Dashboard</span>
+          </button>
+          <button type="button" className={!mobileDashboardOnly && ['listings', 'add'].includes(activeTab) ? 'active' : ''} onClick={() => selectTab('listings')}>
+            <Building size={24} /><span>Projects</span>
+          </button>
+          <button type="button" className={activeTab === 'leads' ? 'active' : ''} onClick={() => selectTab('leads')}>
+            <MessageSquareMore size={24} /><span>Leads</span>
+          </button>
+          <button type="button" className={showSellerProfileEditor ? 'active' : ''} onClick={() => setShowSellerProfileEditor(true)}>
+            <User size={24} /><span>Profile</span>
+          </button>
+        </nav>
+      )}
     </div>
   );
 }

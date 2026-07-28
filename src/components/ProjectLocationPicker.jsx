@@ -97,8 +97,13 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
       ];
       const savedPath = normalizeProjectPolygon(layoutPolygon);
       if (savedPath.length >= 3) showPolygon(savedPath, false);
-    }).catch(() => {
+    }).catch((loadError) => {
       if (cancelled) return;
+      console.error('[Druvio Maps] Project location picker failed', {
+        code: loadError?.code,
+        message: loadError?.message,
+        coordinates: { latitude, longitude }
+      });
       setError(googleMapsUnavailableMessage);
       setMapStatus('load-error');
     });

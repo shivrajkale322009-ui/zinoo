@@ -28,9 +28,12 @@ import {
   isApprovedSellerAccount,
   normalizePermissions
 } from './utils/permissions';
+import { PROPERTY_STATUS } from './utils/projectVisibility';
 import ThemeContext from './components/ThemeProvider';
+import NotificationCenter from './components/NotificationCenter';
+import { firebaseProjectId } from './firebaseConfig';
 
-const collections = ['projects', 'leads', 'visits', 'cashbacks'];
+const collections = ['projects', 'leads', 'visits', 'cashbacks', 'notifications'];
 const MANAGED_SELLER_CONTEXT_KEY = 'druvio-managed-seller-context';
 
 function App() {
@@ -42,7 +45,8 @@ function App() {
   const [selectedSeller, setSelectedSeller] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [data, setData] = useState({ projects: [], leads: [], visits: [], cashbacks: [] });
+  const [authReady, setAuthReady] = useState(false);
+  const [data, setData] = useState({ projects: [], leads: [], visits: [], cashbacks: [], notifications: [] });
   const restoredManagedSellerRef = useRef(false);
 
   const handleViewChange = useCallback((nextView) => {
@@ -102,6 +106,7 @@ function App() {
     };
 
     const unsubscribeAuth = onAuthStateChanged(auth, (nextUser) => {
+      setAuthReady(true);
       setUser(nextUser);
       clearProfileLoadTimer();
       if (!nextUser) {
@@ -136,6 +141,12 @@ function App() {
 
             const nextProfileData = profile.data() || {};
             const userPermissions = normalizePermissions(nextProfileData.permissions ?? nextProfileData);
+            console.info('[Druvio Auth] authenticated profile ready', {
+              uid: nextUser.uid,
+              email: nextUser.email || null,
+              role: userPermissions.admin ? 'admin' : userPermissions.seller ? 'seller' : 'buyer',
+              projectId: firebaseProjectId
+            });
 
             setProfileData(nextProfileData);
             setPermissions(userPermissions);
@@ -171,7 +182,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!user || !permissions) return undefined;
+    if (!authReady || !user || !permissions || auth.currentUser?.uid !== user.uid) return undefined;
 
     const sourceFor = (name) => {
       const ref = collection(db, name);
@@ -186,30 +197,79 @@ function App() {
       // Primary admin view keeps global access.
       if (permissions.admin && currentView === 'admin') return query(ref, limit(500));
 
-      // Buyer mode reuses the existing buyer app with approved listings plus the
+      // Buyer mode reuses the existing buyer app with active listings plus the
       // signed-in account's own activity records.
       if (currentView === 'buyer') {
-        if (name === 'projects') return query(ref, where('status', 'in', ['approved', 'Active']));
+        if (name === 'projects') return query(ref, where('status', '==', PROPERTY_STATUS.ACTIVE));
+        if (name === 'notifications') return query(ref, where('recipientId', '==', user.uid));
         return query(ref, where('createdBy', '==', user.uid));
       }
 
       // Seller view
-      if (currentView === 'seller') return query(ref, where(name === 'projects' ? 'ownerId' : 'projectOwnerId', '==', user.uid));
+      if (currentView === 'seller') {
+        if (name === 'notifications') return query(ref, where('recipientId', '==', user.uid));
+        return query(ref, where(name === 'projects' ? 'ownerId' : 'projectOwnerId', '==', user.uid));
+      }
 
       return ref;
     };
 
-    const unsubscribers = collections.map((name) => onSnapshot(
-      sourceFor(name),
-      (snapshot) => setData((current) => ({
-        ...current,
-        [name]: snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
-      })),
-      () => setError('Unable to sync live data. Check your Firestore security rules and connection.')
-    ));
+    const queryDescriptionFor = (name) => {
+      if (permissions.admin && currentView === 'seller' && selectedSeller) {
+        if (name === 'projects') return `where(ownerId == ${selectedSeller.id})`;
+        if (name === 'leads' || name === 'visits') return `where(projectOwnerId == ${selectedSeller.id})`;
+        return 'unfiltered';
+      }
+      if (permissions.admin && currentView === 'admin') return 'limit(500)';
+      if (currentView === 'buyer') {
+        if (name === 'projects') return `where(status == ${PROPERTY_STATUS.ACTIVE})`;
+        if (name === 'notifications') return `where(recipientId == ${user.uid})`;
+        return `where(createdBy == ${user.uid})`;
+      }
+      if (currentView === 'seller') {
+        if (name === 'notifications') return `where(recipientId == ${user.uid})`;
+        return `where(${name === 'projects' ? 'ownerId' : 'projectOwnerId'} == ${user.uid})`;
+      }
+      return 'unfiltered';
+    };
+
+    const unsubscribers = collections.map((name) => {
+      const path = name;
+      const filters = queryDescriptionFor(name);
+      console.info('[Druvio Firestore] listener starting', { projectId: firebaseProjectId, path, filters, uid: user.uid });
+      let source;
+      try {
+        source = sourceFor(name);
+      } catch (queryError) {
+        console.error('[Druvio Firestore] query construction failed', { path, filters, code: queryError?.code, message: queryError?.message, error: queryError });
+        throw queryError;
+      }
+      return onSnapshot(source, (snapshot) => {
+        const lastSnapshotTime = new Date().toISOString();
+        console.info('[Druvio Firestore] snapshot received', { path, filters, documentCount: snapshot.size, lastSnapshotTime, fromCache: snapshot.metadata.fromCache });
+        const records = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+        if (import.meta.env.DEV && name === 'projects') {
+          console.info('[Druvio Documents] Buyer property fetch', {
+            firestoreCollection: 'projects',
+            propertiesReturned: records.length,
+            documentsReturned: records.reduce((count, project) => count + (Array.isArray(project.documents) ? project.documents.length : 0), 0),
+            properties: records.map((project) => ({
+              propertyId: project.id,
+              firestoreDocument: `projects/${project.id}`,
+              documentsFound: Array.isArray(project.documents) ? project.documents.length : 0
+            }))
+          });
+        }
+        setData((current) => ({ ...current, [name]: records }));
+      }, (firestoreError) => {
+        const detail = { code: firestoreError?.code || 'unknown', message: firestoreError?.message || String(firestoreError) };
+        console.error('[Druvio Firestore] listener failed', { projectId: firebaseProjectId, path, filters, uid: user.uid, ...detail, error: firestoreError });
+        setError(`Firestore ${path} sync failed [${detail.code}]: ${detail.message}`);
+      });
+    });
 
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [user, permissions, currentView, selectedSeller]);
+  }, [authReady, user, permissions, currentView, selectedSeller]);
 
   const createRecord = async (name, record) => {
     try {
@@ -223,15 +283,25 @@ function App() {
   const updateRecord = async (name, id, changes) => {
     try {
       await updateDoc(doc(db, name, id), { ...changes, updatedAt: serverTimestamp() });
-    } catch {
+    } catch (saveError) {
+      console.error('[Druvio Firestore] Update failed', {
+        collection: name,
+        documentId: id,
+        code: saveError?.code,
+        message: saveError?.message
+      });
       setError('We could not save that change. Please try again.');
+      throw saveError;
     }
   };
 
   const addLead = (lead) => createRecord('leads', lead);
   const updateLead = (lead) => updateRecord('leads', lead.id, lead);
   const addVisit = (visit) => createRecord('visits', visit);
-  const addCashback = (cashback) => createRecord('cashbacks', cashback);
+  const addCashback = async (cashback) => {
+    const result = await httpsCallable(functions, 'submitCashbackRequest')(cashback);
+    return result.data;
+  };
   const addProject = async (project) => {
     const adminCreatingForSeller = Boolean(permissions?.admin && currentView === 'seller');
     let authoritativeSeller = selectedSeller;
@@ -341,6 +411,7 @@ function App() {
   const content = currentView === 'admin'
     ? (
       <AdminPanel
+        cashbacks={data.cashbacks}
         projects={data.projects}
         updateProject={updateProject}
         user={user}
@@ -357,6 +428,7 @@ function App() {
         permissions?.admin && !selectedSeller
           ? (
             <AdminPanel
+              cashbacks={data.cashbacks}
               projects={data.projects}
               updateProject={updateProject}
               user={user}
@@ -410,6 +482,7 @@ function App() {
 
   return (
     <main className={`live-app ${currentView === 'buyer' ? 'buyer-experience' : 'backoffice-experience'}`}>
+      {currentView !== 'buyer' && <NotificationCenter notifications={data.notifications} userId={user.uid} isAdmin={Boolean(permissions?.admin)} />}
       {currentView !== 'buyer' && (
         <header className="live-app-header">
           <div className="brand-lockup"><MapPin size={21} /><strong>Druvio</strong><span>{headerViewLabel}</span></div>

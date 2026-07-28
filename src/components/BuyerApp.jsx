@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import MapScreen from '../maps/MapScreen';
-import ProfileDropdown from './ProfileDropdown';
 import {
   formatDocumentDate,
   getProjectDocumentLabel,
@@ -10,14 +9,11 @@ import {
   PROJECT_DOCUMENT_OPTIONS
 } from '../utils/projectDocuments';
 import {
-  Home,
   Gift,
   Heart,
   MapPin,
-  Settings,
   Search,
   SlidersHorizontal,
-  Star,
   ChevronLeft,
   MessageSquare,
   Check,
@@ -30,9 +26,7 @@ import {
   Upload,
   Globe,
   ExternalLink,
-  Building2,
   Compass,
-  MessageCircle,
   Navigation,
   Share2,
   FileCheck,
@@ -43,15 +37,28 @@ import {
   IndianRupee,
   UserRound,
   Phone,
-  Mic,
-  ChevronRight
+  ChevronRight,
+  Clock3,
+  Eye,
+  Leaf,
+  Maximize2,
+  PieChart,
+  Route,
+  ShieldCheck
 } from 'lucide-react';
 import { storage } from '../firebaseConfig';
 import { isProjectPublishable, PROPERTY_STATUS, PROPERTY_STATUSES } from '../utils/projectVisibility';
+import useMediaQuery from '../utils/useMediaQuery';
+import CashbackWorkspace from './CashbackWorkspace';
+import { getProjectPurchaseValue } from '../utils/purchaseValue';
 import { calculateCashbackForArea, getCashbackPerGuntha, squareFeetToGuntha } from '../utils/projectArea';
 import { CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
 import { getProjectCompleteness } from '../utils/projectCompleteness';
-import { deriveNearbyUpdates } from '../utils/nearbyUpdates';
+import FeedBannerCarousel from './FeedBannerCarousel';
+import { ImageLightbox, InAppDocumentViewer, normalizePropertyImages } from './PropertyMediaDocumentsManager';
+import PropertyCard from './PropertyCard';
+import CashbackBadge from './CashbackBadge';
+import { getPropertyDisplayModel } from '../utils/propertyDisplayModel';
 import {
   LAND_ZONE_OPTIONS,
   NA_STATUS_OPTIONS,
@@ -67,135 +74,25 @@ import {
   deleteProject,
   updateProjectDetails
 } from '../maps/projectMapService';
-
-const MANAGEMENT_TABS = [
-  { id: 'general', label: 'Project Details' },
-  { id: 'layouts', label: 'Layouts' },
-  { id: 'media', label: 'Media' },
-  { id: 'documents', label: 'Documents' }
-];
-
-const createEmptyProjectForm = () => ({
-  name: '',
-  developer: '',
-  priceFrom: '',
-  remainingPlots: '',
-  village: '',
-  taluka: '',
-  area: '',
-  description: '',
-  thumbnail: '',
-  thumbnailPath: '',
-  thumbnailMetadata: null,
-  amenities: '',
-  status: 'draft',
-  cashbackAmount: '',
-  whatsappNumber: '',
-  siteVisitContact: '',
-  salesContact: '',
-  googleMapsLink: '',
-  website: '',
-  reraNumber: '',
-  documents: []
-});
-
-const DEFAULT_FILTERS = {
-  budgetMax: 3000000,
-  landZones: [],
-  naStatuses: [],
-  bankLoan: false,
-  minScore: 0
-};
-
-const SIDEBAR_ITEMS = [
-  { id: 'home', label: 'Home', icon: Home },
-  { id: 'map', label: 'Map', icon: Compass },
-  { id: 'cashback', label: 'Cashback', icon: Gift },
-  { id: 'saved', label: 'Saved', icon: Heart, disabled: true },
-  { id: 'nearby', label: 'Nearby', icon: MapPin, disabled: true },
-  { id: 'settings', label: 'Settings', icon: Settings, disabled: true }
-];
-
-const hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
-
-const normalizeAmenities = (value) => {
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item).trim()).filter(Boolean);
-  }
-  if (typeof value === 'string') {
-    return value.split(',').map((item) => item.trim()).filter(Boolean);
-  }
-  return [];
-};
-
-const getProjectFormFromRecord = (project) => ({
-  name: project?.name || '',
-  developer: project?.developer || '',
-  priceFrom: project?.priceFrom ?? project?.startingPrice ?? '',
-  remainingPlots: project?.remainingPlots ?? '',
-  village: project?.village || '',
-  taluka: project?.taluka || '',
-  area: project?.area || '',
-  description: project?.description || '',
-  thumbnail: project?.thumbnail || project?.heroImage || '',
-  thumbnailPath: project?.thumbnailPath || '',
-  thumbnailMetadata: project?.thumbnailMetadata || null,
-  amenities: normalizeAmenities(project?.amenities).join(', '),
-  status: project?.status || 'draft',
-  cashbackAmount: project?.cashbackAmount ?? '',
-  whatsappNumber: project?.whatsappNumber || '',
-  siteVisitContact: project?.siteVisitContact || '',
-  salesContact: project?.salesContact || '',
-  googleMapsLink: project?.googleMapsLink || '',
-  website: project?.website || '',
-  reraNumber: project?.reraNumber || '',
-  latitude: project?.latitude ?? project?.location?.latitude ?? '',
-  longitude: project?.longitude ?? project?.location?.longitude ?? '',
-  totalPlots: project?.totalPlots ?? '',
-  minimumPlotArea: project?.minimumPlotArea ?? project?.minimumArea ?? '',
-  landZone: project?.landZone || project?.zoneType || '',
-  naStatus: project?.naStatus || '',
-  documents: Array.isArray(project?.documents) ? project.documents : []
-});
-
-const getDisplayLocation = (project) =>
-  [project?.village, project?.taluka, project?.area].filter((item) => hasValue(item)).join(' • ');
-
-const buildWhatsAppUrl = (project) => {
-  if (!hasValue(project?.whatsappNumber)) return '';
-  const phone = String(project.whatsappNumber).replace(/[^\d]/g, '');
-  if (!phone) return '';
-  const message = `Hi, I am interested in ${project.name || 'your project'} on Druvio.`;
-  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-};
-
-const formatINR = (num) => {
-  if (!hasValue(num)) return 'Price on request';
-  const parsed = Number(num);
-  if (!Number.isFinite(parsed) || parsed <= 0) return 'Price on request';
-  if (parsed >= 10000000) return `₹${(parsed / 10000000).toFixed(2)} Cr`;
-  return `₹${(parsed / 100000).toFixed(1)} Lakh`;
-};
-
-const formatCashbackLabel = (project) => {
-  const amount = getCashbackPerGuntha(project);
-  if (amount > 0) return `₹${new Intl.NumberFormat('en-IN').format(amount)} per Guntha`;
-  return '';
-};
-
-const getNavigateUrl = (project) => {
-  if (hasValue(project?.googleMapsLink)) return project.googleMapsLink;
-  if (hasValue(project?.latitude) && hasValue(project?.longitude)) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${project.latitude},${project.longitude}`;
-  }
-  return '';
-};
+import { DEFAULT_FILTERS, SIDEBAR_ITEMS } from './Buyer/buyerConstants';
+import BuyerDesktopNavigation from './Buyer/Navigation/BuyerDesktopNavigation';
+import BuyerMobileNavigation from './Buyer/Navigation/BuyerMobileNavigation';
+import BuyerWorkspaceHeader from './Buyer/Shell/BuyerWorkspaceHeader';
+import {
+  buildWhatsAppUrl,
+  formatCashbackLabel,
+  formatINR,
+  getDisplayLocation,
+  getNavigateUrl,
+  hasValue
+} from './Buyer/buyerPresentation';
 
 function BuyerApp({
   projects,
   leads,
   visits,
   cashbacks,
+  notifications = [],
   user,
   buyerProfile,
   addLead,
@@ -211,16 +108,15 @@ function BuyerApp({
   onBackToAdmin,
   selectedSeller
 }) {
+  const isAndroidLayout = useMediaQuery('(max-width: 768px)');
   const [activeScreen, setActiveScreen] = useState('home');
   const [panelMode, setPanelMode] = useState(null);
+  const [mobileSheetHeight, setMobileSheetHeight] = useState(34);
+  const mobileSheetDragRef = useRef(null);
   const [selectedProject, setSelectedProject] = useState(null);
   const [projectLayouts, setProjectLayouts] = useState([]);
   const [activeLayout, setActiveLayout] = useState(null);
   const [loadingLayouts, setLoadingLayouts] = useState(false);
-  const [projectManagerOpen, setProjectManagerOpen] = useState(false);
-  const [projectManagerTab, setProjectManagerTab] = useState('general');
-  const [layoutDraftName, setLayoutDraftName] = useState('');
-  const [editForm, setEditForm] = useState(() => createEmptyProjectForm());
   const [visibleProjects, setVisibleProjects] = useState([]);
   const [homeSearchQuery, setHomeSearchQuery] = useState('');
   const [placeSuggestions, setPlaceSuggestions] = useState([]);
@@ -237,12 +133,11 @@ function BuyerApp({
   const [cashbackSuccess, setCashbackSuccess] = useState(false);
   const [cashbackSubmitting, setCashbackSubmitting] = useState(false);
   const [cashbackError, setCashbackError] = useState('');
+  const [cashbackView, setCashbackView] = useState('claim');
   const [documentViewer, setDocumentViewer] = useState(null);
-  const [projectUploadType, setProjectUploadType] = useState(PROJECT_DOCUMENT_OPTIONS[0].value);
-  const [projectUploadBusy, setProjectUploadBusy] = useState('');
-  const [projectUploadError, setProjectUploadError] = useState('');
-  const [projectManagerError, setProjectManagerError] = useState('');
-  const [projectValidationAttempted, setProjectValidationAttempted] = useState(false);
+  const [galleryViewerIndex, setGalleryViewerIndex] = useState(null);
+  const [galleryIndex, setGalleryIndex] = useState(0);
+  const [projectScrollTop, setProjectScrollTop] = useState(0);
 
   const activeProjects = useMemo(
     () => projects.filter(isProjectPublishable),
@@ -252,8 +147,6 @@ function BuyerApp({
     () => activeProjects.filter((project) => matchesProjectFilters(project, mapFilters)),
     [activeProjects, mapFilters]
   );
-  const nearbyUpdates = useMemo(() => deriveNearbyUpdates(filteredProjects), [filteredProjects]);
-
   useEffect(() => {
     console.debug('[Druvio listings] Buyer filters applied', {
       fetchedCount: projects.length,
@@ -286,17 +179,11 @@ function BuyerApp({
     if (!selectedProject) {
       setProjectLayouts([]);
       setActiveLayout(null);
-      setProjectManagerOpen(false);
-      setProjectManagerTab('general');
-      setEditForm(createEmptyProjectForm());
       if (panelMode === 'project') setPanelMode(null);
       return;
     }
 
     setLoadingLayouts(true);
-    setProjectManagerOpen(false);
-    setProjectManagerTab('general');
-    setEditForm(getProjectFormFromRecord(selectedProject));
     refreshLayouts(selectedProject.id)
       .then(() => setLoadingLayouts(false))
       .catch((err) => {
@@ -324,9 +211,9 @@ function BuyerApp({
     }
     setSelectedProject(project);
     setActiveScreen('map');
-    setPanelMode(null);
-    setProjectManagerOpen(false);
-    window.dispatchEvent(new CustomEvent('druvio-focus-project', { detail: { project } }));
+    setPanelMode('project');
+    setMobileSheetHeight(34);
+    setProjectScrollTop(0);
   }, []);
 
   const openFullProjectDetails = useCallback(() => {
@@ -334,13 +221,11 @@ function BuyerApp({
   }, [selectedProject]);
 
   const closePanel = useCallback(() => {
-    setProjectManagerOpen(false);
     if (panelMode === 'project') setSelectedProject(null);
     setPanelMode(null);
   }, [panelMode]);
 
   const navigateToScreen = useCallback((screen) => {
-    setProjectManagerOpen(false);
     setSelectedProject(null);
     setPanelMode(null);
     setActiveScreen(screen);
@@ -424,6 +309,21 @@ function BuyerApp({
       return;
     }
 
+    let purchaseVal;
+    try {
+      purchaseVal = getProjectPurchaseValue(project);
+    } catch (purchaseValueError) {
+      console.error('Cashback submission blocked by invalid purchase value', {
+        projectId: project.id,
+        purchasePrice: project.purchasePrice,
+        startingPrice: project.startingPrice,
+        priceFrom: project.priceFrom,
+        error: purchaseValueError
+      });
+      setCashbackError(purchaseValueError.message);
+      return;
+    }
+
     const cashbackPerGuntha = getCashbackPerGuntha(project);
     const cbVal = calculateCashbackForArea(cashbackPerGuntha, purchasedAreaSqFt);
     const safeFileName = proofFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
@@ -442,6 +342,7 @@ function BuyerApp({
           createdBy: user.uid,
           buyerName,
           buyerPhone,
+          buyerEmail: buyerProfile?.email || user?.email || '',
           project: project.name,
           projectId: project.id,
           projectOwnerId: project.ownerId || '',
@@ -454,8 +355,7 @@ function BuyerApp({
           proofPath: snapshot.ref.fullPath,
           documentName: proofFile.name,
           documentType: proofFile.type,
-          submittedAt: new Date().toISOString().split('T')[0],
-          status: 'Pending Verification'
+          submittedAt: new Date().toISOString().split('T')[0]
         });
       } catch (claimError) {
         await deleteObject(snapshot.ref).catch(() => undefined);
@@ -485,117 +385,6 @@ function BuyerApp({
     } finally {
       setCashbackSubmitting(false);
     }
-  };
-
-  const openProjectManager = (tab = 'general') => {
-    if (!selectedProject) return;
-    setProjectManagerError('');
-    setProjectValidationAttempted(false);
-    setEditForm(getProjectFormFromRecord(selectedProject));
-    setProjectManagerTab(tab);
-    setProjectManagerOpen(true);
-    setPanelMode('project');
-  };
-
-  const openProjectManagerSection = (tab = 'general', sectionId = '') => {
-    openProjectManager(tab);
-    if (!sectionId) return;
-    window.setTimeout(() => {
-      document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 80);
-  };
-
-  const handleSaveProjectDetails = async (e) => {
-    e.preventDefault();
-    if (!selectedProject) return;
-
-    const completeness = getProjectCompleteness({ ...selectedProject, ...editForm });
-    const publishing = editForm.status === PROPERTY_STATUS.ACTIVE;
-    if (publishing && !completeness.isComplete) {
-      setProjectValidationAttempted(true);
-      setProjectManagerError('Complete the required fields highlighted in red before publishing.');
-      return;
-    }
-
-    try {
-      setProjectManagerError('');
-      setProjectValidationAttempted(false);
-      await updateProjectDetails(selectedProject.id, {
-        ...editForm,
-        lastEditedBy: user?.uid || '',
-        lastEditedByRole: 'admin'
-      });
-      setSelectedProject((prev) => ({
-        ...prev,
-        ...editForm,
-        startingPrice: editForm.priceFrom,
-        heroImage: editForm.thumbnail || prev?.heroImage,
-        amenities: normalizeAmenities(editForm.amenities)
-      }));
-      alert('Project updated successfully.');
-    } catch (error) {
-      alert(`Failed to update project: ${error.message}`);
-    }
-  };
-
-  const handleDeleteProject = async () => {
-    if (!selectedProject) return;
-    if (!window.confirm('Are you sure you want to delete this project? This cannot be undone.')) return;
-
-    try {
-      await deleteProject(selectedProject.id);
-      setSelectedProject(null);
-      setProjectManagerOpen(false);
-      setPanelMode(null);
-      setActiveScreen('map');
-      alert('Project deleted successfully.');
-    } catch (error) {
-      alert(`Failed to delete project: ${error.message}`);
-    }
-  };
-
-  const handleDeleteLayout = async (layoutId) => {
-    if (!window.confirm('Delete this layout polygon?')) return;
-    try {
-      await deleteProjectLayout(layoutId);
-      const remaining = projectLayouts.filter((layout) => layout.id !== layoutId);
-      setProjectLayouts(remaining);
-      if (activeLayout?.id === layoutId) setActiveLayout(null);
-    } catch (err) {
-      alert(`Error: ${err.message}`);
-    }
-  };
-
-  const handleDuplicateLayout = async (layoutId) => {
-    try {
-      const duplicatedLayoutId = await duplicateProjectLayout(layoutId);
-      await refreshLayouts(selectedProject.id, duplicatedLayoutId);
-      alert('Layout duplicated.');
-    } catch (err) {
-      alert(`Error: ${err.message}`);
-    }
-  };
-
-  const handleStartAddLayout = () => {
-    if (!selectedProject) return;
-    if (!layoutDraftName.trim()) {
-      alert('Enter a layout name first.');
-      return;
-    }
-
-    setActiveLayout(null);
-    window.dispatchEvent(new CustomEvent('druvio-start-add-layout', {
-      detail: { projectId: selectedProject.id, layoutName: layoutDraftName.trim() }
-    }));
-    alert(`Drawing started for "${layoutDraftName.trim()}". Click points on the map, then Finish, Edit, and Save.`);
-    setLayoutDraftName('');
-  };
-
-  const handleEditLayout = (layout) => {
-    setActiveLayout(layout);
-    window.dispatchEvent(new CustomEvent('druvio-edit-layout', {
-      detail: { projectId: selectedProject?.id, layoutId: layout.id }
-    }));
   };
 
   const searchableProjects = useMemo(() => {
@@ -745,17 +534,46 @@ function BuyerApp({
   const cashbackBuyerPhone = buyerProfile?.phoneNumber || buyerProfile?.phone || user?.phoneNumber || 'Not added';
 
   const activeSidebarItem = activeScreen;
-  const selectedAmenities = normalizeAmenities(selectedProject?.amenities);
-  const selectedLocation = getDisplayLocation(selectedProject);
-  const selectedCashback = formatCashbackLabel(selectedProject);
-  const selectedDocuments = selectedProject
-    ? normalizeProjectDocuments(selectedProject).filter((document) => document.status === 'verified')
+  const selectedDisplay = selectedProject ? getPropertyDisplayModel(selectedProject) : null;
+  const selectedGallery = selectedDisplay
+    ? selectedDisplay.media.gallery.filter((image) => image.enabled !== false).map((image) => ({ ...image, downloadURL: image.url }))
     : [];
-  const allSelectedDocuments = selectedProject ? normalizeProjectDocuments(selectedProject) : [];
+  useEffect(() => {
+    setGalleryIndex(0);
+    setGalleryViewerIndex(null);
+  }, [selectedProject?.id]);
+  const selectedDocuments = selectedDisplay
+    ? selectedDisplay.documents.items.filter((document) => document.enabled !== false && document.verified && document.showOnDetails !== false).map((document) => ({
+        ...document,
+        displayName: document.title,
+        downloadURL: document.url,
+        url: document.url,
+        type: document.documentType,
+        status: 'verified'
+      }))
+    : [];
   const documentsLoading = Boolean(selectedProject && loadingLayouts && selectedDocuments.length === 0);
+  useEffect(() => {
+    if (!import.meta.env.DEV || !selectedProject) return;
+    const mappedDocuments = normalizeProjectDocuments(selectedProject);
+    console.info('[Druvio Documents] Buyer details mapping', {
+      propertyId: selectedProject.id,
+      firestoreDocument: `projects/${selectedProject.id}`,
+      documentsFound: Array.isArray(selectedProject.documents) ? selectedProject.documents.length : 0,
+      documentsMapped: mappedDocuments.length,
+      documentsRendered: mappedDocuments.filter((document) => document.status === 'verified').length,
+      documents: mappedDocuments.map((document) => ({
+        id: document.id,
+        displayName: document.displayName || getProjectDocumentLabel(document.type),
+        hasDownloadURL: Boolean(document.downloadURL || document.url),
+        verified: document.verified,
+        status: document.status
+      }))
+    });
+  }, [selectedProject?.id, selectedProject?.documents]);
   const selectedWhatsAppUrl = buildWhatsAppUrl(selectedProject);
-  const selectedNavigateUrl = getNavigateUrl(selectedProject);
-  const panelOpen = panelMode === 'project';
+  const selectedNavigateUrl = selectedDisplay?.map.directionsLink || selectedDisplay?.map.googleMapsLink || getNavigateUrl(selectedProject);
+  const panelOpen = activeScreen === 'map' && panelMode === 'project' && Boolean(selectedProject);
   const panelTitle = selectedProject?.name || 'Project';
   const panelKicker = 'Selected project';
   const activeFilterCount = mapFilters.landZones.length
@@ -934,7 +752,7 @@ function BuyerApp({
                   <div key={`${document.type}-${index}`} className="project-document-editor">
                     <span><strong>{getProjectDocumentLabel(document.type)}</strong><small>{document.fileName || 'Uploaded document'}</small></span>
                     <span className={`document-review-status ${document.status || 'pending'}`}>{document.status || 'pending'}</span>
-                    <a href={document.url} target="_blank" rel="noreferrer" className="project-document-link">Open</a>
+                    <button type="button" className="project-document-link" onClick={() => setDocumentViewer(document)}>Preview</button>
                     <button type="button" className="icon-btn danger-hover" title={`Remove ${getProjectDocumentLabel(document.type)}`} onClick={() => setEditForm({ ...editForm, documents: editForm.documents.filter((_, itemIndex) => itemIndex !== index) })}>
                       <Trash2 size={14} />
                     </button>
@@ -950,19 +768,19 @@ function BuyerApp({
     const field = (key, label, type = 'text', required = false, placeholder = '', completenessKey = key) => {
       const invalid = projectValidationAttempted && (missingRequiredKeys.has(completenessKey) || (required && !hasValue(editForm[key])));
       return (
-      <label className={`project-manager-field${invalid ? ' is-invalid' : ''}`}>
-        <span>{label}{required && <em aria-hidden="true"> *</em>}</span>
-        <input
-          type={type}
-          className={`project-manager-input${invalid ? ' is-invalid' : ''}`}
-          placeholder={placeholder}
-          value={editForm[key]}
-          min={key === 'cashbackAmount' ? '0' : undefined}
-          step={key === 'cashbackAmount' ? '1' : undefined}
-          aria-invalid={invalid}
-          onChange={(event) => setEditForm({ ...editForm, [key]: event.target.value })}
-        />
-      </label>
+        <label className={`project-manager-field${invalid ? ' is-invalid' : ''}`}>
+          <span>{label}{required && <em aria-hidden="true"> *</em>}</span>
+          <input
+            type={type}
+            className={`project-manager-input${invalid ? ' is-invalid' : ''}`}
+            placeholder={placeholder}
+            value={editForm[key]}
+            min={key === 'cashbackAmount' ? '0' : undefined}
+            step={key === 'cashbackAmount' ? '1' : undefined}
+            aria-invalid={invalid}
+            onChange={(event) => setEditForm({ ...editForm, [key]: event.target.value })}
+          />
+        </label>
       );
     };
     const selectField = (key, label, options) => {
@@ -1090,39 +908,6 @@ function BuyerApp({
           </div>
         )}
 
-        {projectManagerTab === 'settings' && (
-          <div className="project-manager-panel">
-            <div className="project-manager-card">
-              <div className="project-manager-card-head">
-                <div>
-                  <span className="project-manager-kicker">Publishing</span>
-                  <h4>Project status and actions</h4>
-                </div>
-              </div>
-              <div className="project-manager-grid">
-                <label className="project-manager-field">
-                  <span>Status</span>
-                  <select
-                    className="project-manager-input"
-                    value={editForm.status}
-                    disabled
-                    title="Use Admin review and listing actions to change status."
-                  >
-                    {PROPERTY_STATUSES.map((status) => <option key={status} value={status}>{status.replace(/_/g, ' ')}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="project-manager-danger">
-                <div>
-                  <strong>Delete project</strong>
-                  <span>This removes the project record permanently.</span>
-                </div>
-                <button type="button" className="btn-admin-action danger" onClick={handleDeleteProject}>Delete Project</button>
-              </div>
-            </div>
-          </div>
-        )}
-
         <div className="form-actions-row project-manager-actions">
           <button type="submit" className="btn-save">Save Changes</button>
           <button type="button" className="btn-cancel" onClick={() => setProjectManagerOpen(false)}>Close</button>
@@ -1133,7 +918,6 @@ function BuyerApp({
 
   const renderHomePanel = () => (
     <div className="buyer-side-panel-content">
-      {nearbyUpdates.length > 0 && <section className="buyer-panel-section"><div className="buyer-panel-section-head"><h4>What’s Happening Nearby</h4></div><div className="nearby-updates-rail">{nearbyUpdates.slice(0, 4).map((update) => <button type="button" key={update.id} className="nearby-update-card" onClick={() => handleProjectSelect(update.project)}>{update.image && <img loading="lazy" src={update.image} alt="" />}<span>{update.type}</span><strong>{update.headline}</strong><small>{update.area} · {update.timestamp}</small></button>)}</div></section>}
       <div className="buyer-panel-search-row">
         <div className="buyer-filter-chips" aria-label="Property filters">
           <button type="button" className={`buyer-filter-chip buyer-filter-trigger ${filtersOpen ? 'active' : ''}`} onClick={() => setFiltersOpen((prev) => !prev)} aria-haspopup="dialog" aria-expanded={filtersOpen}>
@@ -1141,7 +925,7 @@ function BuyerApp({
             <span>Filters</span>
             {activeFilterCount > 0 && <span className="buyer-filter-count">{activeFilterCount}</span>}
           </button>
-          <span className="buyer-filter-summary">{filteredProjects.length} project{filteredProjects.length === 1 ? '' : 's'} match</span>
+          <span className="buyer-filter-summary">{filteredProjects.length} Project{filteredProjects.length === 1 ? '' : 's'}</span>
         </div>
       </div>
 
@@ -1184,7 +968,7 @@ function BuyerApp({
 
       {homeSearchQuery && (
         <div className="buyer-panel-section">
-          <div className="buyer-panel-section-head">
+          <div className="buyer-panel-section-head buyer-project-section-head">
             <h4>Search Results</h4>
             <span>{searchableProjects.length}</span>
           </div>
@@ -1219,89 +1003,19 @@ function BuyerApp({
         ) : (
           <div className="feed-listings-grid buyer-panel-list">
             {filteredProjects.slice(0, 6).map((project) => {
-              const projectDocuments = normalizeProjectDocuments(project);
-              const verifiedDocumentCount = getVerifiedDocumentCount(project);
+              const display = getPropertyDisplayModel(project);
 
               return (
-              <article
-                key={project.id}
-                className="feed-project-card"
-                role="button"
-                tabIndex={0}
-                aria-label={`View ${project.name}`}
-                onClick={() => handleProjectSelect(project)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    handleProjectSelect(project);
-                  }
-                }}
-              >
-                <div className="card-banner">
-                  <img src={project.thumbnail || project.heroImage || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80'} alt={project.name} />
-                  <div className="verified-card-badge"><Check size={12} /> Verified</div>
-                  {formatCashbackLabel(project) && <div className="cashback-tag">💰 {formatCashbackLabel(project)}</div>}
-                  <div className="score-tag">
-                    <Star size={10} fill="var(--accent-gold)" color="var(--accent-gold)" />
-                    <span>{project.DruvioScore || '4.6'}</span>
-                  </div>
-                </div>
-                <div className="card-info">
-                  <h3>{project.name}</h3>
-                  {getDisplayLocation(project) && <p className="card-loc"><MapPin size={10} /> {getDisplayLocation(project)}</p>}
-                  {hasValue(project.developer) && <p className="card-dev"><Building2 size={10} /> Projected by {project.developer}</p>}
-                  <div className="project-land-tags"><span>{getLandZoneLabel(project)}</span><span>{getNaStatusLabel(project)}</span></div>
-                  <div className="card-meta">
-                    <div className="price-tag">{formatINR(project.priceFrom || project.startingPrice)}</div>
-                    <div className="inv-tag">
-                      {hasValue(project.remainingPlots)
-                        ? (Number(project.remainingPlots) > 0 ? `${project.remainingPlots} plots left` : 'Sold out')
-                        : 'Availability on request'}
-                    </div>
-                  </div>
-                  {verifiedDocumentCount > 0 && (
-                    <button
-                      type="button"
-                      className="project-document-summary"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleProjectSelect(project);
-                      }}
-                    >
-                      <FileCheck size={16} />
-                      <span>{verifiedDocumentCount > 0 ? `${verifiedDocumentCount} verified document${verifiedDocumentCount === 1 ? '' : 's'}` : 'Documents available'}</span>
-                    </button>
-                  )}
-                  <div className="property-card-actions" aria-label={`${project.name} actions`}>
-                    <button
-                      type="button"
-                      className={`property-card-icon ${savedProjectIds.has(project.id) ? 'saved' : ''}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleSavedProject(project.id);
-                      }}
-                      aria-label={savedProjectIds.has(project.id) ? `Remove ${project.name} from saved projects` : `Save ${project.name}`}
-                      aria-pressed={savedProjectIds.has(project.id)}
-                      title={savedProjectIds.has(project.id) ? 'Remove from saved' : 'Save project'}
-                    >
-                      <Heart size={18} fill={savedProjectIds.has(project.id) ? 'currentColor' : 'none'} />
-                    </button>
-                    {getNavigateUrl(project) && (
-                      <button type="button" className="property-card-icon" onClick={(event) => { event.stopPropagation(); window.open(getNavigateUrl(project), '_blank'); }} aria-label={`Navigate to ${project.name}`} title="Navigate">
-                        <Navigation size={18} />
-                      </button>
-                    )}
-                    <button type="button" className="property-card-icon" onClick={(event) => { event.stopPropagation(); navigator.clipboard?.writeText(window.location.href); }} aria-label={`Share ${project.name}`} title="Share">
-                      <Share2 size={18} />
-                    </button>
-                    {buildWhatsAppUrl(project) && (
-                      <a href={buildWhatsAppUrl(project)} target="_blank" rel="noreferrer" className="property-card-icon property-card-whatsapp" onClick={(event) => event.stopPropagation()} aria-label={`Contact ${project.name} on WhatsApp`} title="WhatsApp">
-                        <MessageCircle size={18} />
-                      </a>
-                    )}
-                  </div>
-                </div>
-              </article>
+                <PropertyCard
+                  key={project.id}
+                  project={project}
+                  display={display}
+                  formatPrice={formatINR}
+                  isFavourite={savedProjectIds.has(project.id)}
+                  onFavouriteToggle={toggleSavedProject}
+                  onShare={() => navigator.clipboard?.writeText(window.location.href)}
+                  onViewDetails={handleProjectSelect}
+                />
               );
             })}
           </div>
@@ -1319,39 +1033,43 @@ function BuyerApp({
           <X size={18} />
         </button>
       </div>
-      <form onSubmit={handleCashbackSubmit} className="cashback-claim-form">
+      <div className="cashback-view-tabs">
+        <button type="button" className={cashbackView === 'claim' ? 'active' : ''} onClick={() => setCashbackView('claim')}>New request</button>
+        <button type="button" className={cashbackView === 'history' ? 'active' : ''} onClick={() => setCashbackView('history')}>History <span>{cashbacks.length}</span></button>
+      </div>
+      {cashbackView === 'history' ? <CashbackWorkspace role="buyer" cashbacks={cashbacks} /> : <form onSubmit={handleCashbackSubmit} className="cashback-claim-form">
         <section className="cashback-form-section">
-          <div className="cashback-section-heading"><span>1</span><div><h4>Purchase details</h4><p>Select the project and enter the purchased plot area.</p></div></div>
-        <label>Purchased project
-          <select
-            required
-            value={cashbackForm.projectId}
-            onChange={(event) => setCashbackForm((current) => ({ ...current, projectId: event.target.value }))}
-          >
-            <option value="">Select a project</option>
-            {cashbackProjects.map((project) => (
-              <option key={project.id} value={project.id}>{project.name}</option>
-            ))}
-          </select>
-        </label>
-        <label>Purchased area (sq.ft.)
-          <input
-            required
-            type="number"
-            min="1"
-            step="1"
-            inputMode="numeric"
-            placeholder="450"
-            value={cashbackForm.purchasedAreaSqFt}
-            onChange={(event) => setCashbackForm((current) => ({ ...current, purchasedAreaSqFt: event.target.value }))}
-          />
-          <small>1 Guntha = 900 sq.ft. Cashback is calculated proportionally.</small>
-        </label>
-        {cashbackProject && <div className="cashback-auto-value"><span>Estimated cashback</span><strong>₹{new Intl.NumberFormat('en-IN').format(estimatedCashback)}</strong><small>{formatCashbackLabel(cashbackProject)} × purchased area ÷ 900.</small></div>}
+          <div className="cashback-section-heading"><span>1</span><div><h4>Purchase details</h4></div></div>
+          <label>Select the project
+            <select
+              required
+              value={cashbackForm.projectId}
+              onChange={(event) => setCashbackForm((cSurrent) => ({ ...current, projectId: event.target.value }))}
+            >
+              <option value="">Select a project</option>
+              {cashbackProjects.map((project) => (
+                <option key={project.id} value={project.id}>{project.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>Purchased area (sq.ft.)
+            <input
+              required
+              type="number"
+              min="1"
+              step="1"
+              inputMode="numeric"
+              placeholder="450"
+              value={cashbackForm.purchasedAreaSqFt}
+              onChange={(event) => setCashbackForm((current) => ({ ...current, purchasedAreaSqFt: event.target.value }))}
+            />
+            <small>1 Guntha = 900 sq.ft. Cashback is calculated proportionally.</small>
+          </label>
+          {cashbackProject && <div className="cashback-auto-value"><span>Estimated cashback</span><strong>₹{new Intl.NumberFormat('en-IN').format(estimatedCashback)}</strong><small>{formatCashbackLabel(cashbackProject)} × purchased area ÷ 900.</small></div>}
         </section>
 
         <section className="cashback-form-section">
-          <div className="cashback-section-heading"><span>2</span><div><h4>Purchase proof</h4><p>Capture the stamp agreement or receipt with your device camera.</p></div></div>
+          <div className="cashback-section-heading"><span>2</span><div><h4>Purchase proof</h4><p>Capture the Booking receipt with your device camera.</p></div></div>
           <label htmlFor="cashback-proof" className="cashback-proof-picker">
             <Camera size={22} />
             <strong>{cashbackForm.proofFile ? cashbackForm.proofFile.name : 'Capture or upload proof'}</strong>
@@ -1371,7 +1089,7 @@ function BuyerApp({
         </section>
 
         <section className="cashback-form-section cashback-review-section">
-          <div className="cashback-section-heading"><span>3</span><div><h4>Review claim</h4><p>These details come from your Druvio account and project.</p></div></div>
+          <div className="cashback-section-heading"><span>3</span><div><h4>Review claim</h4></div></div>
           <div className="cashback-review-row"><UserRound size={18} /><span>Purchaser</span><strong>{cashbackBuyerName}</strong></div>
           <div className="cashback-review-row"><Phone size={18} /><span>Phone</span><strong>{cashbackBuyerPhone}</strong></div>
           <div className="cashback-review-row"><IndianRupee size={18} /><span>Cashback</span><strong>{cashbackProject && Number(cashbackForm.purchasedAreaSqFt) > 0 ? `₹${new Intl.NumberFormat('en-IN').format(estimatedCashback)}` : 'Enter purchased area'}</strong></div>
@@ -1385,7 +1103,7 @@ function BuyerApp({
             {cashbackSubmitting ? <><Loader2 size={18} className="spin" /> Uploading proof…</> : 'Submit cashback claim'}
           </button>
         )}
-      </form>
+      </form>}
     </div>
   );
 
@@ -1401,18 +1119,22 @@ function BuyerApp({
     }
 
     const plotArea = selectedProject.minimumPlotArea || selectedProject.maximumPlotArea || selectedProject.plotAreaSqFt;
-    const score = selectedProject.DruvioScore || selectedProject.druvioScore || null;
-    const heroPrice = formatINR(selectedProject.priceFrom || selectedProject.startingPrice);
+    const score = selectedDisplay.rating.enabled ? selectedDisplay.rating.value : null;
+    const heroPrice = formatINR(selectedDisplay.pricing.startingPrice);
     const plotsLeftLabel = hasValue(selectedProject.remainingPlots)
       ? (Number(selectedProject.remainingPlots) > 0 ? selectedProject.remainingPlots : 'Sold out')
       : '—';
     const landZoneLabel = getLandZoneLabel(selectedProject);
-    const mapPreviewQuery = hasValue(selectedProject.latitude) && hasValue(selectedProject.longitude)
-      ? `${selectedProject.latitude},${selectedProject.longitude}`
-      : [selectedProject.name, selectedLocation].filter(Boolean).join(', ');
+    const mapPreviewQuery = selectedDisplay.map.latitude && selectedDisplay.map.longitude
+      ? `${selectedDisplay.map.latitude},${selectedDisplay.map.longitude}`
+      : [selectedDisplay.basic.projectName, selectedDisplay.map.address].filter(Boolean).join(', ');
     const mapPreviewUrl = hasValue(mapPreviewQuery)
       ? `https://www.google.com/maps?q=${encodeURIComponent(mapPreviewQuery)}&z=15&output=embed`
       : '';
+    const highwayDistance = [
+      ...selectedDisplay.featureChips.items,
+      ...selectedDisplay.quickStats.items
+    ].find((item) => item.enabled && /highway|distance/i.test(`${item.title || ''} ${item.value || ''}`));
     const scoreSignals = [
       hasValue(selectedProject.reraNumber) && 'RERA details provided',
       hasValue(selectedProject.website) && 'Project website provided',
@@ -1433,7 +1155,7 @@ function BuyerApp({
         window.open(selectedNavigateUrl, '_blank', 'noopener,noreferrer');
         return;
       }
-      alert('Directions are not available for this project yet.');
+      alert('Map location is not available for this project yet.');
     };
     const openFullscreenLocation = () => {
       if (selectedProject.layoutPolygon) {
@@ -1448,137 +1170,153 @@ function BuyerApp({
         window.open(mapPreviewUrl.replace('&output=embed', ''), '_blank', 'noopener,noreferrer');
       }
     };
-    const adminActions = [
-      { label: 'Edit Project', icon: FileText, onClick: () => openProjectManagerSection('general', 'project-basic-information') },
-      { label: 'Manage Layouts', icon: LayoutGrid, onClick: () => openProjectManager('layouts') },
-      { label: 'Delete Project', icon: Trash2, onClick: handleDeleteProject, danger: true }
-    ];
+    const viewLayout = () => {
+      window.dispatchEvent(new CustomEvent('druvio-view-project-layout', { detail: { projectId: selectedProject.id, preserveMap: true } }));
+      if (isAndroidLayout) setMobileSheetHeight(34);
+    };
+    const displayOrderOf = (key) => Math.max(0, selectedDisplay.visibility.displayOrder.indexOf(key));
 
     return (
-      <div className="buyer-side-panel-content project-panel-content">
-        {projectManagerOpen && isAdmin ? (
-          <div className="project-manager-screen">
-            <div className="project-manager-header">
-              <div>
-                <span className="project-manager-kicker">Project management</span>
-                <h3>{selectedProject.name}</h3>
-              </div>
-              <button type="button" className="btn-secondary compact-btn" onClick={() => setProjectManagerOpen(false)}>
-                Close
-              </button>
-            </div>
-
-            <div className="project-manager-tabs">
-              {MANAGEMENT_TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className={`project-manager-tab ${projectManagerTab === tab.id ? 'active' : ''}`}
-                  onClick={() => setProjectManagerTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            {renderProjectManagerContent()}
-          </div>
-        ) : (
-          <div className="premium-project-details">
-            <section className="premium-project-hero">
-              <img src={selectedProject.thumbnail || selectedProject.heroImage || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1000&q=85'} alt={selectedProject.name} />
-              <div className="premium-project-hero-scrim" />
+      <div
+        className="buyer-side-panel-content project-panel-content"
+        onScroll={(event) => setProjectScrollTop(Math.min(event.currentTarget.scrollTop, 180))}
+        style={{ '--project-scroll': Math.min(projectScrollTop / 120, 1) }}
+      >
+        <div className={`premium-project-details reference-property-details ${projectScrollTop > 28 ? 'project-header-scrolled' : ''}`} key={selectedProject.id}>
+            <header className="project-details-app-bar">
+              <button type="button" className="reference-hero-back" onClick={closePanel} aria-label="Back to properties"><ChevronLeft size={21} /></button>
+              <h2>{selectedDisplay.basic.projectName}</h2>
               <div className="premium-project-hero-actions" aria-label="Project actions">
+                <button type="button" onClick={shareProject} aria-label="Share project"><Share2 size={18} /></button>
                 <button type="button" onClick={() => toggleSavedProject(selectedProject.id)} aria-label={savedProjectIds.has(selectedProject.id) ? 'Remove from saved projects' : 'Save project'}>
                   <Heart size={18} fill={savedProjectIds.has(selectedProject.id) ? 'currentColor' : 'none'} />
                 </button>
-                <button type="button" onClick={shareProject} aria-label="Share project"><Share2 size={18} /></button>
-                <button type="button" onClick={closePanel} aria-label="Close project details"><X size={18} /></button>
               </div>
-              <div className="premium-project-hero-copy">
-                <h1>{selectedProject.name}</h1>
-                {selectedLocation && <p><MapPin size={15} /> {selectedLocation}</p>}
-                <strong>From {heroPrice}</strong>
-              </div>
+            </header>
+            <section className="premium-project-hero">
+              <img src={selectedDisplay.media.heroImage || selectedGallery[0]?.downloadURL || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1000&q=85'} alt={selectedDisplay.basic.projectName} />
+              <div className="premium-project-hero-scrim" />
+              {selectedDisplay.verified.enabled && selectedDisplay.verified.showOnDetails && <span className="reference-verified-badge"><Check size={13} /> {selectedDisplay.verified.label}</span>}
+              <div className="reference-gallery-count"><ImageIcon size={14} /> 1/{Math.max(selectedGallery.length, 1)}</div>
             </section>
 
-            <div className="premium-project-body">
-              <section className="premium-project-section premium-project-stats-shell">
-                <div className="premium-section-heading">
+            <div className="premium-project-body reference-project-body">
+              <section className="reference-property-intro" style={{ order: displayOrderOf('basic') }}>
+                <div className="reference-property-heading">
                   <div>
-                    <span>QUICK STATS</span>
-                    <h3>Quick Stats</h3>
+                    <h1>{selectedDisplay.basic.projectName}</h1>
+                    {selectedDisplay.basic.location && <p><MapPin size={15} /> {selectedDisplay.basic.location}</p>}
+                    <span>{selectedDisplay.pricing.pricePrefix}</span>
+                    <strong>{heroPrice}</strong>
+                    {selectedDisplay.cashback.enabled && selectedDisplay.cashback.showOnDetails && <CashbackBadge amount={selectedDisplay.cashback.amount} label={selectedDisplay.cashback.label} color={selectedDisplay.cashback.badgeColor} />}
                   </div>
+                  {selectedDisplay.rating.enabled && selectedDisplay.rating.showOnDetails && <div className="reference-rating-card">
+                    <b>★ {selectedDisplay.rating.enabled ? selectedDisplay.rating.value : '—'}</b>
+                    <small>{selectedDisplay.rating.enabled ? `(${selectedDisplay.rating.reviewCount} Reviews)` : 'Rating disabled'}</small>
+                  </div>}
                 </div>
+
+                {selectedDisplay.featureChips.showOnDetails && <div className="reference-feature-chips" aria-label="Property features">
+                  {selectedDisplay.featureChips.items.filter((item) => item.enabled).map((item) => <div key={item.id}><Leaf size={20} /><span>{item.title}</span></div>)}
+                </div>}
+              </section>
+
+              {selectedDisplay.quickStats.showOnDetails && <section className="reference-section reference-quick-stats" style={{ order: displayOrderOf('quickStats') }}>
+                <div className="reference-section-title"><h3>Quick Stats</h3></div>
                 <div className="premium-project-stats" aria-label="Project highlights">
-                  <div><span>Plot Size</span><strong>{plotArea ? `${new Intl.NumberFormat('en-IN').format(plotArea)} sq.ft.` : '—'}</strong></div>
-                  <div><span>Plots Left</span><strong>{plotsLeftLabel}</strong></div>
-                  <div><span>Land Zone</span><strong>{landZoneLabel || '—'}</strong></div>
-                  <div><span>NA Status</span><strong>{getNaStatusLabel(selectedProject) || '—'}</strong></div>
+                  {selectedDisplay.quickStats.items.filter((item) => item.enabled).map((item) => <div key={item.id}><Maximize2 size={20} /><span>{item.value}</span><strong>{item.title}</strong></div>)}
+                </div>
+              </section>}
+
+              <section className="reference-section premium-project-action-section" style={{ order: displayOrderOf('actions') }} aria-label="Primary actions">
+                <div className="premium-project-actions reference-primary-actions">
+                  {selectedDisplay.actions.showBookVisit && <button type="button" className="premium-book-visit" onClick={() => setShowBookingModal(true)}><CalendarDays size={18} /> {selectedDisplay.actions.bookVisitLabel}</button>}
+                  {selectedDisplay.actions.showViewLayout && <button type="button" onClick={viewLayout}><LayoutGrid size={18} /> {selectedDisplay.actions.viewLayoutLabel}</button>}
+                  {selectedDisplay.actions.showMap && selectedDisplay.map.showOnDetails && <button type="button" onClick={openDirections}><Navigation size={18} /> {selectedDisplay.actions.mapLabel}</button>}
                 </div>
               </section>
 
-              <section className="premium-project-section premium-project-action-section" aria-label="Primary actions">
-                <div className="premium-project-actions" aria-label="Primary actions">
-                  <button type="button" className="premium-book-visit" onClick={() => setShowBookingModal(true)}><CalendarDays size={18} /> Book Site Visit</button>
-                  <button type="button" onClick={openWhatsApp}><MessageCircle size={18} /> WhatsApp</button>
-                  <button type="button" onClick={openDirections}><Navigation size={18} /> Directions</button>
-                  <button type="button" onClick={shareProject}><Share2 size={18} /> Share</button>
+              <section className="reference-section premium-gallery-section" style={{ order: displayOrderOf('gallery') }}>
+                <div className="reference-section-title">
+                  <h3>Project Gallery</h3>
+                  {selectedGallery.length > 0 && <button type="button" onClick={() => setGalleryViewerIndex(0)}>View all ({selectedGallery.length})</button>}
                 </div>
-              </section>
-
-              <section className="premium-project-score">
-                <div className="premium-section-heading"><div><span>OVERVIEW</span><h3>Druvio Score</h3></div>{score && <strong>{score}<small>/100</small></strong>}</div>
-                <p>{score ? 'A concise overview based on the project information available in Druvio.' : 'A Druvio Score will appear once enough project information is available.'}</p>
-                {scoreSignals.length > 0 && <ul>{scoreSignals.slice(0, 4).map((signal) => <li key={signal}><Check size={15} /> {signal}</li>)}</ul>}
-              </section>
-
-              <section className="premium-project-section">
-                <div className="premium-section-heading"><div><span>AMENITIES</span><h3>Amenities</h3></div></div>
-                {selectedAmenities.length > 0
-                  ? <div className="premium-feature-grid">{selectedAmenities.slice(0, 6).map((item, index) => <div key={`${item}-${index}`}><Check size={16} /><span>{item}</span></div>)}</div>
-                  : <p>No amenities have been added yet.</p>}
-              </section>
-
-              <section className="premium-project-section premium-documents-section">
-                <div className="premium-section-heading"><div><span>DOCUMENTS</span><h3>Documents</h3></div><FileCheck size={20} /></div>
-                {documentsLoading ? <p>Loading documents…</p> : <><p>{selectedDocuments.length ? 'Verified Documents' : 'No documents uploaded.'}</p>{allSelectedDocuments.length > 0 && <button type="button" className="premium-outline-action" onClick={() => setDocumentViewer(selectedDocuments[0] || allSelectedDocuments[0])}>View Documents <ChevronRight size={16} /></button>}</>}
-              </section>
-
-              <section className="premium-project-section premium-location-section">
-                <div className="premium-section-heading"><div><span>LOCATION</span><h3>Location</h3></div><MapPin size={20} /></div>
-                {mapPreviewUrl && (
-                  <div className="premium-location-preview">
-                    <iframe src={mapPreviewUrl} title={`${selectedProject.name} location preview`} loading="lazy" referrerPolicy="no-referrer-when-downgrade" />
-                  </div>
-                )}
-                <div className="premium-location-actions">
-                  <button type="button" className="premium-outline-action" onClick={openFullscreenLocation}>Open Fullscreen <ExternalLink size={16} /></button>
-                  <button type="button" className="premium-outline-action" onClick={openDirections}>Navigate <Navigation size={16} /></button>
-                </div>
-              </section>
-
-              {isAdmin && (
-                <section className="details-admin-controls-block">
-                  <div className="premium-section-heading">
-                    <div>
-                      <span>ADMIN TOOLS</span>
-                      <h3>Admin Tools</h3>
+                {selectedGallery.length
+                  ? <div className="reference-gallery-strip">
+                      {selectedGallery.slice(0, 4).map((image, index) => (
+                        <button type="button" className={index === galleryIndex ? 'active' : ''} key={image.id} aria-label={`Open ${selectedDisplay.basic.projectName} gallery image ${index + 1}`} onClick={() => { setGalleryIndex(index); setGalleryViewerIndex(index); }}>
+                          <img src={image.downloadURL} alt={`${selectedProject.name} view ${index + 1}`} loading={index ? 'lazy' : 'eager'} />
+                        </button>
+                      ))}
                     </div>
-                  </div>
-                  <div className="admin-actions-row">
-                    {adminActions.map(({ label, icon: Icon, onClick, danger }) => (
-                      <button key={label} type="button" onClick={onClick} className={`btn-admin-action${danger ? ' danger' : ''}`}>
-                        <Icon size={16} />
-                        <span>{label}</span>
-                      </button>
+                  : <p>Gallery images will appear here when the seller adds them.</p>}
+              </section>
+
+              {selectedDisplay.map.enabled && selectedDisplay.map.showOnDetails && <section className="reference-section premium-location-section" style={{ order: displayOrderOf('map') }}>
+                <div className="reference-section-title"><h3>Location</h3><button type="button" onClick={openDirections}>{selectedDisplay.actions.mapLabel}</button></div>
+                {mapPreviewUrl && (
+                  <button type="button" className="premium-location-preview" onClick={openFullscreenLocation} aria-label="Open property location">
+                    <iframe src={mapPreviewUrl} title={`${selectedProject.name} location preview`} loading="lazy" referrerPolicy="no-referrer-when-downgrade" tabIndex="-1" />
+                  </button>
+                )}
+                {(selectedDisplay.map.address || highwayDistance) && <div className="reference-location-meta">
+                  {selectedDisplay.map.address && <p className="reference-address"><MapPin size={17} /> <span>{selectedDisplay.map.address}</span></p>}
+                  {highwayDistance && <p className="reference-distance"><Route size={17} /><span>{[highwayDistance.value, highwayDistance.title].filter(Boolean).join(' ')}</span></p>}
+                </div>}
+              </section>}
+
+              {selectedDisplay.documents.showOnDetails && <section className="reference-section premium-documents-section" style={{ order: displayOrderOf('documents') }}>
+                <div className="reference-section-title"><h3>Documents</h3>{selectedDocuments.length > 0 && <button type="button" onClick={() => setDocumentViewer(selectedDocuments[0])}>View all</button>}</div>
+                {documentsLoading ? <p>Loading documents…</p> : selectedDocuments.length ? (
+                  <div className="buyer-document-list">
+                    {selectedDocuments.map((document) => (
+                      <article key={document.id || document.url}>
+                        <FileText size={22} />
+                        <div>
+                          <strong>{document.displayName || getProjectDocumentLabel(document.type)}</strong>
+                          <small><Check size={13} /> Verified</small>
+                        </div>
+                        <button type="button" onClick={() => setDocumentViewer(document)}>View</button>
+                      </article>
                     ))}
                   </div>
-                </section>
-              )}
+                ) : <p>No verified documents are available.</p>}
+              </section>}
+
+              {selectedDisplay.amenities.showOnDetails && <section className="reference-section reference-amenities-section" style={{ order: displayOrderOf('amenities') }}>
+                <div>
+                  <h3>Amenities</h3>
+                  {selectedDisplay.amenities.items.filter((item) => item.enabled).length > 0
+                    ? <ul>{selectedDisplay.amenities.items.filter((item) => item.enabled).map((item) => <li key={item.id}><Check size={15} /> {item.title}</li>)}</ul>
+                    : <p>No amenities have been added yet.</p>}
+                </div>
+              </section>}
+
+              {selectedDisplay.overview.showOnDetails && <section className="reference-section reference-overview-score" style={{ order: displayOrderOf('overview') }}>
+                <div>
+                  <div className="reference-score-heading">
+                    <span aria-hidden="true">★</span>
+                    <div><h3>Druvio Score</h3><small>Investment Confidence</small></div>
+                    <strong>{score || '—'}<small>/5</small></strong>
+                  </div>
+                  <p>{selectedDisplay.overview.body || selectedDisplay.basic.shortDescription}</p>
+                </div>
+              </section>}
+
+              {selectedDisplay.trust.showOnDetails && <section className="reference-trust-strip" style={{ order: displayOrderOf('trust') }} aria-label="Project trust information">
+                {selectedDisplay.trust.items.filter((item) => item.enabled).map((item) => <div key={item.id}><ShieldCheck size={20} /><span><strong>{item.title}</strong><small>{item.value}</small></span></div>)}
+              </section>}
+
             </div>
           </div>
-        )}
+        <section className="reference-bottom-cta" aria-label="Contact and booking actions">
+          {selectedDisplay.actions.showCall && selectedDisplay.actions.callNumber ? (
+            <a href={`tel:${String(selectedDisplay.actions.callNumber).replace(/[^\d+]/g, '')}`}><Phone size={19} /> {selectedDisplay.actions.callLabel}</a>
+          ) : (
+            selectedDisplay.actions.showCall && <button type="button" disabled><Phone size={19} /> {selectedDisplay.actions.callLabel}</button>
+          )}
+          {selectedDisplay.actions.showBookVisit && <button type="button" onClick={() => setShowBookingModal(true)}><CalendarDays size={19} /> {selectedDisplay.actions.bookVisitLabel}</button>}
+        </section>
       </div>
     );
   };
@@ -1606,50 +1344,29 @@ function BuyerApp({
         </>
       )}
 
-      <header className="buyer-workspace-header">
-        <div className="buyer-workspace-search-shell">
-        <label className="buyer-workspace-search">
-          <span className="buyer-search-brand" aria-hidden="true"><MapPin size={19} /></span>
-          <input
-            type="search"
-            placeholder="Search projects"
-            value={homeSearchQuery}
-            onChange={(event) => {
-              setHomeSearchQuery(event.target.value);
-              setActiveScreen('home');
-              if (panelMode) setPanelMode(null);
-            }}
-            onKeyDown={searchEnteredLocation}
-            aria-label="Search plot projects"
-          />
-          {homeSearchQuery && (
-            <button type="button" className="buyer-search-clear" onClick={() => setHomeSearchQuery('')} aria-label="Clear search">
-              <X size={16} />
-            </button>
-          )}
-          <button type="button" className={`buyer-search-tool ${voiceSearchActive ? 'active' : ''}`} onClick={startVoiceSearch} aria-label="Search by voice" title="Search by voice">
-            <Mic size={18} />
-          </button>
-        </label>
-        {(homeSearchQuery.trim().length >= 2) && (
-          <div className="buyer-map-search-results" role="listbox" aria-label="Search suggestions">
-            {searchableProjects.map((project) => (
-              <button key={`project-${project.id}`} type="button" onClick={() => { handleProjectSelect(project); setPlaceSuggestions([]); }}>
-                <Building2 size={18} /><span><strong>{project.name}</strong><small>{getDisplayLocation(project) || 'Druvio active project'}</small></span>
-              </button>
-            ))}
-            {placeSuggestions.map((suggestion) => (
-              <button key={suggestion.placePrediction.placeId} type="button" onClick={() => selectPlaceSuggestion(suggestion)}>
-                <MapPin size={18} /><span><strong>{suggestion.placePrediction.mainText?.toString() || suggestion.placePrediction.text.toString()}</strong><small>{suggestion.placePrediction.secondaryText?.toString() || 'Location'}</small></span>
-              </button>
-            ))}
-            {placeSearchError && <p>{placeSearchError}</p>}
-            {!placeSearchError && searchableProjects.length === 0 && placeSuggestions.length === 0 && <p>Searching locations…</p>}
-          </div>
-        )}
-        </div>
-        <ProfileDropdown
+      {activeScreen === 'home' && panelMode !== 'project' && (
+        <BuyerWorkspaceHeader
+          homeSearchQuery={homeSearchQuery}
+          voiceSearchActive={voiceSearchActive}
+          searchableProjects={searchableProjects}
+          placeSuggestions={placeSuggestions}
+          placeSearchError={placeSearchError}
+          onQueryChange={(event) => {
+            setHomeSearchQuery(event.target.value);
+            setActiveScreen('home');
+            if (panelMode) setPanelMode(null);
+          }}
+          onSearchKeyDown={searchEnteredLocation}
+          onClearSearch={() => setHomeSearchQuery('')}
+          onStartVoiceSearch={startVoiceSearch}
+          onProjectSelect={(project) => {
+            handleProjectSelect(project);
+            setPlaceSuggestions([]);
+          }}
+          onPlaceSelect={selectPlaceSuggestion}
+          notifications={notifications}
           user={user}
+          isAdmin={isAdmin}
           onThemeToggle={onThemeToggle}
           isDarkMode={isDarkMode}
           permissions={permissions}
@@ -1657,34 +1374,21 @@ function BuyerApp({
           onViewChange={onViewChange}
           onBackToAdmin={onBackToAdmin}
           selectedSeller={selectedSeller}
-          hideChevron
         />
-      </header>
+      )}
 
-      <aside className="buyer-map-nav" aria-label="Buyer navigation">
-        {SIDEBAR_ITEMS.map((item) => {
-          const Icon = item.icon;
-          const active = !item.disabled && activeSidebarItem === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={`buyer-map-nav-btn ${active ? 'active' : ''}`}
-              disabled={item.disabled}
-              title={item.disabled ? `${item.label} coming soon` : item.label}
-              onClick={() => !item.disabled && navigateToScreen(item.id)}
-            >
-              <Icon size={18} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-      </aside>
+      {!isAndroidLayout && (
+        <BuyerDesktopNavigation
+          items={SIDEBAR_ITEMS}
+          activeItem={activeSidebarItem}
+          onNavigate={navigateToScreen}
+        />
+      )}
 
       {activeScreen === 'home' && (
-        <main className="buyer-primary-screen buyer-home-screen" aria-labelledby="buyer-home-title">
+        <main className="buyer-primary-screen buyer-home-screen" aria-label="Buyer home">
           <div className="buyer-primary-screen-inner">
-            <h1 id="buyer-home-title" className="buyer-home-title">Buyer Home</h1>
+            <FeedBannerCarousel />
             {renderHomePanel()}
           </div>
         </main>
@@ -1696,8 +1400,33 @@ function BuyerApp({
         </main>
       )}
 
-      <section className={`buyer-slide-panel ${panelOpen ? 'open' : ''}`}>
+      <section
+        className={`buyer-slide-panel ${panelOpen ? 'open' : ''} ${isAndroidLayout && panelMode === 'project' ? 'map-property-bottom-sheet' : 'map-property-side-panel'}`}
+        style={isAndroidLayout ? { '--sheet-height': `${mobileSheetHeight}dvh` } : undefined}
+      >
         <div className="buyer-slide-panel-shell">
+          {isAndroidLayout && panelMode === 'project' && <button
+            type="button"
+            className="property-sheet-drag-handle"
+            aria-label={`Resize property details. Current height ${Math.round(mobileSheetHeight)} percent`}
+            onPointerDown={(event) => {
+              mobileSheetDragRef.current = { pointerId: event.pointerId };
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              if (mobileSheetDragRef.current?.pointerId !== event.pointerId) return;
+              const next = Math.max(30, Math.min(95, ((window.innerHeight - event.clientY) / window.innerHeight) * 100));
+              setMobileSheetHeight(next);
+            }}
+            onPointerUp={(event) => {
+              if (mobileSheetDragRef.current?.pointerId !== event.pointerId) return;
+              mobileSheetDragRef.current = null;
+              const snapPoints = [34, 60, 95];
+              setMobileSheetHeight(current => snapPoints.reduce((closest, point) => Math.abs(point - current) < Math.abs(closest - current) ? point : closest));
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+            onClick={() => setMobileSheetHeight(current => current < 47 ? 60 : current < 78 ? 95 : 34)}
+          ><span /></button>}
           {panelMode !== 'project' && <div className="buyer-slide-panel-head">
             <div>
               <span className="buyer-panel-kicker">{panelKicker}</span>
@@ -1714,16 +1443,12 @@ function BuyerApp({
         </div>
       </section>
 
-      <nav className="buyer-mobile-nav" aria-label="Buyer mobile navigation">
-        <button type="button" className={`buyer-mobile-nav-btn ${activeScreen === 'home' ? 'active' : ''}`} onClick={() => navigateToScreen('home')}>
-          <Home size={18} />
-          <span>Home</span>
-        </button>
-        <button type="button" className={`buyer-mobile-nav-btn ${activeScreen === 'cashback' ? 'active' : ''}`} onClick={() => navigateToScreen('cashback')}>
-          <Gift size={18} />
-          <span>Cashback</span>
-        </button>
-      </nav>
+      {isAndroidLayout && (
+        <BuyerMobileNavigation
+          activeScreen={activeScreen}
+          onNavigate={navigateToScreen}
+        />
+      )}
 
       {showBookingModal && selectedProject && (
         <div className="modal-overlay">
@@ -1781,19 +1506,9 @@ function BuyerApp({
         </div>
       )}
 
-      {documentViewer && (
-        <div className="document-viewer-overlay" role="dialog" aria-modal="true" aria-labelledby="document-viewer-title">
-          <div className="document-viewer-shell">
-            <div className="document-viewer-header">
-              <div><span>Verified by Druvio</span><h3 id="document-viewer-title">{getProjectDocumentLabel(documentViewer.type)}</h3></div>
-              <div>
-                <a href={documentViewer.url} target="_blank" rel="noreferrer">Open externally</a>
-                <button type="button" onClick={() => setDocumentViewer(null)} aria-label="Close document viewer"><X size={18} /></button>
-              </div>
-            </div>
-            <iframe src={documentViewer.url} title={getProjectDocumentLabel(documentViewer.type)} />
-          </div>
-        </div>
+      <InAppDocumentViewer document={documentViewer} onClose={() => setDocumentViewer(null)} />
+      {galleryViewerIndex !== null && (
+        <ImageLightbox images={selectedGallery} initialIndex={galleryViewerIndex} onClose={() => setGalleryViewerIndex(null)} />
       )}
 
     </div>

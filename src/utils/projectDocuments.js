@@ -31,6 +31,8 @@ export const normalizeProjectDocuments = (project) => {
       ...document,
       url: typeof document.url === 'string'
         ? document.url.trim()
+        : typeof document.downloadURL === 'string'
+          ? document.downloadURL.trim()
         : typeof document.documentUrl === 'string'
           ? document.documentUrl.trim()
           : typeof document.fileUrl === 'string'
@@ -42,17 +44,28 @@ export const normalizeProjectDocuments = (project) => {
       id: document.id || null,
       type: PROJECT_DOCUMENT_TYPES[document.type] ? document.type : 'other',
       url: document.url,
+      downloadURL: document.downloadURL || document.url,
       path: document.path || document.storagePath || '',
+      storagePath: document.storagePath || document.path || '',
+      displayName: document.displayName || document.title || document.label || '',
+      originalFileName: document.originalFileName || document.fileName || document.name || '',
       fileName: document.fileName || document.name || '',
-      contentType: document.contentType || '',
-      size: Number(document.size) || 0,
+      fileType: document.fileType || '',
+      contentType: document.contentType || document.mimeType || '',
+      mimeType: document.mimeType || document.contentType || '',
+      size: Number(document.size ?? document.fileSize) || 0,
+      fileSize: Number(document.fileSize ?? document.size) || 0,
+      displayOrder: Number.isFinite(Number(document.displayOrder)) ? Number(document.displayOrder) : 0,
+      verified: document.verified === true || document.status === 'verified',
       status: document.status === 'verified' || document.verified === true
         ? 'verified'
         : document.status === 'rejected'
           ? 'rejected'
           : 'pending',
       uploadedAt: document.uploadedAt || null,
-      updatedAt: document.updatedAt || document.verifiedAt || document.reviewedAt || null,
+      uploadedBy: document.uploadedBy || null,
+      updatedAt: document.updatedAt || document.lastUpdated || document.verifiedAt || document.reviewedAt || null,
+      lastUpdated: document.lastUpdated || document.updatedAt || null,
       reviewedAt: document.reviewedAt || document.verifiedAt || null,
       reviewedBy: document.reviewedBy || null
     }));

@@ -21,7 +21,9 @@ export default function ImageUploadCropper({
   progress = 0,
   onUpload,
   onDelete,
-  onError
+  onError,
+  triggerRef,
+  label = 'Thumbnail'
 }) {
   const inputRef = useRef(null);
   const cropFrameRef = useRef(null);
@@ -48,6 +50,13 @@ export default function ImageUploadCropper({
     if (!uploading && !savingCrop) inputRef.current?.click();
   };
 
+  useEffect(() => {
+    if (triggerRef) triggerRef.current = chooseFile;
+    return () => {
+      if (triggerRef) triggerRef.current = null;
+    };
+  });
+
   const handleFile = (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -57,7 +66,7 @@ export default function ImageUploadCropper({
       return;
     }
     if (file.size > maxSize) {
-      onError?.('Thumbnail images must be 5 MB or smaller.');
+      onError?.(`${label} images must be ${Math.round(maxSize / 1024 / 1024)} MB or smaller.`);
       return;
     }
     setSource(URL.createObjectURL(file));
@@ -130,7 +139,7 @@ export default function ImageUploadCropper({
           className={`thumbnail-preview-card ${value ? 'has-image' : 'is-empty'} ${uploading ? 'is-uploading' : ''}`}
           onClick={chooseFile}
           disabled={uploading}
-          aria-label={value ? 'Change thumbnail' : 'Upload thumbnail'}
+          aria-label={value ? `Change ${label.toLowerCase()}` : `Upload ${label.toLowerCase()}`}
         >
           {value ? <img src={value} alt={alt} /> : (
             <span className="thumbnail-placeholder"><Camera size={34} /><strong>Click to upload thumbnail</strong><small>JPG, PNG or WEBP · 5 MB max</small></span>
@@ -157,7 +166,7 @@ export default function ImageUploadCropper({
         <div className="image-cropper-backdrop" role="presentation">
           <section className="image-cropper-dialog" role="dialog" aria-modal="true" aria-labelledby="thumbnail-crop-title">
             <header>
-              <div><h3 id="thumbnail-crop-title">Crop Thumbnail</h3><p>Drag to reposition and use the slider to zoom.</p></div>
+              <div><h3 id="thumbnail-crop-title">Crop {label}</h3><p>Drag to reposition and use the slider to zoom.</p></div>
               <button type="button" onClick={closeCropper} disabled={savingCrop} aria-label="Close cropper"><X size={20} /></button>
             </header>
             <div
@@ -180,7 +189,7 @@ export default function ImageUploadCropper({
             <footer>
               <button type="button" className="btn-secondary" onClick={closeCropper} disabled={savingCrop}>Cancel</button>
               <button type="button" className="btn-primary" onClick={createCrop} disabled={savingCrop}>
-                {savingCrop ? <><LoaderCircle className="thumbnail-spinner" size={17} /> Preparing…</> : 'Save Thumbnail'}
+                {savingCrop ? <><LoaderCircle className="thumbnail-spinner" size={17} /> Preparing…</> : `Use ${label}`}
               </button>
             </footer>
           </section>
