@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Zinoo</title>
+  <clipPath id="rounded-corners">
+    <rect width="512" height="512" rx="96" />
+  </clipPath>
+  <image href="/brand/zinoo-logo.png" width="512" height="512" clip-path="url(#rounded-corners)" />
+</svg>

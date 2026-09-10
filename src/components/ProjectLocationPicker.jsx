@@ -1,13 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { httpsCallable } from 'firebase/functions';
 import { Check, Expand, LocateFixed, MapPin, Pencil, RotateCcw, Undo2, X } from 'lucide-react';
 import { loadGoogleMaps } from '../maps/googleMaps';
-import { googleMapsConfig, googleMapsMissingMessage, googleMapsUnavailableMessage } from '../maps/googleMapsConfig';
+import { functions } from '../firebaseConfig';
+import { getGoogleMapsErrorMessage, googleMapsConfig, googleMapsMissingMessage } from '../maps/googleMapsConfig';
 import { buildProjectGeometry, normalizeProjectPolygon } from '../utils/projectGeometry';
 import { CHAKAN_LOCATION, CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
+import ZoomBadge from './ZoomBadge';
 
 const validCoordinate = (value) => Number.isFinite(Number(value));
 
-export default function ProjectLocationPicker({ latitude, longitude, layoutPolygon, onChange, onLayoutChange }) {
+export default function ProjectLocationPicker({
+  latitude,
+  longitude,
+  layoutPolygon,
+  onChange,
+  onLayoutChange,
+  autoDetectHighway = false,
+  highwayName = '',
+  highwayDistance = null,
+  isHighwayTouch = false,
+  onHighwayChange
+}) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -16,14 +30,50 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
   const listenersRef = useRef([]);
   const drawingRef = useRef(false);
   const onChangeRef = useRef(onChange);
+  const onHighwayChangeRef = useRef(onHighwayChange);
+  const highwayRequestRef = useRef(0);
   const [fullscreen, setFullscreen] = useState(false);
   const [drawing, setDrawing] = useState(false);
   const [draftPoints, setDraftPoints] = useState([]);
   const [error, setError] = useState('');
   const [mapStatus, setMapStatus] = useState(googleMapsConfig.isConfigured ? 'loading' : 'configuration-missing');
+  const [zoomLevel, setZoomLevel] = useState(17);
+  const [highwayStatus, setHighwayStatus] = useState('idle');
+  const [detectedHighway, setDetectedHighway] = useState(() => highwayName ? { highwayName, highwayDistance, isHighwayTouch } : null);
 
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  useEffect(() => { onHighwayChangeRef.current = onHighwayChange; }, [onHighwayChange]);
   useEffect(() => { drawingRef.current = drawing; }, [drawing]);
+
+  const publishLocation = (nextLatitude, nextLongitude) => {
+    const nextLocation = { latitude: Number(nextLatitude), longitude: Number(nextLongitude) };
+    onChangeRef.current?.(nextLocation);
+    if (!autoDetectHighway) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setDetectedHighway(null);
+      setHighwayStatus('unavailable');
+      onHighwayChangeRef.current?.({ found: false, unavailable: true });
+      return;
+    }
+    const requestId = ++highwayRequestRef.current;
+    setHighwayStatus('checking');
+    setDetectedHighway(null);
+    httpsCallable(functions, 'detectNearestHighway')(nextLocation)
+      .then(({ data }) => {
+        if (requestId !== highwayRequestRef.current) return;
+        const result = data?.found ? data : { found: false };
+        setDetectedHighway(result.found ? result : null);
+        setHighwayStatus(result.found ? 'ready' : result.unavailable ? 'unavailable' : 'empty');
+        onHighwayChangeRef.current?.(result);
+      })
+      .catch((highwayError) => {
+        if (requestId !== highwayRequestRef.current) return;
+        if (import.meta.env.DEV) console.warn('[Zinoo Maps] Highway detection unavailable', highwayError?.code || highwayError?.message);
+        setDetectedHighway(null);
+        setHighwayStatus('unavailable');
+        onHighwayChangeRef.current?.({ found: false });
+      });
+  };
 
   const clearOverlay = () => {
     polygonRef.current?.setMap(null);
@@ -80,31 +130,35 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
         streetViewControl: false,
         fullscreenControl: false,
         rotateControl: false,
-        gestureHandling: 'greedy'
+        gestureHandling: 'greedy',
+        isFractionalZoomEnabled: true
       });
       map.setMapTypeId(maps.MapTypeId.HYBRID);
       const marker = new maps.marker.AdvancedMarkerElement({ map, position, gmpDraggable: true, title: 'Project entrance' });
       mapRef.current = map;
       setMapStatus('ready');
       markerRef.current = marker;
-      const publish = (location) => onChangeRef.current?.({ latitude: location.lat(), longitude: location.lng() });
       listenersRef.current = [
+        map.addListener('zoom_changed', () => {
+          const nextZoom = Math.round((map.getZoom() ?? 17) * 10) / 10;
+          setZoomLevel((currentZoom) => currentZoom === nextZoom ? currentZoom : nextZoom);
+        }),
         map.addListener('click', (event) => {
           if (drawingRef.current) setDraftPoints((points) => [...points, event.latLng.toJSON()]);
-          else publish(event.latLng);
+          else publishLocation(event.latLng.lat(), event.latLng.lng());
         }),
-        marker.addListener('dragend', (event) => publish(event.latLng))
+        marker.addListener('dragend', (event) => publishLocation(event.latLng.lat(), event.latLng.lng()))
       ];
       const savedPath = normalizeProjectPolygon(layoutPolygon);
       if (savedPath.length >= 3) showPolygon(savedPath, false);
     }).catch((loadError) => {
       if (cancelled) return;
-      console.error('[Druvio Maps] Project location picker failed', {
+      console.error('[Zinoo Maps] Project location picker failed', {
         code: loadError?.code,
         message: loadError?.message,
         coordinates: { latitude, longitude }
       });
-      setError(googleMapsUnavailableMessage);
+      setError(getGoogleMapsErrorMessage(loadError));
       setMapStatus('load-error');
     });
     return () => {
@@ -187,7 +241,7 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
 
   const resetToChakan = () => {
     setError('');
-    onChangeRef.current?.(CHAKAN_LOCATION);
+    publishLocation(CHAKAN_LOCATION.latitude, CHAKAN_LOCATION.longitude);
     mapRef.current?.panTo(CHAKAN_MAP_POSITION);
     mapRef.current?.setZoom(17);
   };
@@ -197,7 +251,7 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
       <div className="project-location-picker-heading">
         <div><MapPin size={18} /><span>Project entrance and boundary</span></div>
         <div className="project-location-actions">
-          <button type="button" className="btn-secondary seller-inline-button" onClick={resetToChakan}><LocateFixed size={16} /> Reset to Chakan</button>
+          <button type="button" className="btn-secondary seller-inline-button" onClick={editSavedBoundary}><Pencil size={16} /> Edit Boundary</button>
           <button type="button" className="btn-secondary seller-inline-button" onClick={() => setFullscreen(true)}><Expand size={16} /> Fullscreen</button>
           {fullscreen && <button type="button" className="btn-secondary seller-inline-button" onClick={() => setFullscreen(false)}><X size={16} /> Close</button>}
         </div>
@@ -211,6 +265,7 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
       </div>}
       <div className="project-location-map-frame">
         <div ref={containerRef} className="project-location-map" aria-label="Satellite map for the project entrance and boundary" />
+        <ZoomBadge zoom={zoomLevel} />
         {mapStatus !== 'ready' && (
           <div className="project-location-map-state" role={mapStatus === 'loading' ? 'status' : 'alert'}>
             {mapStatus === 'loading' ? 'Loading map…' : error}
@@ -221,6 +276,15 @@ export default function ProjectLocationPicker({ latitude, longitude, layoutPolyg
         <small>{drawing ? `Boundary points: ${draftPoints.length}. Click the satellite map to add points.` : 'The marker is the entrance. The polygon is the actual project boundary.'}</small>
         {fullscreen && polygonRef.current && <button type="button" className="btn-primary seller-inline-button" onClick={saveBoundary}><Check size={16} /> Save layout</button>}
       </div>
+      {autoDetectHighway && highwayStatus === 'checking' && <div className="highway-detection-card" role="status">Checking nearest highway...</div>}
+      {autoDetectHighway && highwayStatus === 'unavailable' && <div className="highway-detection-card" role="status">Nearest-highway lookup is currently unavailable.</div>}
+      {autoDetectHighway && highwayStatus !== 'checking' && detectedHighway && (
+        <section className="highway-detection-card" aria-label="Nearest highway">
+          <div><span>Nearest Highway</span><strong>{detectedHighway.highwayName}</strong></div>
+          <div><span>Distance</span><strong>{Math.round(Number(detectedHighway.highwayDistance))} m</strong></div>
+          <div><span>Status</span><strong>{detectedHighway.isHighwayTouch ? 'Highway Touch' : 'Nearby'}</strong></div>
+        </section>
+      )}
       {error && mapStatus === 'ready' && <p className="seller-document-error" role="alert">{error}</p>}
     </div>
   );

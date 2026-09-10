@@ -1,0 +1,39 @@
+{
+  "hosting": {
+    "site": "druvio",
+    "public": "public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "headers": [
+      { "source": "/", "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }] },
+      { "source": "/index.html", "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }] },
+      { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+      { "source": "/assets/**", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+      { "source": "/plots-in-chakan", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, s-maxage=900" }] },
+      { "source": "/projects/**", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, s-maxage=900" }] },
+      { "source": "/projects", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, s-maxage=900" }] },
+      { "source": "/plots/**", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, s-maxage=900" }] },
+      { "source": "/sitemap.xml", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, s-maxage=900" }] },
+      { "source": "/maps/**", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+      { "source": "/auth-phone-diagnostic.html", "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }] }
+    ],
+    "redirects": [
+      { "source": "/privacy-policy.html", "destination": "/privacy-policy", "type": 301 },
+      { "source": "/terms-and-conditions.html", "destination": "/terms-and-conditions", "type": 301 },
+      { "source": "/refund-policy.html", "destination": "/refund-policy", "type": 301 },
+      { "source": "/refund-and-cancellation-policy", "destination": "/refund-policy", "type": 301 }
+    ],
+    "rewrites": [
+      { "source": "/plots-in-chakan", "function": { "functionId": "publicProjectSeo", "region": "us-central1" } },
+      { "source": "/plots", "function": { "functionId": "publicProjectSeo", "region": "us-central1" } },
+      { "source": "/plots/**", "function": { "functionId": "publicProjectSeo", "region": "us-central1" } },
+      { "source": "/api/public-projects", "function": { "functionId": "publicProjectSeo", "region": "us-central1" } },
+      { "source": "/projects/**", "function": { "functionId": "publicProjectSeo", "region": "us-central1" } },
+      { "source": "/projects", "function": { "functionId": "publicProjectSeo", "region": "us-central1" } },
+      { "source": "/sitemap.xml", "function": { "functionId": "publicProjectSeo", "region": "us-central1" } },
+      { "source": "/privacy-policy", "destination": "/privacy-policy.html" },
+      { "source": "/terms-and-conditions", "destination": "/terms-and-conditions.html" },
+      { "source": "/refund-policy", "destination": "/refund-policy.html" },
+      { "source": "**", "function": { "functionId": "publicProjectSeo", "region": "us-central1" } }
+    ]
+  }
+}

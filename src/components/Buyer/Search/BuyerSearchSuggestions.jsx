@@ -1,5 +1,6 @@
-import { Building2, MapPin } from 'lucide-react';
+import { BadgeCheck, Building2, MapPin } from 'lucide-react';
 import { getDisplayLocation } from '../buyerPresentation';
+import { getProjectPublicPath } from '../../../utils/projectPublicUrl';
 
 export default function BuyerSearchSuggestions({
   searchableProjects,
@@ -11,9 +12,9 @@ export default function BuyerSearchSuggestions({
   return (
     <div className="buyer-map-search-results" role="listbox" aria-label="Search suggestions">
       {searchableProjects.map((project) => (
-        <button key={`project-${project.id}`} type="button" onClick={() => onProjectSelect(project)}>
-          <Building2 size={18} /><span><strong>{project.name}</strong><small>{getDisplayLocation(project) || 'Druvio active project'}</small></span>
-        </button>
+        <a key={`project-${project.id}`} href={getProjectPublicPath(project) || '#'} onClick={(event) => { event.preventDefault(); onProjectSelect(project); }}>
+          <Building2 size={18} /><span><strong>{project.name}{project.showVerifiedNameBadge && <BadgeCheck className="property-name-verified-badge" aria-label="Verified property" />}</strong><small>{getDisplayLocation(project) || 'Zinoo active project'}</small></span>
+        </a>
       ))}
       {placeSuggestions.map((suggestion) => (
         <button key={suggestion.placePrediction.placeId} type="button" onClick={() => onPlaceSelect(suggestion)}>

@@ -1,5 +1,10 @@
 rules_version = '2';
 
+// featuredDevelopers model:
+// sellerId/logo, experience and project counters,
+// verified/sortIndex/isFeatured/isActive, createdAt/updatedAt.
+// Buyer reads are authenticated and limited to active records; Admin owns CRUD.
+
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
@@ -22,10 +27,24 @@ service cloud.firestore {
     }
     function validProject(data) {
       return data.ownerId is string && data.ownerId.size() > 0
-        && data.sellerUid is string && data.sellerUid == data.ownerId
+        // Older project records predate sellerUid. Preserve compatibility for
+        // those records while enforcing equality whenever the field exists.
+        && (!('sellerUid' in data) || (data.sellerUid is string && data.sellerUid == data.ownerId))
         && data.name is string && data.name.size() >= 2
+        && (!('amenities' in data) || (data.amenities is list && data.amenities.size() <= 100))
+        && (!('amenityIds' in data) || (data.amenityIds is list && data.amenityIds.size() <= 100))
         && (!('display' in data) || (data.display is map && data.display.schemaVersion is int))
         && validProjectStatus(data);
+    }
+    function validAmenityCatalog(data) {
+      return data.keys().hasOnly(['name', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['name', 'isActive', 'createdAt', 'updatedAt'])
+        && data.name is string
+        && data.name.size() >= 2
+        && data.name.size() <= 80
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
     function validFeedBanner(data) {
       return data.keys().hasOnly([
@@ -46,16 +65,68 @@ service cloud.firestore {
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
+    function validFeaturedDeveloper(data) {
+      return data.keys().hasOnly([
+          'sellerId', 'logo', 'experienceYears',
+          'completedProjects', 'activeProjects', 'upcomingProjects', 'verified',
+          'sortIndex', 'isFeatured', 'isActive', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'sellerId', 'logo', 'experienceYears',
+          'completedProjects', 'activeProjects', 'upcomingProjects', 'verified',
+          'sortIndex', 'isFeatured', 'isActive', 'createdAt', 'updatedAt'
+        ])
+        && data.sellerId is string && data.sellerId.size() >= 20 && data.sellerId.size() <= 128
+        && data.logo is string && data.logo.size() <= 2000 && data.logo.matches('https://.*')
+        && data.experienceYears is int && data.experienceYears >= 0 && data.experienceYears <= 150
+        && data.completedProjects is int && data.completedProjects >= 0 && data.completedProjects <= 10000
+        && data.activeProjects is int && data.activeProjects >= 0 && data.activeProjects <= 10000
+        && data.upcomingProjects is int && data.upcomingProjects >= 0 && data.upcomingProjects <= 10000
+        && data.verified is bool
+        && data.sortIndex is int && data.sortIndex >= 0 && data.sortIndex <= 1000
+        && data.isFeatured is bool && data.isActive is bool
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+    function validUserCreate(data) {
+      return data.keys().hasOnly([
+          'uid', 'name', 'displayName', 'firstName', 'lastName', 'email', 'phone',
+          'phoneNumber', 'permissions', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasAll(['uid', 'email', 'permissions', 'createdAt'])
+        && data.uid is string && data.uid == request.auth.uid
+        && data.email is string && data.email.size() <= 254
+        && data.permissions is map
+        && data.permissions.keys().hasOnly(['buyer', 'seller', 'admin'])
+        && data.permissions.buyer == true
+        && data.permissions.seller == false
+        && data.permissions.admin == false
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp)
+        && (!('name' in data) || (data.name is string && data.name.size() <= 120))
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
+        && (!('firstName' in data) || (data.firstName is string && data.firstName.size() <= 60))
+        && (!('lastName' in data) || (data.lastName is string && data.lastName.size() <= 60))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
+        && (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 30));
+    }
+    function validUserAccountUpdate(data) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName', 'firstName', 'lastName', 'phoneNumber', 'updatedAt'
+        ])
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
+        && (!('firstName' in data) || (data.firstName is string && data.firstName.size() <= 60))
+        && (!('lastName' in data) || (data.lastName is string && data.lastName.size() <= 60))
+        && (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 30))
+        && data.updatedAt is timestamp;
+    }
     match /users/{userId} {
       allow create: if signedIn() && request.auth.uid == userId
-        && request.resource.data.permissions.buyer == true
-        && request.resource.data.permissions.seller == false
-        && request.resource.data.permissions.admin == false;
+        && validUserCreate(request.resource.data);
       allow read: if signedIn() && (request.auth.uid == userId || admin());
-      allow update: if signedIn()
-        && request.resource.data.permissions == resource.data.permissions
-        && (admin() || request.auth.uid == userId);
-      allow delete: if false;
+      allow update: if signedIn() && (
+        admin() || (request.auth.uid == userId && validUserAccountUpdate(request.resource.data))
+      );
+      allow delete: if signedIn() && (request.auth.uid == userId || admin());
     }
 
     match /sellerRequests/{requestId} {
@@ -70,7 +141,7 @@ service cloud.firestore {
         && resource.data.status == 'pending'
         && request.resource.data.status == 'pending'
         && request.resource.data.createdAt == resource.data.createdAt;
-      allow delete: if false;
+      allow delete: if signedIn() && (request.auth.uid == requestId || admin());
     }
 
     match /projects/{projectId} {
@@ -88,15 +159,40 @@ service cloud.firestore {
           && request.resource.data.ownerId == resource.data.ownerId
           && validProject(request.resource.data)
           && request.resource.data.status == 'pending');
-      allow delete: if admin();
+      allow delete: if signedIn() && (resource.data.ownerId == request.auth.uid || resource.data.createdBy == request.auth.uid || admin());
+    }
+
+    // Admin-managed options only. Sellers can query active choices for their
+    // own project editor; buyers never receive the master catalog.
+    match /amenityCatalog/{amenityId} {
+      allow read: if admin() || (seller() && resource.data.isActive == true);
+      allow create: if admin() && validAmenityCatalog(request.resource.data);
+      allow update: if admin()
+        && validAmenityCatalog(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+    }
+
+    // Sanitized, lifecycle-managed projections used by the public landing and
+    // server-rendered SEO pages. Clients can never write these collections.
+    match /publicProjects/{projectId} {
+      allow read: if resource.data.publicVisibility == true
+        && resource.data.status == 'active';
+      allow write: if false;
+    }
+    match /publicLocations/{locationId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /publicProjectSlugs/{slug} {
+      allow read, write: if false;
     }
 
     match /layouts/{layoutId} {
-      allow read: if signedIn() && (
-        admin() ||
+      allow read: if
         get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.status == 'active' ||
-        get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.ownerId == request.auth.uid
-      );
+        (signedIn() && (admin() ||
+          get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.ownerId == request.auth.uid));
       allow create: if signedIn() && (
         admin() ||
         (seller() && request.resource.data.projectId != null &&
@@ -109,8 +205,10 @@ service cloud.firestore {
       );
       allow delete: if signedIn() && (
         admin() ||
-        (seller() && resource.data.projectId != null &&
-         get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.ownerId == request.auth.uid)
+        (seller() && (
+          ('createdBy' in resource.data && resource.data.createdBy == request.auth.uid) ||
+          (resource.data.projectId != null && get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.ownerId == request.auth.uid)
+        ))
       );
     }
 
@@ -126,7 +224,7 @@ service cloud.firestore {
         admin()
       );
       allow update: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid && request.resource.data.createdBy == resource.data.createdBy);
-      allow delete: if admin();
+      allow delete: if signedIn() && (resource.data.createdBy == request.auth.uid || ('userId' in resource.data && resource.data.userId == request.auth.uid) || admin());
     }
 
     match /visits/{recordId} {
@@ -137,7 +235,7 @@ service cloud.firestore {
         admin()
       );
       allow update: if admin() || (signedIn() && resource.data.createdBy == request.auth.uid && request.resource.data.createdBy == resource.data.createdBy);
-      allow delete: if admin();
+      allow delete: if signedIn() && (resource.data.createdBy == request.auth.uid || ('userId' in resource.data && resource.data.userId == request.auth.uid) || admin());
     }
 
     match /cashbacks/{recordId} {
@@ -162,7 +260,8 @@ service cloud.firestore {
       allow update: if signedIn()
         && resource.data.recipientId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
-      allow create, delete: if false;
+      allow create: if false;
+      allow delete: if signedIn() && (resource.data.recipientId == request.auth.uid || ('userId' in resource.data && resource.data.userId == request.auth.uid) || admin());
     }
 
     match /feed/{bannerId} {
@@ -170,6 +269,20 @@ service cloud.firestore {
       allow create: if admin() && validFeedBanner(request.resource.data);
       allow update: if admin()
         && validFeedBanner(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if admin();
+    }
+    match /featuredDevelopers/{developerId} {
+      // Admin first: duplicate-check transactions must be able to read a
+      // non-existent deterministic seller document before creating it.
+      allow read: if admin() || (signedIn() && resource.data.isActive == true);
+      allow create: if admin()
+        && developerId == request.resource.data.sellerId
+        && exists(/databases/$(database)/documents/users/$(request.resource.data.sellerId))
+        && validFeaturedDeveloper(request.resource.data);
+      allow update: if admin()
+        && request.resource.data.sellerId == resource.data.sellerId
+        && validFeaturedDeveloper(request.resource.data)
         && request.resource.data.createdAt == resource.data.createdAt;
       allow delete: if admin();
     }

@@ -1,3 +1,5 @@
+import { projectAmenityNames } from './projectAmenities.js';
+
 const asText = (value, fallback = '') => value === undefined || value === null ? fallback : String(value);
 const asNumber = (value, fallback = 0) => {
   const parsed = Number(value);
@@ -20,7 +22,7 @@ export const createDisplayItem = (type = 'feature') => ({
 });
 
 export function createPropertyDisplayModel(project = {}) {
-  const legacyGallery = asArray(project.images || project.gallery).map((image, index) => ({
+  const legacyGallery = asArray(project.media || project.galleryImages || project.images || project.gallery).map((image, index) => ({
     id: image?.id || `legacy_image_${index}`,
     url: typeof image === 'string' ? image : image?.downloadURL || image?.url || '',
     alt: image?.alt || '',
@@ -40,9 +42,7 @@ export function createPropertyDisplayModel(project = {}) {
     order: index
   }));
 
-  const amenities = (Array.isArray(project.amenities)
-    ? project.amenities
-    : asText(project.amenities).split(','))
+  const amenities = projectAmenityNames(project)
     .map((title, index) => ({ id: `legacy_amenity_${index}`, title: asText(title).trim(), enabled: true }))
     .filter((item) => item.title);
 
@@ -77,6 +77,9 @@ export function createPropertyDisplayModel(project = {}) {
     verified: {
       enabled: project.verified !== false,
       label: asText(project.verifiedLabel, 'Verified'),
+      // This is intentionally opt-in: existing verified labels keep their
+      // current presentation until an admin enables the title mark.
+      showNameBadge: project.showVerifiedNameBadge === true,
       showOnCard: true,
       showOnDetails: true
     },
@@ -112,7 +115,6 @@ export function createPropertyDisplayModel(project = {}) {
       order: 20,
       items: [
         { id: 'plot_size', title: 'Plot Size', value: plotValue, icon: 'size', enabled: Boolean(plotValue) },
-        { id: 'plots_left', title: 'Plots Left', value: asText(project.remainingPlots), icon: 'plots', enabled: project.remainingPlots !== undefined },
         { id: 'land_zone_stat', title: 'Land Zone', value: asText(project.landZone).replace(/_/g, ' '), icon: 'leaf', enabled: Boolean(project.landZone) },
         { id: 'na_status_stat', title: 'NA Status', value: asText(project.naStatus).replace(/_/g, ' '), icon: 'document', enabled: Boolean(project.naStatus) }
       ]
@@ -189,6 +191,31 @@ const mergeSection = (fallback, configured) => ({
   ...(fallback.gallery ? { gallery: asArray(configured?.gallery).length ? configured.gallery : fallback.gallery } : {})
 });
 
+// Files and their review metadata are canonical on projects.documents. The
+// display map may control presentation, but must not hide a newly uploaded or
+// renamed canonical document during an editor save round trip.
+const mergeConfiguredDocuments = (fallback, configured) => {
+  const configuredItems = asArray(configured?.items);
+  return {
+    ...mergeSection(fallback, configured),
+    items: fallback.items.map((document) => {
+      const presentation = configuredItems.find((item) =>
+        (document.id && item.id === document.id)
+        || (document.url && item.url === document.url)
+      );
+      return {
+        ...document,
+        ...(presentation ? {
+          verified: presentation.verified ?? document.verified,
+          showOnDetails: presentation.showOnDetails ?? document.showOnDetails,
+          enabled: presentation.enabled ?? document.enabled,
+          order: presentation.order ?? document.order
+        } : {})
+      };
+    })
+  };
+};
+
 export function getPropertyDisplayModel(project = {}) {
   const fallback = createPropertyDisplayModel(project);
   const configured = project.display;
@@ -206,8 +233,13 @@ export function getPropertyDisplayModel(project = {}) {
     featureChips: mergeSection(fallback.featureChips, configured.featureChips),
     quickStats: mergeSection(fallback.quickStats, configured.quickStats),
     overview: mergeSection(fallback.overview, configured.overview),
-    amenities: mergeSection(fallback.amenities, configured.amenities),
-    documents: mergeSection(fallback.documents, configured.documents),
+    amenities: {
+      ...mergeSection(fallback.amenities, configured.amenities),
+      // Project selections are authoritative. Presentation configuration may
+      // control visibility/order, but must never inject buyer amenities.
+      items: fallback.amenities.items
+    },
+    documents: mergeConfiguredDocuments(fallback.documents, configured.documents),
     map: mergeSection(fallback.map, configured.map),
     trust: mergeSection(fallback.trust, configured.trust),
     actions: mergeSection(fallback.actions, configured.actions),
@@ -215,12 +247,36 @@ export function getPropertyDisplayModel(project = {}) {
   };
 }
 
-export function withPropertyDisplayModel(project = {}) {
-  const display = getPropertyDisplayModel(project);
-  return {
+export function withPropertyDisplayModel(project = {}, options = {}) {
+  const hasAuthoritativeName = Object.prototype.hasOwnProperty.call(options, 'authoritativeName');
+  const authoritativeName = hasAuthoritativeName ? options.authoritativeName : project.name;
+  const previousName = options.previousName;
+  const configuredShortTitle = project.display?.basic?.shortTitle;
+  const legacyShortTitle = project.shortTitle;
+  const effectiveShortTitle = configuredShortTitle ?? legacyShortTitle;
+  const shortTitleWasDerived = hasAuthoritativeName && (
+    !effectiveShortTitle ||
+    effectiveShortTitle === previousName
+  );
+  const displaySource = hasAuthoritativeName ? {
     ...project,
+    name: authoritativeName,
+    display: {
+      ...(project.display || {}),
+      basic: {
+        ...(project.display?.basic || {}),
+        projectName: authoritativeName,
+        ...(shortTitleWasDerived ? { shortTitle: authoritativeName } : {})
+      }
+    },
+    ...(shortTitleWasDerived ? { shortTitle: authoritativeName } : {})
+  } : project;
+  const display = getPropertyDisplayModel(displaySource);
+  const sourceDocuments = asArray(project.documents);
+  return {
+    ...displaySource,
     display,
-    name: display.basic.projectName || project.name,
+    name: hasAuthoritativeName ? authoritativeName : (display.basic.projectName || project.name),
     shortTitle: display.basic.shortTitle,
     shortDescription: display.basic.shortDescription,
     startingPrice: display.pricing.startingPrice,
@@ -233,15 +289,26 @@ export function withPropertyDisplayModel(project = {}) {
     district: display.basic.district,
     cashbackAmount: display.cashback.enabled ? display.cashback.amount : 0,
     cashbackPerGuntha: display.cashback.enabled ? display.cashback.amount : 0,
-    reraNumber: display.trust.items.find((item) => item.id === 'rera')?.value || project.reraNumber,
+    // RERA is optional. Do not manufacture an undefined key here: Firestore
+    // rejects undefined values when this normalized object is created or saved.
+    ...(() => {
+      const reraNumber = display.trust.items.find((item) => item.id === 'rera')?.value || project.reraNumber;
+      return reraNumber === undefined ? {} : { reraNumber };
+    })(),
     developer: display.trust.items.find((item) => item.id === 'developer')?.value || project.developer,
     latitude: display.map.latitude,
     longitude: display.map.longitude,
     googleMapsLink: display.map.googleMapsLink,
     directionsLink: display.map.directionsLink,
-    amenities: display.amenities.items.filter((item) => item.enabled).map((item) => item.title),
-    documents: display.documents.items.map((item) => ({
-      id: item.id,
+    amenities: projectAmenityNames(displaySource),
+    documents: display.documents.items.map((item) => {
+      const source = sourceDocuments.find((document) =>
+        (item.id && document.id === item.id)
+        || (item.url && [document.url, document.downloadURL].includes(item.url))
+      ) || {};
+      return {
+      ...source,
+      id: item.id || source.id,
       displayName: item.title,
       title: item.title,
       verified: item.verified,
@@ -252,6 +319,26 @@ export function withPropertyDisplayModel(project = {}) {
       showOnDetails: item.showOnDetails,
       enabled: item.enabled,
       order: item.order
-    }))
+    };
+    })
+  };
+}
+
+/**
+ * Keeps canonical price aliases and display pricing synchronized before save.
+ */
+export function withPropertyStartingPrice(project = {}, value) {
+  const startingPrice = asNumber(value);
+  return {
+    ...project,
+    startingPrice,
+    priceFrom: startingPrice,
+    display: {
+      ...(project.display || {}),
+      pricing: {
+        ...(project.display?.pricing || {}),
+        startingPrice
+      }
+    }
   };
 }

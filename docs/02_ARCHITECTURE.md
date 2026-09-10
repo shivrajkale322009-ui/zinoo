@@ -47,7 +47,7 @@ Firebase Hosting serves `dist/` and rewrites all routes to `index.html`.
 | `submitCashbackRequest` | Validates buyer/project/purchase and creates claim |
 | `manageCashbackRequest` | Seller/admin cashback transitions, audit, notifications |
 
-Callable CORS origins are `https://druvio.web.app`, `http://localhost:3000`, and `http://localhost:5173`.
+Callable CORS origins are `https://flinok.in`, `https://druvio.web.app`, `http://localhost:3000`, and `http://localhost:5173`.
 
 ## Firebase services
 

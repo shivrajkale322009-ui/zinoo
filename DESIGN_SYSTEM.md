@@ -1,6 +1,6 @@
-# Druvio Design System v1
+# Zinoo Design System v1
 
-Druvio Design System v1 is the shared visual language for the desktop web application and Android experience. Its priorities are trust, calm hierarchy, low visual noise, and consistent one-hand interactions.
+Zinoo Design System v1 is the shared visual language for the desktop web application and Android experience. Its priorities are trust, calm hierarchy, low visual noise, and consistent one-hand interactions.
 
 ## Foundations
 
@@ -29,4 +29,4 @@ Druvio Design System v1 is the shared visual language for the desktop web applic
 
 ## Usage
 
-The implementation lives in `src/styles/druvio-design-system-v1.css` and is imported after the legacy stylesheet so it remains the final visual authority. New components should consume `--ds-*` tokens directly and use existing shared component classes before adding feature-specific styles.
+The implementation lives in `src/styles/zinoo-design-system-v1.css` and is imported after the legacy stylesheet so it remains the final visual authority. New components should consume `--ds-*` tokens directly and use existing shared component classes before adding feature-specific styles.

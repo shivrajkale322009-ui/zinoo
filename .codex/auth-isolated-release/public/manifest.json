@@ -1,0 +1,23 @@
+{
+  "short_name": "Zinoo",
+  "name": "Zinoo – Hyperlocal Plot Buying Platform",
+  "icons": [
+    {
+      "src": "/brand/zinoo-mark-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/zinoo-mark-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#ffffff",
+  "theme_color": "#0a1733",
+  "display": "standalone",
+  "orientation": "portrait-primary"
+}

@@ -1,14 +1,26 @@
-const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onCall, onRequest, HttpsError } = require('firebase-functions/v2/https');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
+const { defineSecret } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
 const { FieldValue, getFirestore } = require('firebase-admin/firestore');
 const { getStorage } = require('firebase-admin/storage');
 const { randomUUID } = require('node:crypto');
 const { PROPERTY_STATUS } = require('./propertyStatus');
+const { deletePropertyResources } = require('./propertyDeletion');
+const { TEMPLATE_ID, ASSISTANT_TEMPLATE_ID, invokeProjectAnalysisTemplate, invokeProjectAssistantTemplate, projectFingerprint } = require('./aiService');
+const { detectNearestHighway } = require('./highwayDetection');
+const { validateDeveloperProfileUpdate } = require('./developerProfile');
+const { createPublicProjectSeoHandler } = require('./publicProjectSeo');
+const { createPublicProjectProjectionHandler } = require('./publicProjectProjection');
 
 const app = initializeApp();
 const db = getFirestore(app, 'default');
 const storage = getStorage(app);
 const ALLOWED_ORIGINS = Object.freeze([
+  'https://zinoo.in',
+  'https://www.zinoo.in',
+  'https://flinok.in',
   'https://druvio.web.app',
   'http://localhost:3000',
   'http://localhost:5173'
@@ -17,7 +29,19 @@ const callableOptions = {
   region: 'us-central1',
   cors: ALLOWED_ORIGINS
 };
-const REVIEW_FIELDS = new Set(['status', 'reviewedAt', 'reviewedBy', 'approvedAt', 'approvedBy', 'activatedAt', 'activatedBy']);
+exports.publicProjectSeo = onRequest({ region: 'us-central1', timeoutSeconds: 30, memory: '256MiB' }, createPublicProjectSeoHandler(db));
+exports.projectPublicProjection = onDocumentWritten({
+  document: 'projects/{projectId}',
+  database: 'default',
+  region: 'us-central1',
+  timeoutSeconds: 60,
+  memory: '256MiB'
+}, createPublicProjectProjectionHandler(db));
+const googleMapsServerApiKey = defineSecret('GOOGLE_MAPS_SERVER_API_KEY');
+const REVIEW_FIELDS = new Set(['status', 'reviewedAt', 'reviewedBy', 'approvedAt', 'approvedBy', 'activatedAt', 'activatedBy', 'rejectedAt', 'rejectedBy', 'rejectionReason']);
+
+// The AI module is authored in TypeScript and compiled to lib/ before deploy.
+exports.askBusinessAI = require('./lib/ai').askBusinessAI;
 
 const permissionsOf = (profile = {}) => {
   const source = profile.permissions || profile;
@@ -27,6 +51,25 @@ const isValidSeller = (profile = {}) => {
   const status = [profile.status, profile.sellerStatus, profile.approvalStatus, profile.reviewStatus].map((v) => String(v || '').toLowerCase());
   return permissionsOf(profile).seller && !permissionsOf(profile).admin && !profile.deleted && !profile.disabled && !status.some((v) => ['pending', 'rejected', 'suspended', 'disabled', 'inactive', 'revoked', 'deleted'].includes(v));
 };
+
+exports.detectNearestHighway = onCall({ ...callableOptions, secrets: [googleMapsServerApiKey], timeoutSeconds: 60 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  const profile = await db.collection('users').doc(request.auth.uid).get();
+  if (!profile.exists || !permissionsOf(profile.data()).admin) throw new HttpsError('permission-denied', 'Only Admin users can calculate highway distance.');
+  const latitude = Number(request.data?.latitude), longitude = Number(request.data?.longitude);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw new HttpsError('invalid-argument', 'Valid latitude and longitude are required.');
+  }
+  try {
+    const result = await detectNearestHighway({ latitude, longitude, apiKey: googleMapsServerApiKey.value() });
+    return { ...result, lastCalculatedAt: new Date().toISOString() };
+  } catch (error) {
+    console.error('Highway detection failed', { latitude, longitude, message: error?.message });
+    // Highway data is an optional editor convenience. Keep the property form
+    // usable when the Roads/Geocoding APIs are unavailable or rate-limited.
+    return { found: false, unavailable: true };
+  }
+});
 const assertId = (id, label) => { if (typeof id !== 'string' || !id || id.includes('/')) throw new HttpsError('invalid-argument', `A valid ${label} is required.`); };
 const assertProject = (project = {}) => {
   if (typeof project.name !== 'string' || project.name.trim().length < 2) throw new HttpsError('invalid-argument', 'A valid property name is required.');
@@ -36,12 +79,21 @@ const assertProject = (project = {}) => {
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180 || (lat === 0 && lng === 0)) throw new HttpsError('failed-precondition', 'Valid latitude and longitude are required before publishing.');
   if (!Number.isFinite(Number(project.startingPrice ?? project.priceFrom)) || Number(project.startingPrice ?? project.priceFrom) <= 0) throw new HttpsError('failed-precondition', 'A valid starting price is required before publishing.');
 };
-const cleanChanges = (changes = {}) => Object.fromEntries(Object.entries(changes).filter(([key]) => key !== 'id' && !REVIEW_FIELDS.has(key)));
+const removeUndefinedValues = (value) => {
+  if (Array.isArray(value)) return value.filter((item) => item !== undefined).map(removeUndefinedValues);
+  if (value && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .map(([key, item]) => [key, removeUndefinedValues(item)]));
+  }
+  return value;
+};
+const cleanChanges = (changes = {}) => removeUndefinedValues(Object.fromEntries(Object.entries(changes).filter(([key]) => key !== 'id' && !REVIEW_FIELDS.has(key))));
 const audit = (propertyId, action, by, previousStatus, newStatus, notes = '') => ({ propertyId, action, performedBy: by, performedAt: FieldValue.serverTimestamp(), previousStatus, newStatus, ...(notes ? { notes } : {}) });
 
 exports.manageFeedBannerAsset = onCall({ ...callableOptions, memory: '512MiB' }, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
-  console.info('[Druvio Feed Function] Authenticated request.', {
+  console.info('[Zinoo Feed Function] Authenticated request.', {
     uid: request.auth.uid,
     action: request.data?.action || null,
     databaseId: 'default',
@@ -59,7 +111,7 @@ exports.manageFeedBannerAsset = onCall({ ...callableOptions, memory: '512MiB' },
       throw new HttpsError('invalid-argument', 'A valid feed banner path is required.');
     }
     await bucket.file(storagePath).delete({ ignoreNotFound: true });
-    console.info('[Druvio Feed Function] Banner deleted.', { uid: request.auth.uid, storagePath });
+    console.info('[Zinoo Feed Function] Banner deleted.', { uid: request.auth.uid, storagePath });
     return { deleted: true };
   }
 
@@ -87,7 +139,7 @@ exports.manageFeedBannerAsset = onCall({ ...callableOptions, memory: '512MiB' },
       }
     }
   });
-  console.info('[Druvio Feed Function] Banner uploaded.', {
+  console.info('[Zinoo Feed Function] Banner uploaded.', {
     uid: request.auth.uid,
     storagePath: uniquePath,
     size: buffer.length,
@@ -100,19 +152,262 @@ exports.manageFeedBannerAsset = onCall({ ...callableOptions, memory: '512MiB' },
   };
 });
 
+const assertAdmin = async (uid) => {
+  const profile = await db.collection('users').doc(uid).get();
+  if (!profile.exists || !permissionsOf(profile.data()).admin) {
+    throw new HttpsError('permission-denied', 'Only Admin users may perform this action.');
+  }
+};
+
+exports.analyzeProject = onCall({ ...callableOptions, timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  const projectId = request.data?.projectId;
+  assertId(projectId, 'project ID');
+
+  const projectSnapshot = await db.collection('projects').doc(projectId).get();
+  if (!projectSnapshot.exists) throw new HttpsError('not-found', 'The selected project no longer exists.');
+
+  const project = { id: projectSnapshot.id, ...projectSnapshot.data() };
+  const fingerprint = projectFingerprint(project);
+  const analysisRef = db.collection('ai_analysis').doc(projectId);
+  const cachedSnapshot = await analysisRef.get();
+  const cached = cachedSnapshot.exists ? cachedSnapshot.data() : null;
+
+  if (cached?.projectFingerprint === fingerprint && cached?.analysis) {
+    return {
+      analysis: cached.analysis,
+      analyzedAt: cached.analyzedAt?.toDate?.().toISOString() || null,
+      cached: true
+    };
+  }
+
+  try {
+    const analysis = await invokeProjectAnalysisTemplate(project);
+    await analysisRef.set({
+      projectId,
+      projectFingerprint: fingerprint,
+      templateId: TEMPLATE_ID,
+      analysis,
+      analyzedAt: FieldValue.serverTimestamp(),
+      analyzedBy: request.auth.uid
+    });
+    return { analysis, analyzedAt: new Date().toISOString(), cached: false };
+  } catch (error) {
+    console.error('Firebase AI Logic project analysis failed.', { projectId, templateId: TEMPLATE_ID, message: error?.message });
+    throw new HttpsError('internal', 'Project analysis is temporarily unavailable. Please try again.');
+  }
+});
+
+const sanitizeConversation = (value) => {
+  if (!Array.isArray(value)) throw new HttpsError('invalid-argument', 'Conversation history must be an array.');
+  return value.slice(-20).map((message) => {
+    const role = message?.role === 'assistant' ? 'assistant' : message?.role === 'user' ? 'user' : null;
+    const content = typeof message?.content === 'string' ? message.content.trim().slice(0, 4000) : '';
+    if (!role || !content) throw new HttpsError('invalid-argument', 'Conversation messages must contain a valid role and content.');
+    return { role, content };
+  });
+};
+
+const chunkText = (text, size = 48) => {
+  const chunks = [];
+  for (let offset = 0; offset < text.length; offset += size) chunks.push(text.slice(offset, offset + size));
+  return chunks;
+};
+
+exports.chatWithProjectAssistant = onCall({ ...callableOptions, timeoutSeconds: 120, memory: '512MiB' }, async (request, response) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+
+  const projectId = request.data?.projectId;
+  const question = typeof request.data?.question === 'string' ? request.data.question.trim().slice(0, 4000) : '';
+  assertId(projectId, 'project ID');
+  if (!question) throw new HttpsError('invalid-argument', 'A question is required.');
+  const conversation = sanitizeConversation(request.data?.conversation || []);
+
+  const projectSnapshot = await db.collection('projects').doc(projectId).get();
+  if (!projectSnapshot.exists) throw new HttpsError('not-found', 'The selected project no longer exists.');
+  const project = { id: projectSnapshot.id, ...projectSnapshot.data() };
+  const fingerprint = projectFingerprint(project);
+  const requestFingerprint = projectFingerprint({ fingerprint, conversation, question, templateId: ASSISTANT_TEMPLATE_ID });
+  const cacheRef = db.collection('ai_analysis').doc(projectId).collection('chat_responses').doc(requestFingerprint);
+  const cachedSnapshot = await cacheRef.get();
+
+  try {
+    const answer = cachedSnapshot.exists
+      ? cachedSnapshot.data().answer
+      : await invokeProjectAssistantTemplate(project, conversation, question);
+
+    if (!cachedSnapshot.exists) {
+      await cacheRef.set({
+        answer,
+        projectFingerprint: fingerprint,
+        templateId: ASSISTANT_TEMPLATE_ID,
+        createdAt: FieldValue.serverTimestamp(),
+        createdBy: request.auth.uid
+      });
+    }
+
+    if (request.acceptsStreaming) {
+      for (const delta of chunkText(answer)) await response.sendChunk({ delta });
+    }
+    return {
+      answer,
+      projectId,
+      projectName: project.name || 'Untitled Property',
+      cached: cachedSnapshot.exists
+    };
+  } catch (error) {
+    const upstreamResponse = error?.response?.data || error?.aiLogicResponse || null;
+    const upstreamMessage = upstreamResponse?.error?.message || error?.message || String(error);
+    console.error('Firebase AI Logic project assistant failed.', {
+      projectId,
+      templateId: ASSISTANT_TEMPLATE_ID,
+      message: upstreamMessage,
+      code: error?.code || upstreamResponse?.error?.status || null,
+      status: error?.response?.status || upstreamResponse?.error?.code || null,
+      response: upstreamResponse,
+      stack: error?.stack || null
+    });
+    // Keep the complete original exception in Cloud Functions logs while
+    // returning the precise upstream rejection through the callable protocol.
+    console.error(error);
+    throw new HttpsError('internal', upstreamMessage, {
+      templateId: ASSISTANT_TEMPLATE_ID,
+      upstreamStatus: error?.response?.status || upstreamResponse?.error?.code || null,
+      upstreamCode: upstreamResponse?.error?.status || error?.code || null,
+      upstreamResponse
+    });
+  }
+});
+
+exports.manageFeaturedDeveloperLogo = onCall({ ...callableOptions, memory: '256MiB' }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  const { action, storagePath, contentType, data } = request.data || {};
+  const bucket = storage.bucket();
+  if (action === 'delete') {
+    if (typeof storagePath !== 'string' || !/^developer-logos\/[a-f0-9-]+\.(jpg|png|webp)$/.test(storagePath)) throw new HttpsError('invalid-argument', 'Invalid logo path.');
+    await bucket.file(storagePath).delete({ ignoreNotFound: true });
+    return { deleted: true };
+  }
+  if (action !== 'upload' || !['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) throw new HttpsError('invalid-argument', 'Logo must be PNG, JPG, or WEBP.');
+  const buffer = Buffer.from(String(data || ''), 'base64');
+  if (!buffer.length || buffer.length > 5 * 1024 * 1024) throw new HttpsError('invalid-argument', 'Logo must be 5 MB or smaller.');
+  const extension = contentType === 'image/webp' ? 'webp' : contentType === 'image/png' ? 'png' : 'jpg';
+  const uniquePath = `developer-logos/${randomUUID()}.${extension}`;
+  const downloadToken = randomUUID();
+  await bucket.file(uniquePath).save(buffer, { resumable: false, contentType, metadata: { cacheControl: 'public,max-age=31536000,immutable', metadata: { firebaseStorageDownloadTokens: downloadToken, uploadedBy: request.auth.uid } } });
+  return { storagePath: uniquePath, imageUrl: `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(uniquePath)}?alt=media&token=${downloadToken}` };
+});
+
+exports.createSellerAccount = onCall(callableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  const name = String(request.data?.name || '').trim();
+  const email = String(request.data?.email || '').trim().toLowerCase();
+  const phone = String(request.data?.phone || '').trim();
+  if (name.length < 2 || name.length > 100) throw new HttpsError('invalid-argument', 'Seller name is required.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpsError('invalid-argument', 'A valid seller email is required.');
+  const account = await getAuth(app).createUser({ email, displayName: name });
+  await db.collection('users').doc(account.uid).set({
+    uid: account.uid, name, displayName: name, email, phone,
+    permissions: { buyer: true, seller: true, admin: false },
+    role: 'seller', status: 'active', createdAt: FieldValue.serverTimestamp(), createdBy: request.auth.uid
+  });
+  return { sellerId: account.uid, sellerName: name, email };
+});
+
+exports.listFeaturedDevelopers = onCall(callableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  const snapshot = await db.collection('featuredDevelopers').where('isActive', '==', true).orderBy('sortIndex', 'asc').get();
+  const records = await Promise.all(snapshot.docs.map(async (item) => {
+    const data = item.data();
+    const seller = await db.collection('users').doc(data.sellerId).get();
+    if (!seller.exists || !isValidSeller(seller.data()) || seller.data().developerProfileVisible === false) return null;
+    return { id: item.id, ...data, sellerName: seller.data().businessName || seller.data().displayName || seller.data().name || 'Zinoo Developer' };
+  }));
+  return { developers: records.filter(Boolean) };
+});
+
+exports.getDeveloperProfile = onCall(callableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  const sellerId = request.data?.sellerId;
+  assertId(sellerId, 'Seller');
+  const [sellerSnapshot, featuredSnapshot, activeSnapshot, completedSnapshot] = await Promise.all([
+    db.collection('users').doc(sellerId).get(),
+    db.collection('featuredDevelopers').doc(sellerId).get(),
+    db.collection('projects').where('ownerId', '==', sellerId).where('status', '==', PROPERTY_STATUS.ACTIVE).count().get(),
+    db.collection('projects').where('ownerId', '==', sellerId).where('status', '==', PROPERTY_STATUS.SOLD).count().get()
+  ]);
+  if (!sellerSnapshot.exists || !isValidSeller(sellerSnapshot.data())) throw new HttpsError('not-found', 'Developer profile not found.');
+  const seller = sellerSnapshot.data();
+  if (seller.developerProfileVisible === false && request.auth.uid !== sellerId) {
+    const viewer = await db.collection('users').doc(request.auth.uid).get();
+    if (!viewer.exists || !permissionsOf(viewer.data()).admin) throw new HttpsError('not-found', 'Developer profile not found.');
+  }
+  const featured = featuredSnapshot.exists && featuredSnapshot.data().isActive === true ? featuredSnapshot.data() : null;
+  const publicWebsite = typeof seller.publicWebsite === 'string' && /^https:\/\//.test(seller.publicWebsite) ? seller.publicWebsite.slice(0, 1000) : '';
+  return { profile: {
+    sellerId,
+    name: String(seller.businessName || seller.displayName || seller.name || 'Zinoo Developer').slice(0, 120),
+    logo: String(seller.publicLogo || featured?.logo || '').slice(0, 2000),
+    verified: featured?.verified === true,
+    yearsInBusiness: Number.isFinite(Number(seller.yearsInBusiness ?? featured?.experienceYears)) ? Math.max(0, Number(seller.yearsInBusiness ?? featured?.experienceYears)) : null,
+    description: String(seller.publicDescription || '').slice(0, 600),
+    officeLocation: String(seller.publicOfficeLocation || '').slice(0, 200),
+    publicPhone: String(seller.publicPhone || '').slice(0, 30),
+    publicWebsite,
+    visible: seller.developerProfileVisible !== false,
+    activeProjects: activeSnapshot.data().count,
+    completedProjects: Math.max(completedSnapshot.data().count, Number(featured?.completedProjects) || 0)
+  } };
+});
+
+exports.updateDeveloperProfile = onCall(callableOptions, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  const sellerRef = db.collection('users').doc(request.auth.uid);
+  const sellerSnapshot = await sellerRef.get();
+  if (!sellerSnapshot.exists || !isValidSeller(sellerSnapshot.data())) {
+    throw new HttpsError('permission-denied', 'Only approved sellers can update a developer profile.');
+  }
+  let changes;
+  try {
+    changes = validateDeveloperProfileUpdate(request.data);
+  } catch (error) {
+    throw new HttpsError('invalid-argument', error.message);
+  }
+  await sellerRef.update({ ...changes, updatedAt: FieldValue.serverTimestamp() });
+  return { profile: changes };
+});
+
 exports.createProjectForSeller = onCall(callableOptions, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
   const { sellerUid, projectData } = request.data || {}; assertId(sellerUid, 'Seller');
   if (!projectData || typeof projectData.name !== 'string' || projectData.name.trim().length < 2) throw new HttpsError('invalid-argument', 'A valid property name is required.');
   const adminRef = db.collection('users').doc(request.auth.uid), sellerRef = db.collection('users').doc(sellerUid), projectRef = db.collection('projects').doc(), auditRef = db.collection('propertyAuditLogs').doc();
-  await db.runTransaction(async (tx) => {
-    const [adminSnap, sellerSnap] = await Promise.all([tx.get(adminRef), tx.get(sellerRef)]);
-    if (!adminSnap.exists || !permissionsOf(adminSnap.data()).admin) throw new HttpsError('permission-denied', 'Only Admin users can create properties for Sellers.');
-    if (!sellerSnap.exists || !isValidSeller(sellerSnap.data())) throw new HttpsError('failed-precondition', 'Seller association missing. This property cannot be submitted.');
-    const now = FieldValue.serverTimestamp();
-    tx.create(projectRef, { ...cleanChanges(projectData), ownerId: sellerUid, sellerId: sellerUid, sellerUid, createdBy: request.auth.uid, createdByRole: 'admin', status: PROPERTY_STATUS.PENDING, createdAt: now, updatedAt: now });
-    tx.create(auditRef, audit(projectRef.id, 'property_submitted', request.auth.uid, null, PROPERTY_STATUS.PENDING));
-  });
+  try {
+    await db.runTransaction(async (tx) => {
+      const [adminSnap, sellerSnap] = await Promise.all([tx.get(adminRef), tx.get(sellerRef)]);
+      if (!adminSnap.exists || !permissionsOf(adminSnap.data()).admin) throw new HttpsError('permission-denied', 'Only Admin users can create properties for Sellers.');
+      if (!sellerSnap.exists || !isValidSeller(sellerSnap.data())) throw new HttpsError('failed-precondition', 'Seller association missing. This property cannot be submitted.');
+      const now = FieldValue.serverTimestamp();
+      const cleanedProject = cleanChanges(projectData);
+      if (cleanedProject.highwayName) cleanedProject.lastCalculatedAt = now;
+      tx.create(projectRef, { ...cleanedProject, ownerId: sellerUid, sellerId: sellerUid, sellerUid, createdBy: request.auth.uid, createdByRole: 'admin', status: PROPERTY_STATUS.PENDING, createdAt: now, updatedAt: now });
+      tx.create(auditRef, audit(projectRef.id, 'property_submitted', request.auth.uid, null, PROPERTY_STATUS.PENDING));
+    });
+  } catch (error) {
+    console.error('[createProjectForSeller] failed', {
+      code: error?.code || null,
+      message: error?.message || String(error),
+      adminUid: request.auth.uid,
+      sellerUid,
+      projectId: projectRef.id
+    });
+    if (error instanceof HttpsError) throw error;
+    throw new HttpsError('internal', 'The property could not be created. Please retry.', { projectId: projectRef.id });
+  }
   return { projectId: projectRef.id, status: PROPERTY_STATUS.PENDING };
 });
 
@@ -133,6 +428,8 @@ exports.reviewProject = onCall(callableOptions, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
   const { projectId, decision, reason = '' } = request.data || {}; assertId(projectId, 'property ID');
   if (![PROPERTY_STATUS.APPROVED, PROPERTY_STATUS.REJECTED].includes(decision)) throw new HttpsError('invalid-argument', 'The review decision must be approved or rejected.');
+  const rejectionReason = String(reason || '').trim();
+  if (decision === PROPERTY_STATUS.REJECTED && rejectionReason.length < 10) throw new HttpsError('invalid-argument', 'A meaningful rejection reason of at least 10 characters is required.');
   const reviewerRef = db.collection('users').doc(request.auth.uid), projectRef = db.collection('projects').doc(projectId), auditRef = db.collection('propertyAuditLogs').doc();
   await db.runTransaction(async (tx) => {
     const reviewer = await tx.get(reviewerRef); if (!reviewer.exists || !permissionsOf(reviewer.data()).admin) throw new HttpsError('permission-denied', 'Only Admin users can review properties.');
@@ -150,10 +447,12 @@ exports.reviewProject = onCall(callableOptions, async (request) => {
       reviewedAt: now,
       reviewedBy: request.auth.uid,
       updatedAt: now,
-      ...(decision === PROPERTY_STATUS.APPROVED ? { approvedAt: now, approvedBy: request.auth.uid } : {})
+      ...(decision === PROPERTY_STATUS.APPROVED
+        ? { approvedAt: now, approvedBy: request.auth.uid, rejectionReason: FieldValue.delete(), rejectedAt: FieldValue.delete(), rejectedBy: FieldValue.delete() }
+        : { rejectionReason, rejectedAt: now, rejectedBy: request.auth.uid })
     };
     const action = decision === PROPERTY_STATUS.APPROVED ? 'property_approved' : 'property_rejected';
-    tx.update(projectRef, update); tx.create(auditRef, audit(projectId, action, request.auth.uid, previousStatus, update.status, reason));
+    tx.update(projectRef, update); tx.create(auditRef, audit(projectId, action, request.auth.uid, previousStatus, update.status, rejectionReason));
   });
   return { projectId, status: decision };
 });
@@ -192,6 +491,30 @@ exports.setProjectStatus = onCall(callableOptions, async (request) => {
   return { projectId, status };
 });
 
+exports.deleteProperty = onCall({ ...callableOptions, invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  const { projectId, confirmation } = request.data || {};
+  assertId(projectId, 'property ID');
+  if (typeof confirmation !== 'string' || confirmation.trim() !== 'DELETE') {
+    throw new HttpsError('invalid-argument', 'Type DELETE to confirm permanent property deletion.');
+  }
+
+  const adminProfile = await db.collection('users').doc(request.auth.uid).get();
+  if (!adminProfile.exists || !permissionsOf(adminProfile.data()).admin) {
+    throw new HttpsError('permission-denied', 'Only authorized Admin users can delete properties.');
+  }
+
+  console.info('[Zinoo Property Delete] Started', { projectId, actorId: request.auth.uid });
+  const result = await deletePropertyResources({
+    db,
+    bucket: storage.bucket(),
+    projectId,
+    actorId: request.auth.uid
+  });
+  console.info('[Zinoo Property Delete] Completed', { ...result, actorId: request.auth.uid });
+  return result;
+});
+
 exports.assignProjectSeller = onCall(callableOptions, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
   const { projectId, sellerId } = request.data || {}; assertId(projectId, 'property ID'); assertId(sellerId, 'Seller');
@@ -213,10 +536,23 @@ exports.reviewSellerRequest = onCall(callableOptions, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
   const { requestId, decision } = request.data || {}; assertId(requestId, 'seller request ID');
   if (!['approved', 'rejected'].includes(decision)) throw new HttpsError('invalid-argument', 'The seller review decision is invalid.');
+  const rejectionReason = cleanText(request.data?.reason, 500);
+  if (decision === 'rejected' && rejectionReason.length < 10) throw new HttpsError('invalid-argument', 'A meaningful rejection reason of at least 10 characters is required.');
   const reviewer = await db.collection('users').doc(request.auth.uid).get(); if (!reviewer.exists || !permissionsOf(reviewer.data()).admin) throw new HttpsError('permission-denied', 'Only Admin users can review seller requests.');
   const requestRef = db.collection('sellerRequests').doc(requestId); const sellerRequest = await requestRef.get(); if (!sellerRequest.exists) throw new HttpsError('not-found', 'This seller request no longer exists.');
-  const batch = db.batch(), now = FieldValue.serverTimestamp(); batch.update(requestRef, { status: decision, reviewedBy: request.auth.uid, reviewedAt: now, updatedAt: now });
-  if (decision === 'approved') { const data = sellerRequest.data(); batch.set(db.collection('users').doc(data.userId || requestId), { permissions: { buyer: true, seller: true, admin: false }, businessName: data.businessName || '', updatedAt: now }, { merge: true }); }
+  const application = sellerRequest.data();
+  if (application.status !== 'pending') throw new HttpsError('failed-precondition', 'Only pending seller applications can be reviewed.');
+  const batch = db.batch(), now = FieldValue.serverTimestamp();
+  batch.update(requestRef, {
+    status: decision, reviewedBy: request.auth.uid, reviewedAt: now, updatedAt: now,
+    ...(decision === 'approved' ? { approvedBy: request.auth.uid, approvedAt: now, rejectionReason: FieldValue.delete(), rejectedBy: FieldValue.delete(), rejectedAt: FieldValue.delete() } : { rejectionReason, rejectedBy: request.auth.uid, rejectedAt: now })
+  });
+  if (decision === 'approved') {
+    batch.set(db.collection('users').doc(application.userId || requestId), {
+      permissions: { buyer: true, seller: true, admin: false }, businessName: application.businessName || '', sellerStatus: 'approved', sellerApprovedBy: request.auth.uid, sellerApprovedAt: now, updatedAt: now
+    }, { merge: true });
+  }
+  batch.create(db.collection('sellerAuditLogs').doc(), { requestId, sellerId: application.userId || requestId, action: decision === 'approved' ? 'seller_approved' : 'seller_rejected', fromStatus: application.status, toStatus: decision, actorId: request.auth.uid, reason: rejectionReason || null, createdAt: now });
   await batch.commit(); return { requestId, status: decision };
 });
 

@@ -44,7 +44,7 @@ draft -> pending -> approved -> active -> inactive/sold
 - Project text search matches stored project name, village, taluka, or developer, case-insensitively.
 - Search results are derived only from active projects already allowed by current filters.
 - Home search returns at most eight project matches.
-- Location suggestions may come from Google Places; they are not Druvio inventory.
+- Location suggestions may come from Google Places; they are not Zinoo inventory.
 - Current filters: maximum budget, selected land zones, selected NA statuses, bank-loan availability, and utility-supported minimum score where used.
 - Filters do not fabricate missing values.
 

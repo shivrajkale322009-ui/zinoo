@@ -19,7 +19,7 @@ class BuyerErrorBoundary extends React.Component {
       return (
         <section className="buyer-error-boundary" role="alert">
           <h2>We couldn’t load the Buyer workspace</h2>
-          <p>Please refresh the page. If the problem continues, contact Druvio support.</p>
+          <p>Please refresh the page. If the problem continues, contact Zinoo support.</p>
           <button type="button" className="btn-primary" onClick={() => window.location.reload()}>Refresh workspace</button>
         </section>
       );

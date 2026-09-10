@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /seller
+Disallow: /profile
+Disallow: /settings
+Disallow: /login
+Disallow: /__/auth/
+
+Sitemap: https://zinoo.in/sitemap.xml

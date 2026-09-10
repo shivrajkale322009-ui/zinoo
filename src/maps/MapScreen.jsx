@@ -1,13 +1,12 @@
-import { MarkerClusterer } from '@googlemaps/markerclusterer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Undo2, Redo2, Check, X, ShieldAlert,
-  MapPin, Eye, Navigation, Share2, Trash2,
-  Layers, CheckSquare, Square, RefreshCw, ZoomIn, ZoomOut, RotateCw, Maximize2, PersonStanding,
-  Route, Building2
+  MapPin, Eye, Share2, Trash2,
+  Layers, CheckSquare, Square, Maximize2, Minimize2,
+  Building2, Map as MapIcon, Satellite
 } from 'lucide-react';
 import { loadGoogleMaps } from './googleMaps';
-import { googleMapsConfig, googleMapsMissingMessage, googleMapsUnavailableMessage } from './googleMapsConfig';
+import { getGoogleMapsErrorMessage, googleMapsConfig, googleMapsMissingMessage } from './googleMapsConfig';
 import { getProjectCoordinates, isProjectPublishable } from '../utils/projectVisibility';
 import { matchesProjectFilters } from '../utils/projectLand';
 import {
@@ -20,10 +19,13 @@ import { buildProjectGeometry, normalizeProjectPolygon } from '../utils/projectG
 import { CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
 import { calculateMarkerPriority, getProjectMarkerState, MAP_MARKER_ZOOM, MARKER_COLLISION_PIXELS } from './mapZoom';
 import { createProjectPopupElement } from './projectPopupOverlay';
+import ZoomBadge from '../components/ZoomBadge';
 import './mapScreen.css';
 
 const DEFAULT_CENTER = CHAKAN_MAP_POSITION;
 const DEFAULT_ZOOM = 12;
+const PROJECT_FOCUS_DURATION = 600;
+const DEFAULT_FILTERS = Object.freeze({ budgetMax: 3000000, naPlot: false, bankLoan: false, minScore: 0 });
 const pointFor = (project) => getProjectCoordinates(project);
 
 const priceLabel = (value) => {
@@ -36,33 +38,40 @@ const priceLabel = (value) => {
 
 function markerContent(project, state) {
   const marker = document.createElement('div');
-  marker.className = `druvio-project-marker druvio-project-marker-${state.mode}${state.selectedStyle ? ' druvio-project-marker-selected' : ''}`;
+  const markerKinds = [
+    project.verified !== false && 'zinoo-project-marker-verified',
+    Number(project.cashbackAmount || project.cashbackPerGuntha) > 0 && 'zinoo-project-marker-cashback',
+    project.premium === true && 'zinoo-project-marker-premium'
+  ].filter(Boolean).join(' ');
+  marker.className = `zinoo-project-marker zinoo-project-marker-${state.mode}${state.selectedStyle ? ' zinoo-project-marker-selected' : ''} ${markerKinds}`;
   if (state.mode === 'full-label') {
-    const name = document.createElement('span');
-    name.className = 'druvio-project-marker-name';
-    name.textContent = project.name || 'Project';
     const price = document.createElement('strong');
-    price.className = 'druvio-project-marker-price';
+    price.className = 'zinoo-project-marker-price';
     price.textContent = priceLabel(project.priceFrom || project.startingPrice);
-    marker.append(name, price);
+    marker.append(price);
   } else if (state.mode === 'price-only') {
-    marker.classList.add('druvio-project-marker-price-only');
+    marker.classList.add('zinoo-project-marker-price-only');
     marker.textContent = priceLabel(project.priceFrom || project.startingPrice);
   } else {
-    marker.textContent = '●';
+    marker.classList.add('zinoo-project-marker-pin');
+    marker.innerHTML = `
+      <svg class="zinoo-location-pin-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+        <circle cx="9" cy="9" r="7.75" />
+      </svg>`;
   }
   marker.setAttribute('role', 'button');
   marker.setAttribute('tabindex', '0');
   marker.setAttribute('aria-label', `${project.name || 'Project'}, starting at ${priceLabel(project.priceFrom || project.startingPrice)}`);
-  return marker;
-}
-
-function clusterContent(count) {
-  const marker = document.createElement('div');
-  marker.className = 'druvio-cluster-marker';
-  marker.textContent = String(count);
-  marker.setAttribute('aria-label', `${count} projects`);
-  return marker;
+  const anchor = document.createElement('div');
+  anchor.className = 'zinoo-project-marker-anchor';
+  anchor.appendChild(marker);
+  if (state.mode !== 'pin' && state.mode !== 'cluster') {
+    const tail = document.createElement('i');
+    tail.className = 'zinoo-project-marker-tail';
+    tail.setAttribute('aria-hidden', 'true');
+    anchor.appendChild(tail);
+  }
+  return anchor;
 }
 
 const toBoundaryPoint = (point, geoJsonOrder = false) => {
@@ -96,16 +105,25 @@ export default function MapScreen({
   onVisibleProjectsChange = null,
   externalOverlayOpen = false,
   onLayersOpen = null,
-  filters = { budgetMax: 3000000, naPlot: false, bankLoan: false, minScore: 0 }
+  onMapReady = null,
+  loadVisibleProjects = true,
+  filters = DEFAULT_FILTERS
 }) {
   const mapElement = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
   const selectedMarkerRef = useRef(null);
   const projectPopupRef = useRef(null);
-  const clusterRef = useRef(null);
   const polygonRef = useRef(null);
   const nearbyPolygonRefs = useRef([]);
+  const handleBoundsIdleRef = useRef(null);
+  const onMapReadyRef = useRef(onMapReady);
+  const projectCountRef = useRef(projects.length);
+  const lastVisibleBoundsKeyRef = useRef('');
+  const visibleBoundsRequestRef = useRef(0);
+  const focusAnimationFrameRef = useRef(null);
+  const popupRevealTimerRef = useRef(null);
+  const pendingPopupProjectIdRef = useRef(null);
 
   // Drawing overlays
   const draftLineRef = useRef(null);
@@ -114,16 +132,35 @@ export default function MapScreen({
   const [mapError, setMapError] = useState('');
   const [mapStatus, setMapStatus] = useState(googleMapsConfig.isConfigured ? 'loading' : 'configuration-missing');
   const [mapReady, setMapReady] = useState(false);
-  const [zoomTier, setZoomTier] = useState('low');
-  const [viewportRevision, setViewportRevision] = useState(0);
+  const [mapType, setMapType] = useState('roadmap');
+  const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
+  const [zoomTier, setZoomTier] = useState(Math.floor(DEFAULT_ZOOM));
+  const [popupProjectId, setPopupProjectId] = useState(null);
   // Layer toggles
   const [showLayers, setShowLayers] = useState(false);
+  const [isMapMaximized, setIsMapMaximized] = useState(false);
   const [layerVisibility, setLayerVisibility] = useState({
     markers: true,
     layouts: true,
     roads: true,
     villageBoundaries: false
   });
+
+  const selectProjectFromMarker = useCallback((project) => {
+    if (popupRevealTimerRef.current) clearTimeout(popupRevealTimerRef.current);
+    pendingPopupProjectIdRef.current = project.id;
+    setPopupProjectId(null);
+    onSelectProject?.(project);
+    popupRevealTimerRef.current = window.setTimeout(() => {
+      setPopupProjectId(project.id);
+      pendingPopupProjectIdRef.current = null;
+      popupRevealTimerRef.current = null;
+    }, PROJECT_FOCUS_DURATION);
+  }, [onSelectProject]);
+
+  useEffect(() => () => {
+    if (popupRevealTimerRef.current) clearTimeout(popupRevealTimerRef.current);
+  }, []);
 
   const villageBoundaryRefs = useRef([]);
   const villageBoundaries = useMemo(() => projects.map((project) => {
@@ -153,16 +190,21 @@ export default function MapScreen({
 
   // Fetch only visible projects on idle bounds
   const handleBoundsIdle = useCallback(async () => {
+    if (!loadVisibleProjects) return;
     const map = mapRef.current;
     if (!map) return;
     const bounds = map.getBounds();
     if (!bounds) return;
-    setViewportRevision((current) => current + 1);
     const sw = bounds.getSouthWest().toJSON();
     const ne = bounds.getNorthEast().toJSON();
+    const boundsKey = [sw.lat, sw.lng, ne.lat, ne.lng].map((value) => Number(value).toFixed(5)).join(':');
+    if (boundsKey === lastVisibleBoundsKeyRef.current) return;
+    lastVisibleBoundsKeyRef.current = boundsKey;
+    const requestId = ++visibleBoundsRequestRef.current;
 
     try {
       const visible = await loadProjectsInBounds(sw, ne);
+      if (requestId !== visibleBoundsRequestRef.current) return;
 
       // Apply Home-panel filters to visible projects.
       const finalVisible = visible.filter(p => {
@@ -175,25 +217,30 @@ export default function MapScreen({
         onVisibleProjectsChange(finalVisible);
       }
     } catch (err) {
-      console.error('[Druvio] Visible bounds load error:', err);
+      console.error('[Zinoo] Visible bounds load error:', err);
     }
-  }, [filters, onVisibleProjectsChange]);
+  }, [filters, loadVisibleProjects, onVisibleProjectsChange]);
+  handleBoundsIdleRef.current = handleBoundsIdle;
+  onMapReadyRef.current = onMapReady;
+  projectCountRef.current = projects.length;
 
   const markerStates = useMemo(() => {
     const map = mapRef.current;
     const states = new Map();
     if (!map || !mapReady) return states;
-    const zoom = Number(zoomTier) || 0;
-    const bounds = map.getBounds();
+    const zoom = Number(zoomLevel) || 0;
     const projection = map.getProjection();
-    if (!bounds || !projection) return states;
+    if (!projection) return states;
     const center = map.getCenter();
     if (!center) return states;
     const scale = 2 ** zoom;
     const worldCenter = projection.fromLatLngToPoint(center);
     const mapSize = map.getDiv();
+    const isMobileMap = mapSize.clientWidth < 768;
+    const collisionWidth = isMobileMap ? MARKER_COLLISION_PIXELS.MOBILE_LABEL_WIDTH : MARKER_COLLISION_PIXELS.LABEL_WIDTH;
+    const collisionHeight = isMobileMap ? MARKER_COLLISION_PIXELS.MOBILE_LABEL_HEIGHT : MARKER_COLLISION_PIXELS.LABEL_HEIGHT;
     const visible = projects
-      .filter((project) => isProjectPublishable(project) && pointFor(project) && bounds.contains(pointFor(project)))
+      .filter((project) => isProjectPublishable(project) && pointFor(project))
       .map((project) => {
         const position = pointFor(project);
         const world = projection.fromLatLngToPoint(new window.google.maps.LatLng(position));
@@ -207,7 +254,7 @@ export default function MapScreen({
       .sort((left, right) => right.priority - left.priority || String(left.project.id).localeCompare(String(right.project.id)));
     const acceptedLabels = [];
     visible.forEach((entry) => {
-      const collision = acceptedLabels.some((accepted) => Math.abs(accepted.x - entry.x) < MARKER_COLLISION_PIXELS.LABEL_WIDTH && Math.abs(accepted.y - entry.y) < MARKER_COLLISION_PIXELS.LABEL_HEIGHT);
+      const collision = acceptedLabels.some((accepted) => Math.abs(accepted.x - entry.x) < collisionWidth && Math.abs(accepted.y - entry.y) < collisionHeight);
       const selected = entry.project.id === selectedProject?.id;
       const state = getProjectMarkerState({
         zoom,
@@ -220,9 +267,9 @@ export default function MapScreen({
       if (state.mode === 'full-label') acceptedLabels.push(entry);
     });
     return states;
-  }, [projects, selectedProject?.id, mapReady, zoomTier, viewportRevision]);
+  }, [projects, selectedProject?.id, mapReady, zoomLevel]);
 
-  // Keep one Druvio basemap and expose only useful discovery overlays.
+  // Keep one Zinoo basemap and expose only useful discovery overlays.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -279,17 +326,17 @@ export default function MapScreen({
 
   useEffect(() => {
     const focusLocation = (event) => {
-      const { location, viewport } = event.detail || {};
+      const { location, viewport, zoom = 15, useDefaultZoom = false } = event.detail || {};
       const map = mapRef.current;
       if (!map || !location) return;
       if (viewport) map.fitBounds(viewport, 48);
       else {
         map.panTo(location);
-        map.setZoom(15);
+        map.setZoom(useDefaultZoom ? DEFAULT_ZOOM : zoom);
       }
     };
-    window.addEventListener('druvio-focus-location', focusLocation);
-    return () => window.removeEventListener('druvio-focus-location', focusLocation);
+    window.addEventListener('flinok-focus-location', focusLocation);
+    return () => window.removeEventListener('flinok-focus-location', focusLocation);
   }, []);
 
   // History stack triggers
@@ -334,7 +381,7 @@ export default function MapScreen({
   }, []);
 
   // Draw polygon layout
-  const drawPolygon = useCallback((coordinates, editable = false, color = '#16a34a') => {
+  const drawPolygon = useCallback((coordinates, editable = false, color = '#2563eb') => {
     const map = mapRef.current;
     if (!map || coordinates.length < 3 || !layerVisibility.layouts) return;
     clearPolygon();
@@ -386,37 +433,48 @@ export default function MapScreen({
 
   // Load layout from prop activeLayout
   useEffect(() => {
-    if (activeLayout && activeLayout.polygonCoordinates) {
-      drawPolygon(activeLayout.polygonCoordinates, editingLayout, editingLayout ? activeLayout.color : '#16a34a');
-    } else if (selectedProject) {
-      const path = normalizeProjectPolygon(selectedProject.layoutPolygon);
-      drawPolygon(path, editingLayout, '#16a34a');
+    const activePath = normalizeBoundaryPath(activeLayout?.polygonCoordinates);
+    const projectPath = normalizeProjectPolygon(selectedProject?.layoutPolygon);
+    const path = activePath.length >= 3 ? activePath : projectPath;
+    if (path.length >= 3) {
+      drawPolygon(path, editingLayout, editingLayout ? activeLayout?.color : '#2563eb');
     } else {
       clearPolygon();
     }
-  }, [activeLayout, editingLayout, drawPolygon, clearPolygon, selectedProject, zoomTier]);
+  // The map instance is created asynchronously. Re-run once it is ready so a
+  // layout already selected on first render is not skipped.
+  }, [activeLayout, editingLayout, drawPolygon, clearPolygon, selectedProject, mapReady]);
 
-  // Preserve geographic context: when exploring at neighborhood zoom levels,
-  // render surrounding Druvio layouts as a quiet secondary layer.
+  // Google Maps can detach overlays while it recomputes a camera transition.
+  // Keep the selected layout attached across every zoom/idle cycle.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !layerVisibility.layouts || !polygonRef.current) return undefined;
+    const keepSelectedLayoutVisible = () => polygonRef.current?.setMap(map);
+    keepSelectedLayoutVisible();
+    const idleListener = map.addListener('idle', keepSelectedLayoutVisible);
+    return () => idleListener.remove();
+  }, [layerVisibility.layouts, mapReady, selectedProject?.id]);
+
+  // Keep published project layouts visible as persistent map context. The
+  // selected layout is rendered separately above this secondary layer.
   useEffect(() => {
     const map = mapRef.current;
     nearbyPolygonRefs.current.forEach((polygon) => polygon.setMap(null));
     nearbyPolygonRefs.current = [];
-    if (!map || !mapReady || !layerVisibility.layouts || !selectedProject || zoomTier < 12 || zoomTier > 17) return;
-    const bounds = map.getBounds();
+    if (!map || !mapReady || !layerVisibility.layouts) return;
     nearbyPolygonRefs.current = projects
-      .filter((project) => project.id !== selectedProject.id && isProjectPublishable(project))
+      .filter((project) => project.id !== selectedProject?.id && isProjectPublishable(project))
       .map((project) => {
         const path = normalizeProjectPolygon(project.layoutPolygon);
-        const position = pointFor(project);
-        if (path.length < 3 || (bounds && position && !bounds.contains(position))) return null;
+        if (path.length < 3) return null;
         return new window.google.maps.Polygon({
           paths: path,
           map,
-          strokeColor: '#22c55e',
+          strokeColor: '#3b82f6',
           strokeOpacity: 0.48,
           strokeWeight: 1.5,
-          fillColor: '#86efac',
+          fillColor: '#93c5fd',
           fillOpacity: 0.07,
           clickable: true,
           zIndex: 2
@@ -427,7 +485,7 @@ export default function MapScreen({
       nearbyPolygonRefs.current.forEach((polygon) => polygon.setMap(null));
       nearbyPolygonRefs.current = [];
     };
-  }, [layerVisibility.layouts, mapReady, projects, selectedProject, viewportRevision, zoomTier]);
+  }, [layerVisibility.layouts, mapReady, projects, selectedProject]);
 
   // Listen to the custom sidebar layout-adding event
   useEffect(() => {
@@ -449,11 +507,11 @@ export default function MapScreen({
       setEditingLayout(true);
     };
 
-    window.addEventListener('druvio-start-add-layout', handleStartAddLayout);
-    window.addEventListener('druvio-edit-layout', handleEditLayout);
+    window.addEventListener('flinok-start-add-layout', handleStartAddLayout);
+    window.addEventListener('flinok-edit-layout', handleEditLayout);
     return () => {
-      window.removeEventListener('druvio-start-add-layout', handleStartAddLayout);
-      window.removeEventListener('druvio-edit-layout', handleEditLayout);
+      window.removeEventListener('flinok-start-add-layout', handleStartAddLayout);
+      window.removeEventListener('flinok-edit-layout', handleEditLayout);
     };
   }, [activeLayout, clearPolygon]);
 
@@ -463,7 +521,7 @@ export default function MapScreen({
     let resizeObserver;
     let tilesLoadedListener;
     let idleListener;
-    let zoomListener;
+    let captureAuthCamera;
 
     if (!googleMapsConfig.isConfigured) {
       setMapStatus('configuration-missing');
@@ -478,31 +536,60 @@ export default function MapScreen({
       if (!container) return;
 
       try {
-        const center = { lat: Number(DEFAULT_CENTER.lat), lng: Number(DEFAULT_CENTER.lng) };
+        let preservedCamera = null;
+        try {
+          preservedCamera = JSON.parse(window.sessionStorage.getItem('zinooMapAuthContext') || 'null');
+          window.sessionStorage.removeItem('zinooMapAuthContext');
+        } catch {
+          window.sessionStorage.removeItem('zinooMapAuthContext');
+        }
+        const center = Number.isFinite(preservedCamera?.lat) && Number.isFinite(preservedCamera?.lng)
+          ? { lat: preservedCamera.lat, lng: preservedCamera.lng }
+          : { lat: Number(DEFAULT_CENTER.lat), lng: Number(DEFAULT_CENTER.lng) };
         const map = new window.google.maps.Map(container, {
           center,
-          zoom: DEFAULT_ZOOM,
+          zoom: Number.isFinite(preservedCamera?.zoom) ? preservedCamera.zoom : DEFAULT_ZOOM,
+          minZoom: 11,
           mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || 'DEMO_MAP_ID',
-          mapTypeId: window.google.maps.MapTypeId.HYBRID,
+          mapTypeId: window.google.maps.MapTypeId.ROADMAP,
+          disableDefaultUI: true,
           mapTypeControl: false,
+          scaleControl: false,
           streetViewControl: false,
           fullscreenControl: false,
           rotateControl: false,
           zoomControl: false,
-          gestureHandling: 'greedy'
+          gestureHandling: 'greedy',
+          isFractionalZoomEnabled: true
         });
 
         mapRef.current = map;
-        map.setMapTypeId(window.google.maps.MapTypeId.HYBRID);
-        const updateZoomTier = () => {
-          const zoom = map.getZoom() || DEFAULT_ZOOM;
-          setZoomTier(zoom);
+        map.setMapTypeId(window.google.maps.MapTypeId.ROADMAP);
+        const settleZoomState = () => {
+          const zoom = map.getZoom() ?? DEFAULT_ZOOM;
+          const nextDisplayZoom = Math.round(zoom * 10) / 10;
+          const nextZoomTier = Math.floor(zoom);
+          setZoomLevel((currentZoom) => currentZoom === nextDisplayZoom ? currentZoom : nextDisplayZoom);
+          setZoomTier((currentTier) => currentTier === nextZoomTier ? currentTier : nextZoomTier);
         };
-        updateZoomTier();
-        zoomListener = map.addListener('zoom_changed', updateZoomTier);
+        settleZoomState();
 
-        // Idle listener to fetch visible bounds markers
-        idleListener = map.addListener('idle', handleBoundsIdle);
+        captureAuthCamera = () => {
+          const currentCenter = map.getCenter();
+          if (!currentCenter) return;
+          window.sessionStorage.setItem('zinooMapAuthContext', JSON.stringify({
+            lat: currentCenter.lat(),
+            lng: currentCenter.lng(),
+            zoom: map.getZoom() ?? DEFAULT_ZOOM
+          }));
+        };
+        window.addEventListener('zinoo:capture-map-auth-context', captureAuthCamera);
+        idleListener = map.addListener('idle', () => {
+          // Let Google Maps own the active pinch/pan animation. React state and
+          // marker work are updated only after the camera has settled.
+          settleZoomState();
+          handleBoundsIdleRef.current?.();
+        });
 
         const resizeMap = () => {
           window.google.maps.event.trigger(map, 'resize');
@@ -513,24 +600,25 @@ export default function MapScreen({
 
         setMapReady(true);
         setMapStatus('ready');
+        onMapReadyRef.current?.();
       } catch (error) {
-        console.error('[Druvio Maps] Buyer map initialization failed', {
+        console.error('[Zinoo Maps] Buyer map initialization failed', {
           code: error?.code,
           message: error?.message,
-          projectCount: projects.length
+          projectCount: projectCountRef.current
         });
         setMapStatus('load-error');
-        setMapError(googleMapsUnavailableMessage);
+        setMapError(getGoogleMapsErrorMessage(error));
       }
     }).catch((loadError) => {
       if (disposed) return;
-      console.error('[Druvio Maps] Buyer map loader failed', {
+      console.error('[Zinoo Maps] Buyer map loader failed', {
         code: loadError?.code,
         message: loadError?.message,
-        projectCount: projects.length
+        projectCount: projectCountRef.current
       });
       setMapStatus('load-error');
-      setMapError(googleMapsUnavailableMessage);
+      setMapError(getGoogleMapsErrorMessage(loadError));
     });
 
     return () => {
@@ -538,9 +626,11 @@ export default function MapScreen({
       resizeObserver?.disconnect();
       tilesLoadedListener?.remove();
       idleListener?.remove();
-      zoomListener?.remove();
-      clusterRef.current?.clearMarkers();
+      if (captureAuthCamera) window.removeEventListener('zinoo:capture-map-auth-context', captureAuthCamera);
+      // Clusters are AdvancedMarkerElements stored in markersRef; there is no
+      // MarkerClusterer instance in this component.
       markersRef.current.forEach((marker) => { marker.map = null; });
+      markersRef.current = [];
       selectedMarkerRef.current && (selectedMarkerRef.current.map = null);
       projectPopupRef.current?.setMap(null);
       polygonRef.current?.setMap(null);
@@ -548,25 +638,74 @@ export default function MapScreen({
       nearbyPolygonRefs.current = [];
       villageBoundaryRefs.current.forEach((polygon) => polygon.setMap(null));
     };
-  }, [handleBoundsIdle]);
+  }, []);
 
   useEffect(() => {
     const focusProject = (event) => {
-      const project = event.detail?.project;
+      const { project, layout, bottomInsetPx = 0, animated = false, requestId = '' } = event.detail || {};
       if (!project) return;
       const position = pointFor(project);
-      if (!position) return;
-      mapRef.current?.panTo(position);
-      mapRef.current?.setZoom(15);
+      const map = mapRef.current;
+      if (!position || !map || !window.google?.maps) return;
+      const layoutPath = normalizeBoundaryPath(layout?.polygonCoordinates);
+      const projectPath = normalizeProjectPolygon(project.layoutPolygon);
+      const path = layoutPath.length >= 3 ? layoutPath : projectPath;
+      // Render the boundary immediately as well as through React state. This
+      // covers a project-focus event that arrives while its layout is loading.
+      if (path.length >= 3 && !editingLayout && layerVisibility.layouts) {
+        drawPolygon(path, false, layout?.color || '#2563eb');
+      }
+      const bounds = new window.google.maps.LatLngBounds();
+      if (path.length >= 3) path.forEach((point) => bounds.extend(point));
+      else {
+        const neighborhoodRadius = 0.0022;
+        bounds.extend({ lat: position.lat - neighborhoodRadius, lng: position.lng - neighborhoodRadius });
+        bounds.extend({ lat: position.lat + neighborhoodRadius, lng: position.lng + neighborhoodRadius });
+      }
+      const padding = {
+        top: 48,
+        right: 32,
+        bottom: 48,
+        left: 32
+      };
+      let settled = false;
+      let cameraStage = 'fit';
+      let idleListener;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        idleListener?.remove?.();
+        window.setTimeout(() => window.dispatchEvent(new CustomEvent('flinok-project-focus-complete', { detail: { requestId, projectId: project.id } })), 120);
+      };
+      const advanceCamera = () => {
+        if (cameraStage === 'fit') {
+          cameraStage = 'offset';
+          const zoom = map.getZoom() || 16;
+          if (zoom < 15) map.setZoom(15);
+          else if (zoom > 17) map.setZoom(17);
+          const upwardOffset = Math.max(0, Math.round(Number(bottomInsetPx) / 2));
+          if (upwardOffset) map.panBy(0, upwardOffset);
+          else finish();
+          return;
+        }
+        finish();
+      };
+      window.setTimeout(() => {
+        idleListener = map.addListener('idle', advanceCamera);
+        map.fitBounds(bounds, padding);
+      }, animated ? 60 : 0);
+      window.setTimeout(finish, 1800);
     };
-    window.addEventListener('druvio-focus-project', focusProject);
-    return () => window.removeEventListener('druvio-focus-project', focusProject);
-  }, []);
+    window.addEventListener('flinok-focus-project', focusProject);
+    return () => window.removeEventListener('flinok-focus-project', focusProject);
+  }, [drawPolygon, editingLayout, layerVisibility.layouts]);
 
   useEffect(() => {
     const viewLayout = (event) => {
       if (event.detail?.projectId && event.detail.projectId !== selectedProject?.id) return;
-      const path = normalizeProjectPolygon(selectedProject?.layoutPolygon);
+      const layoutPath = normalizeBoundaryPath(activeLayout?.polygonCoordinates);
+      const projectPath = normalizeProjectPolygon(selectedProject?.layoutPolygon);
+      const path = layoutPath.length >= 3 ? layoutPath : projectPath;
       if (path.length < 3 || !mapRef.current) return;
       const bounds = new window.google.maps.LatLngBounds();
       path.forEach((point) => bounds.extend(point));
@@ -575,62 +714,40 @@ export default function MapScreen({
       const container = mapElement.current?.parentElement;
       if (container && !document.fullscreenElement) container.requestFullscreen?.();
     };
-    window.addEventListener('druvio-view-project-layout', viewLayout);
-    return () => window.removeEventListener('druvio-view-project-layout', viewLayout);
-  }, [selectedProject]);
+    window.addEventListener('flinok-view-project-layout', viewLayout);
+    return () => window.removeEventListener('flinok-view-project-layout', viewLayout);
+  }, [activeLayout, selectedProject]);
 
-  // Update projects markers and cluster
+  // Render every marker at its saved coordinate. Markers must never be moved,
+  // fanned out, or replaced by a cluster whose position is an approximation.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !window.google?.maps || !mapReady) return;
 
-    clusterRef.current?.clearMarkers();
     markersRef.current.forEach((marker) => { marker.map = null; });
 
     if (!layerVisibility.markers) return;
 
-    const bounds = map.getBounds();
-    markersRef.current = projects.map((project) => {
-      const position = pointFor(project);
-      if (!isProjectPublishable(project) || !position || (bounds && !bounds.contains(position))) return null;
+    const collisionBehavior = window.google.maps.CollisionBehavior?.REQUIRED;
+    const visibleProjects = projects.filter((project) => isProjectPublishable(project) && pointFor(project) && project.id !== selectedProject?.id);
+    markersRef.current = visibleProjects.map((project) => {
+        const position = pointFor(project);
+        const state = markerStates.get(project.id) || getProjectMarkerState({ zoom: zoomLevel, project, selectedProjectId: selectedProject?.id });
+        const marker = new window.google.maps.marker.AdvancedMarkerElement({
+          position,
+          title: project.name,
+          content: markerContent(project, state),
+          gmpClickable: true,
+          gmpDraggable: false,
+          zIndex: state.zIndex,
+          ...(collisionBehavior ? { collisionBehavior } : {})
+        });
 
-      const state = markerStates.get(project.id) || getProjectMarkerState({ zoom: zoomTier, project, selectedProjectId: selectedProject?.id });
-      const marker = new window.google.maps.marker.AdvancedMarkerElement({
-        position,
-        title: project.name,
-        content: markerContent(project, state),
-        gmpClickable: true,
-        gmpDraggable: false,
-        zIndex: state.zIndex,
-        collisionBehavior: window.google.maps.CollisionBehavior?.OPTIONAL_AND_HIDES_LOWER_PRIORITY
-      });
-
-      marker.addEventListener('gmp-click', () => {
-        if (onSelectProject) {
-          onSelectProject(project);
-        }
-      });
-
-      return marker;
-    }).filter(Boolean);
-
-    if (zoomTier > MAP_MARKER_ZOOM.LOCATION_PIN_MAX) {
-      markersRef.current.forEach((marker) => { marker.map = map; });
-    } else {
-      clusterRef.current = new MarkerClusterer({
-        map,
-        markers: markersRef.current,
-        renderer: {
-          render: ({ count, position }) => new window.google.maps.marker.AdvancedMarkerElement({
-            position,
-            content: clusterContent(count),
-            title: `${count} projects`,
-            zIndex: 1000 + count
-          })
-        }
-      });
-    }
-  }, [projects, mapReady, onSelectProject, layerVisibility.markers, zoomTier, markerStates, selectedProject?.id]);
+        marker.addEventListener('gmp-click', () => selectProjectFromMarker(project));
+        marker.map = map;
+        return marker;
+    });
+  }, [projects, mapReady, selectProjectFromMarker, layerVisibility.markers, zoomLevel, markerStates, selectedProject?.id]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -642,8 +759,9 @@ export default function MapScreen({
     const position = pointFor(selectedProject);
     if (!position) return undefined;
 
-    const selectedState = getProjectMarkerState({ zoom: zoomTier, project: selectedProject, selectedProjectId: selectedProject.id });
+    const selectedState = getProjectMarkerState({ zoom: zoomLevel, project: selectedProject, selectedProjectId: selectedProject.id });
     const content = markerContent(selectedProject, selectedState);
+    const selectedUsesCircularAnchor = selectedState.mode === 'pin' || selectedState.mode === 'cluster';
     const marker = new window.google.maps.marker.AdvancedMarkerElement({
       map,
       position,
@@ -653,43 +771,69 @@ export default function MapScreen({
       zIndex: 9999
     });
     selectedMarkerRef.current = marker;
-    if (window.matchMedia('(max-width: 768px)').matches) {
-      map.panTo(position);
-      if ((map.getZoom() || DEFAULT_ZOOM) < 15) {
-        window.setTimeout(() => map.setZoom(15), 220);
-      }
-    }
-    if (!showProjectPopup) return () => { marker.map = null; };
+    const popupIsPending = pendingPopupProjectIdRef.current === selectedProject.id;
+    if (!showProjectPopup || (popupIsPending && popupProjectId !== selectedProject.id)) return () => { marker.map = null; };
 
     class ProjectPopupOverlay extends window.google.maps.OverlayView {
       constructor() {
         super();
+        this.focusReturnTarget = document.activeElement;
+        this.shouldRestoreFocus = false;
+        this.requestClose = () => {
+          this.shouldRestoreFocus = true;
+          onSelectProject?.(null);
+        };
         this.element = createProjectPopupElement(selectedProject, {
           onViewDetails: onViewProjectDetails,
-          onClose: () => onSelectProject?.(null)
+          onClose: this.requestClose
         });
       }
-      onAdd() { this.getPanes().floatPane.appendChild(this.element); }
+      onAdd() {
+        this.getPanes().floatPane.appendChild(this.element);
+        if (window.ResizeObserver) {
+          this.resizeObserver = new window.ResizeObserver(() => this.draw());
+          this.resizeObserver.observe(this.element);
+        }
+        requestAnimationFrame(() => {
+          this.draw();
+          this.element.focusPrimaryAction?.();
+        });
+      }
       draw() {
         const point = this.getProjection().fromLatLngToDivPixel(new window.google.maps.LatLng(position));
         if (!point) return;
-        const popupWidth = 258;
-        const popupHeight = 144;
         const mapSize = map.getDiv();
-        const flipLeft = point.x + popupWidth + 18 > mapSize.clientWidth - 56;
-        const placeBelow = point.y - popupHeight < 74;
+        const popupWidth = this.element.offsetWidth || this.element.getBoundingClientRect().width;
+        const popupHeight = this.element.offsetHeight || this.element.getBoundingClientRect().height;
+        if (!popupWidth || !popupHeight) return;
+        const edge = 12;
+        const markerGap = 18;
+        const flipLeft = point.x + markerGap + popupWidth > mapSize.clientWidth - edge;
+        const placeBelow = point.y - popupHeight < edge;
+        const preferredX = flipLeft ? point.x - popupWidth - markerGap : point.x + markerGap;
+        const preferredY = placeBelow ? point.y + markerGap : point.y - popupHeight;
+        const maxX = Math.max(edge, mapSize.clientWidth - popupWidth - edge);
+        const maxY = Math.max(edge, mapSize.clientHeight - popupHeight - edge);
+        const x = Math.min(Math.max(preferredX, edge), maxX);
+        const y = Math.min(Math.max(preferredY, edge), maxY);
         this.element.classList.toggle('flip-left', flipLeft);
         this.element.classList.toggle('flip-below', placeBelow);
-        this.element.style.transform = `translate(${flipLeft ? point.x - popupWidth - 18 : point.x + 18}px, ${placeBelow ? point.y + 18 : point.y - popupHeight}px)`;
+        this.element.style.transform = `translate3d(${x}px, ${y}px, 0)`;
       }
-      onRemove() { this.element.remove(); }
+      onRemove() {
+        this.resizeObserver?.disconnect();
+        this.element.remove();
+        if (this.shouldRestoreFocus && this.focusReturnTarget?.isConnected) {
+          requestAnimationFrame(() => this.focusReturnTarget.focus?.({ preventScroll: true }));
+        }
+      }
     }
     const popup = new ProjectPopupOverlay();
     popup.setMap(map);
     projectPopupRef.current = popup;
 
     return () => { marker.map = null; popup.setMap(null); };
-  }, [selectedProject, mapReady, onViewProjectDetails, onSelectProject, showProjectPopup, zoomTier]);
+  }, [selectedProject, mapReady, onViewProjectDetails, onSelectProject, showProjectPopup, zoomLevel, popupProjectId]);
 
   // Click listeners for placing projects or drawing polygons
   useEffect(() => {
@@ -711,7 +855,10 @@ export default function MapScreen({
   useEffect(() => {
     if (!selectedProject) return undefined;
     const closeOnEscape = (event) => {
-      if (event.key === 'Escape') onSelectProject?.(null);
+      if (event.key === 'Escape') {
+        if (projectPopupRef.current?.requestClose) projectPopupRef.current.requestClose();
+        else onSelectProject?.(null);
+      }
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
@@ -776,7 +923,7 @@ export default function MapScreen({
         await saveProjectLayout(activeLayout.id, coordinates);
         if (onActiveLayoutChange) onActiveLayoutChange({ ...activeLayout, polygonCoordinates: coordinates });
         alert('Layout polygon updated.');
-        window.dispatchEvent(new CustomEvent('druvio-layout-saved', {
+        window.dispatchEvent(new CustomEvent('flinok-layout-saved', {
           detail: { projectId: selectedProject?.id, layoutId: activeLayout.id, mode: 'update' }
         }));
       } else {
@@ -787,7 +934,7 @@ export default function MapScreen({
           color: '#22c55e'
         });
         alert(`Layout '${draftLayoutName || 'Phase Layout'}' saved.`);
-        window.dispatchEvent(new CustomEvent('druvio-layout-saved', {
+        window.dispatchEvent(new CustomEvent('flinok-layout-saved', {
           detail: { projectId: selectedProject?.id, layoutId, mode: 'create' }
         }));
       }
@@ -810,53 +957,58 @@ export default function MapScreen({
     clearPolygon();
   };
 
-  const zoomMap = (amount) => mapRef.current?.setZoom((mapRef.current.getZoom() || DEFAULT_ZOOM) + amount);
-  const rotateMap = () => mapRef.current?.setHeading(((mapRef.current?.getHeading() || 0) + 45) % 360);
-  const locateUser = () => {
-    mapRef.current?.panTo(CHAKAN_MAP_POSITION);
-    mapRef.current?.setZoom(15);
-  };
-  const toggleFullscreen = () => {
+  useEffect(() => {
+    const updateFullscreenState = () => setIsMapMaximized(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
+  }, []);
+
+  const toggleMapSize = async () => {
     const container = mapElement.current?.parentElement;
     if (!container) return;
-    if (document.fullscreenElement) document.exitFullscreen?.();
-    else container.requestFullscreen?.();
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen?.();
+      else await container.requestFullscreen?.();
+    } catch (error) {
+      console.error('Unable to change map size:', error);
+    }
   };
-  const openStreetView = () => {
+
+  const changeMapType = (nextMapType) => {
     const map = mapRef.current;
-    if (!map) return;
-    const panorama = map.getStreetView();
-    panorama.setPosition(map.getCenter());
-    panorama.setPov({ heading: map.getHeading() || 0, pitch: 0 });
-    panorama.setVisible(true);
+    if (!map || nextMapType === mapType) return;
+    map.setMapTypeId(nextMapType === 'satellite'
+      ? window.google.maps.MapTypeId.HYBRID
+      : window.google.maps.MapTypeId.ROADMAP);
+    setMapType(nextMapType);
   };
 
   return (
-    <div className="druvio-map-screen-wrapper">
+    <div className="zinoo-map-screen-wrapper">
 
       {/* MAP CANVAS */}
-      <div ref={mapElement} className="druvio-google-map" />
-      {mapStatus !== 'ready' && (
-        <div className="map-availability-state" role={mapStatus === 'loading' ? 'status' : 'alert'}>
+      <div ref={mapElement} className="zinoo-google-map" />
+      <ZoomBadge zoom={zoomLevel} />
+      {mapStatus !== 'ready' && mapStatus !== 'loading' && (
+        <div className="map-availability-state" role="alert">
           <MapPin size={24} />
-          <span>{mapStatus === 'loading' ? 'Loading map…' : mapError}</span>
+          <span>{mapError}</span>
         </div>
       )}
 
       {/* FLOATING GLASSMORPHISM CONTROLS */}
       <div className="map-floating-overlay-container">
 
-        <div className="map-top-right-controls">
-          <button className={`floating-circle-btn ${showLayers ? 'active' : ''}`} onClick={() => { const nextOpen = !showLayers; setShowLayers(nextOpen); if (nextOpen) onLayersOpen?.(); }} title="Map layers" aria-label="Map layers"><Layers size={19} /></button>
-          <button className="floating-circle-btn" onClick={locateUser} title="Your location" aria-label="Your location"><Navigation size={19} /></button>
-          <button className="floating-circle-btn" onClick={openStreetView} title="Street View" aria-label="Open Street View"><PersonStanding size={19} /></button>
+        <div className="map-type-switcher" role="group" aria-label="Map view">
+          <button type="button" className={mapType === 'roadmap' ? 'active' : ''} onClick={() => changeMapType('roadmap')} aria-pressed={mapType === 'roadmap'} aria-label="Normal map view" title="Normal map view"><MapIcon size={19} /></button>
+          <button type="button" className={mapType === 'satellite' ? 'active' : ''} onClick={() => changeMapType('satellite')} aria-pressed={mapType === 'satellite'} aria-label="Satellite map view" title="Satellite map view"><Satellite size={19} /></button>
         </div>
 
-        <div className="map-bottom-right-controls">
-          <button className="floating-circle-btn" onClick={() => zoomMap(1)} title="Zoom in" aria-label="Zoom in"><ZoomIn size={19} /></button>
-          <button className="floating-circle-btn" onClick={() => zoomMap(-1)} title="Zoom out" aria-label="Zoom out"><ZoomOut size={19} /></button>
-          <button className="floating-circle-btn" onClick={rotateMap} title="Rotate map" aria-label="Rotate map"><RotateCw size={19} /></button>
-          <button className="floating-circle-btn" onClick={toggleFullscreen} title="Fullscreen" aria-label="Toggle fullscreen"><Maximize2 size={19} /></button>
+        <div className="map-top-right-controls">
+          <button className={`floating-circle-btn ${showLayers ? 'active' : ''}`} onClick={() => { const nextOpen = !showLayers; setShowLayers(nextOpen); if (nextOpen) onLayersOpen?.(); }} title="Map layers" aria-label="Map layers"><Layers size={19} /></button>
+          <button type="button" className="floating-circle-btn" onClick={toggleMapSize} title={isMapMaximized ? 'Minimize map' : 'Maximize map'} aria-label={isMapMaximized ? 'Minimize map' : 'Maximize map'}>
+            {isMapMaximized ? <Minimize2 size={19} /> : <Maximize2 size={19} />}
+          </button>
         </div>
 
         {/* FLOATING LAYERS POPDOWN */}
@@ -872,16 +1024,12 @@ export default function MapScreen({
               <div className="gis-toggles">
                 {[
                   { key: 'markers', label: 'Project markers', description: 'Active projects on the map', icon: MapPin },
-                  { key: 'layouts', label: 'Project layouts', description: 'Plot and phase outlines', icon: Building2 },
-                  { key: 'roads', label: 'Road network', description: 'Road geometry and labels', icon: Route }
+                  { key: 'layouts', label: 'Project layouts', description: 'Plot and phase outlines', icon: Building2 }
                 ].map(({ key, label, description, icon: Icon }) => (
                   <button key={key} type="button" className="layer-toggle-row" role="switch" aria-checked={layerVisibility[key]} onClick={() => setLayerVisibility({ ...layerVisibility, [key]: !layerVisibility[key] })}>
                     <Icon size={18} /><span><strong>{label}</strong><small>{description}</small></span><i className={layerVisibility[key] ? 'on' : ''} />
                   </button>
                 ))}
-                <button type="button" className="layer-toggle-row" role="switch" aria-checked={layerVisibility.villageBoundaries} disabled={villageBoundaries.length === 0} onClick={() => setLayerVisibility({ ...layerVisibility, villageBoundaries: !layerVisibility.villageBoundaries })}>
-                  <Layers size={18} /><span><strong>Village boundaries</strong><small>{villageBoundaries.length ? `${villageBoundaries.length} verified boundary ${villageBoundaries.length === 1 ? 'area' : 'areas'}` : 'No verified boundary data available'}</small></span><i className={layerVisibility.villageBoundaries ? 'on' : ''} />
-                </button>
               </div>
             </div>
           </div>

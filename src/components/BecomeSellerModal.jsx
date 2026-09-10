@@ -97,7 +97,7 @@ function BecomeSellerModal({ user, onClose }) {
 
           <div className="form-intro">
             <Store size={32} />
-            <p>Register as a seller to list and manage your property projects on Druvio.</p>
+            <p>Register as a seller to list and manage your property projects on Zinoo.</p>
           </div>
 
           <div className="form-section">

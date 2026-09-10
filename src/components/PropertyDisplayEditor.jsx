@@ -1,189 +1,190 @@
-import React, { useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
-import {
-  createDisplayItem,
-  DISPLAY_ICON_OPTIONS,
-  getPropertyDisplayModel
-} from '../utils/propertyDisplayModel';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, FileText, Image as ImageIcon, Loader2, MapPin, Plus, Save, X } from 'lucide-react';
+import ProjectLocationPicker from './ProjectLocationPicker';
+import PropertyMediaDocumentsManager, { InAppDocumentViewer, openDocumentPreview } from './PropertyMediaDocumentsManager';
+import { getPropertyDisplayModel } from '../utils/propertyDisplayModel';
+import { normalizeAmenityIds, withSelectedProjectAmenities } from '../utils/projectAmenities';
+import { getProjectDocumentLabel } from '../utils/projectDocuments';
+import { LAND_ZONE_OPTIONS, NA_STATUS_OPTIONS } from '../utils/projectLand';
+import { getPropertyChangeAudit } from '../utils/propertyChangeAudit';
+import { applyHighwayResult } from '../utils/highwayInfo';
 
-const TABS = ['General', 'Pricing', 'Hero', 'Features', 'Documents', 'Location', 'Visibility', 'Advanced'];
+const listOf = (v) => Array.isArray(v) ? v : typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter(Boolean) : [];
+const photoUrl = (v) => typeof v === 'string' ? v : v?.downloadURL || v?.url || v?.previewURL;
+const statusText = (v) => v ? String(v).replace(/_/g, ' ') : 'Draft';
 
-function Toggle({ label, checked, onChange }) {
-  return <label className="display-editor-toggle"><input type="checkbox" checked={Boolean(checked)} onChange={(event) => onChange(event.target.checked)} /><span>{label}</span></label>;
-}
+// UI-only V2 delegates all Firebase persistence to the existing seller/admin pipelines.
+export default function PropertyDisplayEditor({ property, mode = 'edit', role = 'seller', user, onChange, onSubmit, onCancel, onReset, isDirty = false, onDirtyChange = () => {}, amenityOptions = [], autoDetectHighway = false, mediaUploading = '', mediaError = '', onMediaUpload, documentUploading = false, documentError = '', onDocumentUpload, onRemoveDocument, submitError = '' }) {
+  const [documentViewer, setDocumentViewer] = useState(null); const [auditOpen, setAuditOpen] = useState(false); const [saving, setSaving] = useState(false); const [newAmenity, setNewAmenity] = useState('');
+  const [heroUploading, setHeroUploading] = useState(false); const [heroPreview, setHeroPreview] = useState(null);
+  const heroInputRef = useRef(null); const heroImageUploadRef = useRef(null); const imageInputRef = useRef(null); const imageSectionRef = useRef(null); const baseline = useRef(property);
+  const display = useMemo(() => getPropertyDisplayModel(property), [property]); const documents = listOf(property.documents); const amenities = listOf(property.amenities); const selectedIds = normalizeAmenityIds(property.amenityIds);
+  const options = amenityOptions.map((x) => ({ id: String(x.id), name: String(x.name || '').trim() })).filter((x) => x.id && x.name); const audit = getPropertyChangeAudit(baseline.current, property);
+  const apply = (next) => { onDirtyChange(true); onChange(typeof next === 'function' ? next(property) : next); };
+  const updateDisplay = (patch) => ({ ...(property.display || {}), ...patch }); const set = (key, value, aliases = {}) => apply({ ...property, [key]: value, ...aliases });
+  const setName = (value) => apply({ ...property, name: value, display: updateDisplay({ basic: { ...(property.display?.basic || {}), projectName: value } }) });
+  const setPrice = (value) => apply({ ...property, startingPrice: value, priceFrom: value, display: updateDisplay({ pricing: { ...(property.display?.pricing || {}), startingPrice: Number(value) || 0 } }) });
+  const setCashback = (value) => apply({ ...property, cashbackPerGuntha: value, cashbackAmount: value, display: updateDisplay({ cashback: { ...(property.display?.cashback || {}), amount: Number(value) || 0, enabled: Number(value) > 0 } }) });
+  const setLocation = (key, value, aliases = {}) => { const next = { ...property, [key]: value, ...aliases }; const location = [next.village, next.taluka, next.locality || next.area].filter(Boolean).join(' • '); apply({ ...next, locationLabel: location, display: updateDisplay({ basic: { ...(property.display?.basic || {}), location } }) }); };
+  const setContact = (key, value, aliases = {}) => apply({ ...property, [key]: value, ...aliases, display: updateDisplay({ actions: { ...(property.display?.actions || {}), callNumber: value } }) });
+  const setCoordinates = (latitude, longitude) => apply({ ...property, latitude, longitude, mapMarkerConfirmed: true, display: updateDisplay({ map: { ...(property.display?.map || {}), latitude: Number(latitude), longitude: Number(longitude), enabled: true } }) });
+  const toggleAmenity = (option) => { const current = selectedIds.length ? selectedIds : amenities.map((name) => options.find((x) => x.name === name)?.id || `legacy:${name}`); const next = current.includes(option.id) ? current.filter((id) => id !== option.id) : [...current, option.id]; const catalog = [...options, ...amenities.filter((name) => !options.some((x) => x.name === name)).map((name) => ({ id: `legacy:${name}`, name }))]; apply(withSelectedProjectAmenities(property, next, catalog)); };
+  const addAmenity = (name) => {
+    const cleaned = name.trim();
+    if (!cleaned) return;
+    if (amenities.includes(cleaned)) return;
+    const nextAmenities = [...amenities, cleaned];
+    apply({
+      ...property,
+      amenities: nextAmenities,
+      amenityIds: nextAmenities.map(x => x.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''))
+    });
+    setNewAmenity('');
+  };
+  const removeAmenity = (indexToRemove) => {
+    const nextAmenities = amenities.filter((_, idx) => idx !== indexToRemove);
+    apply({
+      ...property,
+      amenities: nextAmenities,
+      amenityIds: nextAmenities.map(x => x.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''))
+    });
+  };
+  const setHeroImageUpload = useCallback((upload) => { heroImageUploadRef.current = upload; }, []);
+  const chooseHeroImage = () => { heroInputRef.current?.click(); };
 
-function Field({ label, value, onChange, type = 'text', options, min, step }) {
-  return (
-    <label className="display-editor-field">
-      <span>{label}</span>
-      {options ? (
-        <select value={value ?? ''} onChange={(event) => onChange(event.target.value)}>
-          {options.map((option) => <option key={option.value ?? option} value={option.value ?? option}>{option.label ?? option}</option>)}
-        </select>
-      ) : (
-        <input type={type} value={value ?? ''} min={min} step={step} onChange={(event) => onChange(type === 'number' ? Number(event.target.value) : event.target.value)} />
-      )}
-    </label>
-  );
-}
+  useEffect(() => {
+    if (heroPreview) {
+      return () => { URL.revokeObjectURL(heroPreview); };
+    }
+  }, [heroPreview]);
 
-function Visibility({ section, update }) {
-  return (
-    <div className="display-editor-visibility">
-      <Toggle label="Show on card" checked={section.showOnCard} onChange={(value) => update({ showOnCard: value })} />
-      <Toggle label="Show on details" checked={section.showOnDetails} onChange={(value) => update({ showOnDetails: value })} />
-      {'order' in section && <Field label="Order" type="number" value={section.order} onChange={(value) => update({ order: value })} />}
-    </div>
-  );
-}
+  useEffect(() => {
+    if (heroPreview && (property.thumbnail || property.heroImage || property.display?.media?.heroImage)) {
+      setHeroPreview(null);
+    }
+  }, [property.thumbnail, property.heroImage, property.display?.media?.heroImage]);
 
-function ItemsEditor({ title, items, onChange, type = 'feature', fields = ['title', 'value', 'icon', 'enabled'] }) {
-  const updateItem = (index, changes) => onChange(items.map((item, itemIndex) => itemIndex === index ? { ...item, ...changes } : item));
-  const move = (index, direction) => {
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= items.length) return;
-    const next = [...items];
-    [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-    onChange(next.map((item, order) => ({ ...item, order })));
+  const handleHeroImageChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const objectUrl = URL.createObjectURL(file);
+    setHeroPreview(objectUrl);
+    setHeroUploading(true);
+    try {
+      if (onMediaUpload) {
+        await onMediaUpload(file, 'cover');
+      } else if (heroImageUploadRef.current) {
+        await heroImageUploadRef.current(file);
+      } else {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result;
+          apply((current) => ({
+            ...current,
+            thumbnail: dataUrl,
+            heroImage: dataUrl,
+            display: {
+              ...(current.display || {}),
+              media: {
+                ...(current.display?.media || {}),
+                heroImage: dataUrl
+              }
+            }
+          }));
+        };
+        reader.readAsDataURL(file);
+      }
+    } catch (uploadErr) {
+      console.error('Failed to upload hero image:', uploadErr);
+    } finally {
+      setHeroUploading(false);
+      e.target.value = '';
+    }
   };
 
-  return (
-    <div className="display-items-editor">
-      <div className="display-items-heading"><h4>{title}</h4><button type="button" onClick={() => onChange([...items, createDisplayItem(type)])}><Plus size={15} /> Add</button></div>
-      {items.map((item, index) => (
-        <div className="display-item-row" key={item.id || index}>
-          {fields.includes('title') && <Field label="Title" value={item.title} onChange={(value) => updateItem(index, { title: value })} />}
-          {fields.includes('value') && <Field label="Value" value={item.value} onChange={(value) => updateItem(index, { value })} />}
-          {fields.includes('url') && <Field label="URL" value={item.url} onChange={(value) => updateItem(index, { url: value })} />}
-          {fields.includes('type') && <Field label="Type" value={item.documentType} onChange={(value) => updateItem(index, { documentType: value })} />}
-          {fields.includes('icon') && <Field label="Icon" value={item.icon} options={DISPLAY_ICON_OPTIONS} onChange={(value) => updateItem(index, { icon: value })} />}
-          {fields.includes('verified') && <Toggle label="Verified" checked={item.verified} onChange={(value) => updateItem(index, { verified: value })} />}
-          {fields.includes('showOnDetails') && <Toggle label="Show on details" checked={item.showOnDetails} onChange={(value) => updateItem(index, { showOnDetails: value })} />}
-          {fields.includes('enabled') && <Toggle label="Enabled" checked={item.enabled} onChange={(value) => updateItem(index, { enabled: value })} />}
-          <div className="display-item-actions">
-            <button type="button" onClick={() => move(index, -1)} disabled={index === 0} aria-label="Move up"><ArrowUp size={15} /></button>
-            <button type="button" onClick={() => move(index, 1)} disabled={index === items.length - 1} aria-label="Move down"><ArrowDown size={15} /></button>
-            <button type="button" className="danger" onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))} aria-label="Remove"><Trash2 size={15} /></button>
+  const confirmSave = async () => { setSaving(true); try { const result = await onSubmit?.({ preventDefault() {} }); if (result !== false) { baseline.current = property; setAuditOpen(false); } } finally { setSaving(false); } };
+  const field = (label, value, change, props = {}) => <label className="display-editor-field"><span>{label}{props.required && <b className="v2-required-indicator" aria-hidden="true"> *</b>}</span><input value={value ?? ''} onChange={(e) => change(e.target.value)} {...props} /></label>;
+  const gallery = listOf(property.galleryImages).map(photoUrl).filter(Boolean);
+  const currentHeroUrl = display.media.heroImage || property.thumbnail || property.heroImage || gallery[0];
+  const hero = heroPreview || currentHeroUrl;
+  const isUploadingHero = heroUploading || mediaUploading === 'cover';
+
+  return <section className="property-display-editor property-display-editor-v2">
+    <header className="v2-property-header"><button type="button" className="v2-icon-button" onClick={onCancel} aria-label="Back to properties"><ArrowLeft size={19} /></button><div><strong>{property.name || (mode === 'create' ? 'New property' : 'Property')}</strong><span className="v2-status-badge">{statusText(property.status)}</span></div><div className="v2-header-actions"><button type="button" className="btn-primary" onClick={() => setAuditOpen(true)} disabled={Boolean(mediaUploading || documentUploading || isUploadingHero)}><Save size={15} /> Save Changes</button></div></header>
+    <form className="v2-property-scroll" onSubmit={(e) => { e.preventDefault(); setAuditOpen(true); }}>
+      <section className="v2-hero-editor">
+        <img src={hero || '/zinoo-home-hero.webp'} alt="Project cover" />
+        <input ref={heroInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" disabled={Boolean(isUploadingHero)} onChange={handleHeroImageChange} />
+        {isUploadingHero && (
+          <div className="v2-hero-loading-overlay" role="status" aria-live="polite">
+            <Loader2 size={32} className="spin" />
+            <span>Uploading hero image…</span>
           </div>
+        )}
+        <div className="v2-hero-overlay">
+          <span><ImageIcon size={14} /> {Math.max(gallery.length, hero ? 1 : 0)} images</span>
+          <button type="button" onClick={chooseHeroImage} disabled={Boolean(isUploadingHero)}>
+            {isUploadingHero ? (
+              <><Loader2 size={15} className="spin" /> Uploading…</>
+            ) : (
+              <><Plus size={15} /> {currentHeroUrl ? 'Change Hero Image' : 'Add Hero Image'}</>
+            )}
+          </button>
         </div>
-      ))}
-      {items.length === 0 && <p className="display-editor-empty">No items configured.</p>}
-    </div>
-  );
-}
-
-export default function PropertyDisplayEditor({ property, onChange }) {
-  const [activeTab, setActiveTab] = useState('General');
-  const display = useMemo(() => getPropertyDisplayModel(property), [property]);
-  const setDisplay = (nextDisplay) => onChange({ ...property, display: nextDisplay });
-  const update = (key, changes) => setDisplay({ ...display, [key]: { ...display[key], ...changes } });
-
-  return (
-    <section className="property-display-editor">
-      <div className="property-display-editor-heading">
-        <div><span>Dynamic presentation</span><h3>Property Card &amp; Details Configuration</h3></div>
-        <small>All values are stored under the project&apos;s nested display configuration.</small>
-      </div>
-      <nav className="property-display-editor-tabs" aria-label="Property display editor sections">
-        {TABS.map((tab) => <button type="button" className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => setActiveTab(tab)}>{tab}</button>)}
-      </nav>
-
-      <div className="property-display-editor-panel">
-        {activeTab === 'General' && <>
-          <div className="display-editor-grid">
-            <Field label="Project Name" value={display.basic.projectName} onChange={(value) => update('basic', { projectName: value })} />
-            <Field label="Short Title" value={display.basic.shortTitle} onChange={(value) => update('basic', { shortTitle: value })} />
-            <Field label="Location Label" value={display.basic.location} onChange={(value) => update('basic', { location: value })} />
-            <Field label="Village" value={display.basic.village} onChange={(value) => update('basic', { village: value })} />
-            <Field label="Taluka" value={display.basic.taluka} onChange={(value) => update('basic', { taluka: value })} />
-            <Field label="District" value={display.basic.district} onChange={(value) => update('basic', { district: value })} />
+      </section>
+      <section className="v2-intro-section"><label className="v2-title-input"><span className="sr-only">Project Name</span><input value={property.name || ''} placeholder="Project Name" onChange={(e) => setName(e.target.value)} required /><b className="v2-required-indicator v2-title-required" aria-hidden="true">*</b></label><div className="v2-location-row"><div className="v2-location-field"><MapPin size={17} aria-hidden="true" />{field('Village', property.village, (v) => setLocation('village', v), { required: true })}</div>{field('Location', property.locality || property.area, (v) => setLocation('locality', v, { area: v }))}</div><div className="v2-price-row">{field('Price (₹)', property.startingPrice ?? property.priceFrom, setPrice, { type: 'number', min: 0 })}{field('Cashback Offered (₹)', property.cashbackPerGuntha ?? property.cashbackAmount, setCashback, { type: 'number', min: 0 })}</div><div className="v2-contact-row">{field('Contact number', property.contactNumber || property.siteVisitContact, (v) => setContact('contactNumber', v, { siteVisitContact: v, siteVisitContactNumber: v }), { type: 'tel' })}{field('WhatsApp number', property.whatsappNumber, (v) => setContact('whatsappNumber', v), { type: 'tel' })}</div></section>
+      <section className="v2-content-section"><h3>Overview</h3><div className="v2-overview-grid"><label><span>Land Zone</span><select value={property.landZone || ''} onChange={(e) => set('landZone', e.target.value)}><option value="">Select</option>{LAND_ZONE_OPTIONS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}</select></label>{field('Developer', property.developer || property.developerName, (v) => set('developer', v, { developerName: v }))}<label><span>Installment</span><select value={property.installmentPurchaseAvailable ? 'yes' : 'no'} onChange={(e) => set('installmentPurchaseAvailable', e.target.value === 'yes')}><option value="yes">Available</option><option value="no">Not available</option></select></label><label><span>NA Status</span><select value={property.naStatus || ''} onChange={(e) => set('naStatus', e.target.value)}><option value="">Select</option>{NA_STATUS_OPTIONS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}</select></label></div></section>
+      <section className="v2-content-section"><h3>Documents</h3>{role === 'admin' && property.id && user ? <PropertyMediaDocumentsManager property={property} user={user} onChange={apply} showMedia={false} /> : <label className="v2-add-file"><Plus size={15} /> Add document<input type="file" hidden accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar" disabled={documentUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) onDocumentUpload?.(file, 'other'); e.target.value = ''; }} /></label>}<div className="v2-document-list">{documents.map((doc, index) => <div key={doc.id || index}><FileText size={18} /><span><strong>{doc.displayName || doc.fileName || getProjectDocumentLabel(doc.type)}</strong><small>{doc.status || 'Pending'}</small></span><button type="button" onClick={() => openDocumentPreview(doc, setDocumentViewer)}>View</button>{onRemoveDocument && <button type="button" aria-label="Remove document" onClick={() => { onDirtyChange(true); onRemoveDocument(doc, index); }}><X size={15} /></button>}</div>)}</div>{documentError && <p role="alert">{documentError}</p>}</section>
+      <section className="v2-content-section">
+        <h3>Amenities</h3>
+        <div className="v2-amenity-management">
+          <div className="v2-amenity-input-group">
+            <input
+              type="text"
+              placeholder="Enter amenity"
+              value={newAmenity}
+              onChange={(e) => setNewAmenity(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addAmenity(newAmenity);
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => addAmenity(newAmenity)}
+            >
+              Add
+            </button>
           </div>
-          <label className="display-editor-field display-editor-full"><span>Short Description / Overview</span><textarea value={display.basic.shortDescription} onChange={(event) => { update('basic', { shortDescription: event.target.value }); update('overview', { body: event.target.value }); }} /></label>
-        </>}
-
-        {activeTab === 'Pricing' && <>
-          <div className="display-editor-grid">
-            <Field label="Starting Price" type="number" min="0" value={display.pricing.startingPrice} onChange={(value) => update('pricing', { startingPrice: value })} />
-            <Field label="Price Prefix" value={display.pricing.pricePrefix} options={['Starting from', 'From', 'Starting at']} onChange={(value) => update('pricing', { pricePrefix: value })} />
-            <Toggle label="Enable Cashback" checked={display.cashback.enabled} onChange={(value) => update('cashback', { enabled: value })} />
-            <Field label="Cashback Amount" type="number" min="0" value={display.cashback.amount} onChange={(value) => update('cashback', { amount: value })} />
-            <Field label="Cashback Label" value={display.cashback.label} onChange={(value) => update('cashback', { label: value })} />
-            <Field label="Badge Color" type="color" value={display.cashback.badgeColor} onChange={(value) => update('cashback', { badgeColor: value })} />
-          </div>
-          <Visibility section={display.cashback} update={(changes) => update('cashback', changes)} />
-          <div className="display-editor-grid">
-            <Toggle label="Enable Rating" checked={display.rating.enabled} onChange={(value) => update('rating', { enabled: value })} />
-            <Field label="Rating Value" type="number" min="0" step=".1" value={display.rating.value} onChange={(value) => update('rating', { value })} />
-            <Field label="Review Count" type="number" min="0" value={display.rating.reviewCount} onChange={(value) => update('rating', { reviewCount: value })} />
-          </div>
-          <Visibility section={display.rating} update={(changes) => update('rating', changes)} />
-        </>}
-
-        {activeTab === 'Hero' && <>
-          <div className="display-editor-grid">
-            <Field label="Hero Image URL" value={display.media.heroImage} onChange={(value) => update('media', { heroImage: value })} />
-            <Field label="Hero Badge" value={display.media.heroBadge} onChange={(value) => update('media', { heroBadge: value })} />
-            <Toggle label="Verified" checked={display.verified.enabled} onChange={(value) => update('verified', { enabled: value })} />
-            <Field label="Verified Badge Label" value={display.verified.label} onChange={(value) => update('verified', { label: value })} />
-          </div>
-          <Visibility section={display.verified} update={(changes) => update('verified', changes)} />
-          <ItemsEditor title="Gallery Images" type="image" items={display.media.gallery} fields={['title', 'url', 'enabled']} onChange={(gallery) => update('media', { gallery })} />
-        </>}
-
-        {activeTab === 'Features' && <>
-          <Visibility section={display.featureChips} update={(changes) => update('featureChips', changes)} />
-          <ItemsEditor title="Feature Chips" items={display.featureChips.items} type="feature" fields={['title', 'icon', 'enabled']} onChange={(items) => update('featureChips', { items })} />
-          <Visibility section={display.quickStats} update={(changes) => update('quickStats', changes)} />
-          <ItemsEditor title="Quick Stats" items={display.quickStats.items} type="stat" onChange={(items) => update('quickStats', { items })} />
-          <Visibility section={display.amenities} update={(changes) => update('amenities', changes)} />
-          <ItemsEditor title="Amenities" items={display.amenities.items} type="amenity" fields={['title', 'enabled']} onChange={(items) => update('amenities', { items })} />
-        </>}
-
-        {activeTab === 'Documents' && <>
-          <Visibility section={display.documents} update={(changes) => update('documents', changes)} />
-          <ItemsEditor title="Verified Documents" items={display.documents.items} type="document" fields={['title', 'url', 'type', 'verified', 'showOnDetails', 'enabled']} onChange={(items) => update('documents', { items })} />
-          <p className="display-editor-note">File uploads remain available in the existing Media &amp; Documents manager. This tab controls document presentation and visibility.</p>
-        </>}
-
-        {activeTab === 'Location' && <>
-          <div className="display-editor-grid">
-            <Toggle label="Enable Map" checked={display.map.enabled} onChange={(value) => update('map', { enabled: value })} />
-            <Field label="Latitude" type="number" step=".000001" value={display.map.latitude} onChange={(value) => update('map', { latitude: value })} />
-            <Field label="Longitude" type="number" step=".000001" value={display.map.longitude} onChange={(value) => update('map', { longitude: value })} />
-            <Field label="Address" value={display.map.address} onChange={(value) => update('map', { address: value })} />
-            <Field label="Google Maps Link" value={display.map.googleMapsLink} onChange={(value) => update('map', { googleMapsLink: value })} />
-            <Field label="Directions Link" value={display.map.directionsLink} onChange={(value) => update('map', { directionsLink: value })} />
-          </div>
-          <Visibility section={display.map} update={(changes) => update('map', changes)} />
-        </>}
-
-        {activeTab === 'Visibility' && <>
-          {['featureChips', 'quickStats', 'overview', 'amenities', 'documents', 'map', 'trust'].map((key) => (
-            <div className="display-visibility-row" key={key}><strong>{key.replace(/([A-Z])/g, ' $1')}</strong><Visibility section={display[key]} update={(changes) => update(key, changes)} /></div>
-          ))}
-          <Field label="Display Order (comma separated section keys)" value={display.visibility.displayOrder.join(', ')} onChange={(value) => update('visibility', { displayOrder: value.split(',').map((item) => item.trim()).filter(Boolean) })} />
-          <div className="display-editor-grid">
-            <Toggle label="Show View Details" checked={display.actions.showViewDetails} onChange={(value) => update('actions', { showViewDetails: value })} />
-            <Toggle label="Show Favourite" checked={display.actions.showFavourite} onChange={(value) => update('actions', { showFavourite: value })} />
-            <Toggle label="Show Share" checked={display.actions.showShare} onChange={(value) => update('actions', { showShare: value })} />
-            <Toggle label="Show Call" checked={display.actions.showCall} onChange={(value) => update('actions', { showCall: value })} />
-            <Toggle label="Show View on Map" checked={display.actions.showMap} onChange={(value) => update('actions', { showMap: value })} />
-            <Toggle label="Show Book Site Visit" checked={display.actions.showBookVisit} onChange={(value) => update('actions', { showBookVisit: value })} />
-            <Toggle label="Show View Layout" checked={display.actions.showViewLayout} onChange={(value) => update('actions', { showViewLayout: value })} />
-            <Field label="View Details Label" value={display.actions.viewDetailsLabel} onChange={(value) => update('actions', { viewDetailsLabel: value })} />
-            <Field label="Call Label" value={display.actions.callLabel} onChange={(value) => update('actions', { callLabel: value })} />
-            <Field label="Map Label" value={display.actions.mapLabel} onChange={(value) => update('actions', { mapLabel: value })} />
-            <Field label="Book Visit Label" value={display.actions.bookVisitLabel} onChange={(value) => update('actions', { bookVisitLabel: value })} />
-            <Field label="View Layout Label" value={display.actions.viewLayoutLabel} onChange={(value) => update('actions', { viewLayoutLabel: value })} />
-          </div>
-        </>}
-
-        {activeTab === 'Advanced' && <>
-          <Visibility section={display.trust} update={(changes) => update('trust', changes)} />
-          <ItemsEditor title="Trust Information" items={display.trust.items} type="trust" onChange={(items) => update('trust', { items })} />
-          <div className="display-editor-grid"><Field label="Call Number" value={display.actions.callNumber} onChange={(value) => update('actions', { callNumber: value })} /></div>
-        </>}
-      </div>
-    </section>
-  );
+          <div className="v2-amenity-section-title">Existing Amenities:</div>
+          {amenities.length === 0 ? (
+            <div className="v2-amenity-empty">No amenities added yet.</div>
+          ) : (
+            <div className="v2-amenity-list-chips">
+              {amenities.map((item, index) => (
+                <span key={index} className="amenity-chip">
+                  {item}
+                  <button
+                    type="button"
+                    onClick={() => removeAmenity(index)}
+                    aria-label={`Remove ${item}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+      <section className="v2-content-section"><h3>About Project</h3><label className="v2-about-input"><textarea maxLength="2000" value={property.description || ''} placeholder="Tell buyers about the project" onChange={(e) => apply({ ...property, description: e.target.value, display: updateDisplay({ basic: { ...(property.display?.basic || {}), shortDescription: e.target.value }, overview: { ...(property.display?.overview || {}), body: e.target.value } }) })} /><small>{(property.description || '').length}/2000</small></label></section>
+      <section className="v2-content-section" ref={imageSectionRef}><h3>Project Images</h3>{role === 'admin' && property.id && user ? <PropertyMediaDocumentsManager property={property} user={user} onChange={apply} showDocuments={false} onHeroImageUploadReady={setHeroImageUpload} /> : <><label className="v2-add-file"><Plus size={15} /> Add Media<input ref={imageInputRef} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" disabled={Boolean(mediaUploading)} onChange={(e) => { [...(e.target.files || [])].forEach((file) => onMediaUpload?.(file, 'gallery')); e.target.value = ''; }} /></label><div className="v2-image-grid">{gallery.map((url, index) => <figure key={`${url}-${index}`}><img src={url} alt={`Project ${index + 1}`} /><button type="button" onClick={() => apply({ ...property, galleryImages: listOf(property.galleryImages).filter((_, i) => i !== index) })} aria-label="Remove image"><X size={14} /></button></figure>)}</div></>}{mediaError && <p role="alert">{mediaError}</p>}</section>
+        <section className="v2-content-section v2-map-section"><h3>Location & Layout</h3>{field('Complete address', property.completeAddress, (v) => apply({ ...property, completeAddress: v, display: updateDisplay({ map: { ...(property.display?.map || {}), address: v } }) }))}<ProjectLocationPicker latitude={property.latitude ?? property.coords?.[0] ?? ''} longitude={property.longitude ?? property.coords?.[1] ?? ''} layoutPolygon={property.layoutPolygon} highwayName={property.highwayName} highwayDistance={property.highwayDistance} isHighwayTouch={property.isHighwayTouch} autoDetectHighway={autoDetectHighway} onChange={({ latitude, longitude }) => setCoordinates(latitude, longitude)} onHighwayChange={(result) => apply((current) => applyHighwayResult(current, result))} onLayoutChange={(geometry) => apply((current) => ({ ...current, ...geometry }))} /><label className="v2-map-confirmation"><input type="checkbox" checked={Boolean(property.mapMarkerConfirmed)} onChange={(event) => apply((current) => ({ ...current, mapMarkerConfirmed: event.target.checked }))} /> <span>I confirm this marker is the exact project entrance location.</span></label></section>
+      {submitError && <p role="alert">{submitError}</p>}<footer className="sticky-action-bar-bottom"><button type="button" className="btn-secondary" onClick={mode === 'create' ? onReset : onCancel}>Cancel</button><button type="submit" className="btn-primary" disabled={Boolean(mediaUploading || documentUploading)}><Save size={16} /> Save Changes</button></footer>
+    </form>
+    {auditOpen && <div className="v2-audit-backdrop" role="presentation"><section className="v2-audit-modal" role="dialog" aria-modal="true" aria-labelledby="v2-audit-title"><button type="button" className="v2-audit-close" onClick={() => setAuditOpen(false)} aria-label="Close"><X size={18} /></button><h2 id="v2-audit-title">Review Changes</h2>{!audit.hasChanges ? <p>No changes detected.</p> : <>{audit.changed.length > 0 && <div><h3>Changed</h3>{audit.changed.map((x) => <p key={x.label}><strong>{x.label}</strong><span>{x.before} → {x.after}</span></p>)}</div>}{audit.added.length > 0 && <div><h3>Added</h3>{audit.added.map((x) => <p key={x}>{x}</p>)}</div>}{audit.removed.length > 0 && <div><h3>Removed</h3>{audit.removed.map((x) => <p key={x}>{x}</p>)}</div>}</>}<footer><button type="button" className="btn-secondary" onClick={() => setAuditOpen(false)}>Cancel</button><button type="button" className="btn-primary" disabled={!audit.hasChanges || saving} onClick={confirmSave}>{saving ? 'Saving…' : 'Save Changes'}</button></footer></section></div>}
+    <InAppDocumentViewer document={documentViewer} onClose={() => setDocumentViewer(null)} />
+  </section>;
 }

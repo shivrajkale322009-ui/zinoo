@@ -4,7 +4,7 @@ Only work currently required to stabilize the implemented system belongs here.
 
 ## A-001 Verify Firebase deployment parity
 
-- **Objective:** Confirm deployed project `druvio` matches checked-in functions, Firestore rules/indexes, Storage rules, and hosting configuration.
+- **Objective:** Confirm deployed project `flinok` matches checked-in functions, Firestore rules/indexes, Storage rules, and hosting configuration.
 - **Files involved:** `firebase.json`, `.firebaserc`, `firestore.rules`, `firestore.indexes.json`, `storage.rules`, `functions/`.
 - **Dependencies:** Firebase project access and deployment history.
 - **Acceptance criteria:** Differences are listed without destructive deployment; database ID/region/bucket are verified.

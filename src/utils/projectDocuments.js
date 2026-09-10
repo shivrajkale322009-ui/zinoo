@@ -20,6 +20,43 @@ export const PROJECT_DOCUMENT_OPTIONS = Object.entries(PROJECT_DOCUMENT_TYPES).m
 
 export const getProjectDocumentLabel = (type) => PROJECT_DOCUMENT_TYPES[type]?.label || PROJECT_DOCUMENT_TYPES.other.label;
 
+const documentExtensionFromUrl = (value) => {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  try {
+    const pathname = decodeURIComponent(new URL(value).pathname);
+    const fileName = pathname.split('/').pop() || '';
+    return fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
+  } catch {
+    return '';
+  }
+};
+
+const contentTypeForExtension = (extension) => ({
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+}[extension] || '');
+
+export const getProjectDocumentPreviewKind = (document = {}) => {
+  const url = document.url || document.downloadURL || '';
+  if (typeof url !== 'string' || !url.trim()) return 'invalid';
+  const fileName = document.fileName || document.originalFileName || document.name || '';
+  const nameExtension = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
+  const extension = nameExtension || documentExtensionFromUrl(url);
+  const type = `${document.contentType || document.mimeType || document.fileType || extension}`.toLowerCase();
+  if (type.includes('image') || ['png', 'jpg', 'jpeg', 'webp'].includes(type)) return 'image';
+  if (type.includes('pdf') || extension === 'pdf') return 'pdf';
+  if (type.includes('text') || extension === 'txt') return 'text';
+  return 'external';
+};
+
 export const normalizeProjectDocuments = (project) => {
   const projectRecord = project && typeof project === 'object' ? project : {};
   const documents = [projectRecord.documents, projectRecord.projectDocuments, projectRecord.legalDocuments]
@@ -40,7 +77,10 @@ export const normalizeProjectDocuments = (project) => {
             : ''
     }))
     .filter((document) => document.url)
-    .map((document) => ({
+    .map((document) => {
+      const inferredExtension = documentExtensionFromUrl(document.url);
+      const inferredContentType = contentTypeForExtension(inferredExtension);
+      return {
       id: document.id || null,
       type: PROJECT_DOCUMENT_TYPES[document.type] ? document.type : 'other',
       url: document.url,
@@ -50,9 +90,9 @@ export const normalizeProjectDocuments = (project) => {
       displayName: document.displayName || document.title || document.label || '',
       originalFileName: document.originalFileName || document.fileName || document.name || '',
       fileName: document.fileName || document.name || '',
-      fileType: document.fileType || '',
-      contentType: document.contentType || document.mimeType || '',
-      mimeType: document.mimeType || document.contentType || '',
+      fileType: document.fileType || inferredExtension.toUpperCase(),
+      contentType: document.contentType || document.mimeType || inferredContentType,
+      mimeType: document.mimeType || document.contentType || inferredContentType,
       size: Number(document.size ?? document.fileSize) || 0,
       fileSize: Number(document.fileSize ?? document.size) || 0,
       displayOrder: Number.isFinite(Number(document.displayOrder)) ? Number(document.displayOrder) : 0,
@@ -68,7 +108,8 @@ export const normalizeProjectDocuments = (project) => {
       lastUpdated: document.lastUpdated || document.updatedAt || null,
       reviewedAt: document.reviewedAt || document.verifiedAt || null,
       reviewedBy: document.reviewedBy || null
-    }));
+    };
+    });
 
   if (!normalized.some((document) => document.type === 'approved_layout') && typeof projectRecord.layoutPlanUrl === 'string' && projectRecord.layoutPlanUrl.trim()) {
     normalized.push({

@@ -1,6 +1,6 @@
-/* Druvio Premium Map Screen Stylesheet - Google Earth & Glassmorphism Theme */
+/* Zinoo Premium Map Screen Stylesheet - Google Earth & Glassmorphism Theme */
 
-.druvio-map-screen-wrapper {
+.zinoo-map-screen-wrapper {
   position: relative;
   width: 100%;
   height: 100%;
@@ -8,13 +8,16 @@
   background-color: #0c1512;
 }
 
-.druvio-google-map {
+.zinoo-google-map {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   background-color: #0c1512;
 }
+
+/* Markers remain fixed to their geographic position. Camera movement provides
+   the interaction feedback rather than a pin lift, bounce, or scale effect. */
 
 /* Glassmorphism Utility class */
 .glass {
@@ -42,7 +45,8 @@
 
 .map-top-left-controls,
 .map-top-right-controls,
-.map-bottom-right-controls {
+.map-bottom-right-controls,
+.map-left-controls {
   position: absolute;
   display: flex;
   gap: 8px;
@@ -52,9 +56,100 @@
 .map-top-left-controls { top: 0; left: 0; }
 .map-top-right-controls { top: 76px; right: 0; flex-direction: column; }
 .map-bottom-right-controls { right: 0; bottom: 18px; flex-direction: column; }
+.map-left-controls { top: 76px; left: 0; flex-direction: column; gap: 12px; }
+
+/* Compact, familiar map zoom control. */
+.map-zoom-control {
+  gap: 0;
+  overflow: hidden;
+  width: 40px;
+  border: 1px solid #d9e0e8;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, .18);
+}
+
+.map-zoom-button {
+  display: grid;
+  width: 38px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: #fff;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.map-zoom-button + .map-zoom-button { border-top: 1px solid #e5e7eb; }
+.map-zoom-button:hover { background: #f8fafc; color: #4b5563; }
+.map-zoom-button:focus-visible { outline: 2px solid #2563eb; outline-offset: -2px; }
+
+@media (max-width: 768px) {
+  .map-floating-overlay-container {
+    inset: 0;
+  }
+
+  .map-left-controls {
+    top: calc(max(16px, env(safe-area-inset-top)) + 62px);
+    left: 16px;
+    gap: 11px;
+  }
+
+  .map-left-controls .floating-circle-btn {
+    width: 42px;
+    height: 42px;
+    border: 1px solid #e8eef6;
+    border-radius: 13px;
+    background: rgba(255, 255, 255, .97);
+    color: #64748b;
+    box-shadow: 0 5px 14px rgba(15, 23, 42, .075);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+}
 
 .map-floating-overlay-container * {
   pointer-events: auto; /* Enable inputs */
+}
+
+/* Zillow-style base-map selector: a clean default map with satellite on demand. */
+.map-type-switcher {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #d9e2ef;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(15, 23, 42, .16);
+}
+
+.map-type-switcher button {
+  display: grid;
+  width: 42px;
+  min-height: 42px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-right: 1px solid #e5eaf1;
+  background: #fff;
+  color: #344054;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.map-type-switcher button:last-child { border-right: 0; }
+.map-type-switcher button:hover { background: #f5f8fc; }
+.map-type-switcher button.active { background: #0b57d0; color: #fff; }
+.map-type-switcher button:focus-visible { outline: 3px solid rgba(11, 87, 208, .28); outline-offset: -3px; }
+
+@media (max-width: 768px) {
+  .map-type-switcher { bottom: calc(94px + env(safe-area-inset-bottom)); left: 16px; }
+  .map-type-switcher button { width: 42px; min-height: 42px; }
 }
 
 /* Brand & Search Bar Row */
@@ -158,7 +253,7 @@
   background: rgba(15, 23, 42, 0.95);
   backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
+  border-radius: 0;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
   max-height: 250px;
   overflow-y: auto;
@@ -227,8 +322,12 @@
 @media (max-width: 768px) {
   .map-floating-overlay-container { top: max(10px, env(safe-area-inset-top)); right: 10px; left: 10px; }
   .map-top-right-controls { top: 72px; right: 0; gap: 7px; }
-  .map-bottom-right-controls { right: 0; bottom: 72px; gap: 7px; }
-  .floating-circle-btn { width: 42px; height: 42px; border-radius: 12px; }
+  .map-bottom-right-controls {
+    right: 16px;
+    bottom: calc(94px + env(safe-area-inset-bottom));
+    gap: 7px;
+  }
+  .floating-circle-btn { width: 42px; height: 42px; border-radius: 0; }
 }
 
 /* Popdown Panels */
@@ -429,7 +528,7 @@
 .layer-toggle-row strong {
   color: #0f172a;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .layer-toggle-row small {
@@ -718,7 +817,10 @@
   }
 
   .map-top-right-controls { top: 72px; }
-  .map-bottom-right-controls { right: 0; bottom: 72px; }
+  .map-bottom-right-controls {
+    right: 16px;
+    bottom: calc(94px + env(safe-area-inset-bottom));
+  }
 
   .brand-badge {
     padding: 8px 10px;
@@ -766,105 +868,162 @@
 
   .map-layout-editor-actions { width: 100%; flex-wrap: wrap; }
 }
-.druvio-project-marker {
+.zinoo-project-marker {
   position: relative;
-  display: grid;
-  min-width: 72px;
-  max-width: 110px;
-  gap: 2px;
-  padding: 6px 8px 7px;
-  border: 1px solid #10b981;
-  border-radius: 9px;
+  display: inline-flex;
+  box-sizing: border-box;
+  min-width: 40px;
+  min-height: 25px;
+  padding: 4px 6px 5px;
+  border: 1px solid #3b82f6;
+  border-radius: 7px;
   background: #fff;
   color: #0f172a;
-  box-shadow: 0 6px 14px rgba(15, 23, 42, .22);
-  font: 650 11px/1.2 Arial, sans-serif;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, .22);
+  font: 600 10px/1.2 var(--font-ui);
   text-align: left;
-  transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+  align-items: center;
+  justify-content: center;
+  transition: box-shadow .3s ease, background .3s ease;
 }
 
-.druvio-project-marker-selected {
-  border: 2px solid #059669;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, .22), 0 10px 24px rgba(15, 23, 42, .3);
-  transform: translateY(-3px) scale(1.08);
-  animation: druvio-marker-select .22s ease-out;
+.zinoo-project-marker-selected {
+  border: 2px solid #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .22), 0 10px 24px rgba(15, 23, 42, .3);
 }
 
-@keyframes druvio-marker-select { from { transform: translateY(-1px) scale(1); } to { transform: translateY(-3px) scale(1.08); } }
-
-.druvio-project-marker-pin {
+.zinoo-project-marker-pin {
   min-width: 18px;
   width: 18px;
   height: 18px;
   padding: 0;
-  border: 2px solid #fff;
-  border-radius: 50% 50% 50% 0;
+  border: 0;
+  border-radius: 0;
   color: transparent;
-  background: #059669;
-  box-shadow: 0 4px 10px rgba(15, 23, 42, .35);
-  transform: rotate(-45deg);
+  background: transparent;
+  box-shadow: none;
+  transform: none;
 }
-.druvio-project-marker-pin::before { content: ''; position: absolute; top: 4px; left: 4px; width: 6px; height: 6px; border-radius: 50%; background: #fff; }
-.druvio-project-marker-pin::after { display: none; }
-.druvio-project-marker-cluster { min-width: 18px; width: 18px; height: 18px; padding: 0; border: 2px solid #fff; border-radius: 50% 50% 50% 0; color: transparent; background: #059669; box-shadow: 0 4px 10px rgba(15,23,42,.35); transform: rotate(-45deg); }
-.druvio-project-marker-cluster::before { content: ''; position: absolute; top: 4px; left: 4px; width: 6px; height: 6px; border-radius: 50%; background: #fff; }
-.druvio-project-marker-cluster::after { display: none; }
-.druvio-project-marker-full-label { min-width: 72px; max-width: 110px; }
-.druvio-project-marker-name { overflow: hidden; color: #0f172a; font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.druvio-project-marker-price { overflow: hidden; color: #047857; font-size: 12px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-.druvio-project-marker-price-only { min-width: auto; padding: 5px 8px 6px; color: #047857; font-size: 11px; font-weight: 800; }
-.druvio-project-marker:focus-visible { outline: 3px solid #facc15; outline-offset: 3px; }
+.zinoo-project-marker-pin::before { display: none; }
+.zinoo-project-marker-pin::after { display: none; }
+.zinoo-project-marker-cluster { min-width: 24px; width: 24px; height: 30px; padding: 0; border: 0; border-radius: 0; color: transparent; background: transparent; box-shadow: none; transform: none; }
+.zinoo-project-marker-cluster::before { display: none; }
+.zinoo-project-marker-cluster::after { display: none; }
+.zinoo-location-pin-icon { display: block; width: 18px; height: 18px; overflow: visible; }
+.zinoo-location-pin-icon circle { fill: #4da3ff; stroke: #fff; stroke-width: 1.75; vector-effect: non-scaling-stroke; }
+.zinoo-project-marker-full-label { width: max-content; min-width: 40px; min-height: 25px; height: auto; max-width: none; padding: 4px 6px 5px; }
+.zinoo-project-marker-name { overflow: hidden; color: #0f172a; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.zinoo-project-marker-price { overflow: hidden; color: #2563eb; font-family: var(--font-display); font-size: 11px; font-weight: 500; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+.zinoo-project-marker-price-only { width: max-content; min-width: 40px; min-height: 25px; height: auto; padding: 4px 6px 5px; color: #2563eb; font-family: var(--font-display); font-size: 11px; font-weight: 500; line-height: 1.1; white-space: nowrap; }
+.zinoo-project-marker:focus-visible { outline: 3px solid #facc15; outline-offset: 3px; }
 
-.druvio-map-project-popup {
+.zinoo-map-project-popup {
   position: absolute;
   z-index: 6;
   display: grid;
-  grid-template-columns: 94px minmax(170px, 1fr);
-  width: 258px;
-  min-height: 128px;
+  grid-template-columns: 88px minmax(0, 1fr);
+  width: 288px;
+  min-height: 160px;
   overflow: visible;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  background: #fff;
-  box-shadow: 0 14px 34px rgba(15, 23, 42, .22);
+  border: 1px solid var(--ds-border, #e2e8f0);
+  border-radius: var(--ds-radius, 16px);
+  background: var(--ds-surface, #fff);
+  box-shadow: var(--ds-elevation-raised, 0 4px 12px rgba(15, 23, 42, .08));
   transform-origin: left bottom;
-  animation: druvio-popup-in .16s ease-out;
+  animation: zinoo-popup-in 220ms ease-out;
 }
-.druvio-map-project-popup.flip-left { transform-origin: right bottom; }
-.druvio-map-project-popup.flip-below { transform-origin: left top; }
-.druvio-map-project-popup::after { content: ''; position: absolute; right: 100%; bottom: 18px; border: 8px solid transparent; border-right-color: #fff; }
-.druvio-map-project-popup.flip-left::after { right: auto; left: 100%; border-right-color: transparent; border-left-color: #fff; }
-.druvio-map-project-popup > img { width: 94px; height: 128px; border-radius: 15px 0 0 15px; object-fit: cover; }
-.druvio-map-project-popup-content { display: grid; align-content: center; gap: 5px; padding: 12px; color: #0f172a; }
-.druvio-map-project-popup h2 { margin: 0; overflow: hidden; color: #020617; font: 750 15px/1.25 var(--font-display, Arial, sans-serif); text-overflow: ellipsis; white-space: nowrap; }
-.druvio-map-project-popup p, .druvio-map-project-popup small { margin: 0; overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.druvio-map-project-popup strong { color: #047857; font-size: 13px; }
-.druvio-map-popup-actions { display: grid; grid-template-columns: 1fr 28px 28px; gap: 6px; margin-top: 3px; }.druvio-map-popup-actions button, .druvio-map-popup-actions a { display: grid; min-height: 28px; place-items: center; padding: 0; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; color: #475569; font: 700 11px/1 var(--font-body); cursor: pointer; text-decoration: none; }.druvio-map-popup-actions .druvio-map-popup-details { border: 0; background: #059669; color: #fff; }.druvio-map-popup-actions .druvio-map-popup-details:hover { background: #047857; }.druvio-map-popup-close { position: absolute; z-index: 2; top: 7px; right: 7px; display: grid; width: 23px; height: 23px; place-items: center; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.92); color: #334155; font-size: 17px; cursor: pointer; }
-@keyframes druvio-popup-in { from { opacity: 0; scale: .96; } to { opacity: 1; scale: 1; } }
-@media (max-width: 768px) { .druvio-map-project-popup { grid-template-columns: 78px minmax(150px, 1fr); width: min(258px, calc(100vw - 44px)); }.druvio-map-project-popup > img { width: 78px; height: 120px; }.druvio-map-project-popup-content { padding: 10px; } }
+.zinoo-map-project-popup.flip-left { transform-origin: right bottom; }
+.zinoo-map-project-popup.flip-below { transform-origin: left top; }
+.zinoo-map-project-popup::after { content: ''; position: absolute; right: 100%; bottom: var(--ds-space-4, 16px); border: 8px solid transparent; border-right-color: var(--ds-surface, #fff); }
+.zinoo-map-project-popup.flip-left::after { right: auto; left: 100%; border-right-color: transparent; border-left-color: var(--ds-surface, #fff); }
+.zinoo-map-project-popup.flip-below::after { top: var(--ds-space-4, 16px); bottom: auto; }
+.zinoo-map-project-popup > img { align-self: stretch; width: 88px; height: 100%; min-height: 160px; border-radius: 15px 0 0 15px; object-fit: cover; }
+.zinoo-map-project-popup-content { display: grid; min-width: 0; align-content: center; gap: var(--ds-space-1, 4px); padding: var(--ds-space-3, 12px); color: var(--ds-text, #0f172a); }
+.zinoo-map-project-popup h2 { display: flex; min-width: 0; align-items: center; gap: 5px; margin: 0; padding-right: 44px; overflow: hidden; color: var(--ds-text, #0f172a); font: 700 15px/1.25 var(--font-ui); letter-spacing: -.015em; }
+.zinoo-map-project-verified-badge { flex: 0 0 15px; width: 15px; height: 15px; }
+.zinoo-map-project-popup h2 > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zinoo-map-project-title-link { color: inherit; text-decoration: none; }
+.zinoo-map-project-title-link:hover { color: var(--ds-trust, #1d4ed8); text-decoration: underline; text-underline-offset: 2px; }
+.zinoo-map-project-title-link:focus-visible { border-radius: 2px; }
+.zinoo-map-project-popup p,
+.zinoo-map-project-popup small { margin: 0; overflow: hidden; color: var(--ds-text-secondary, #475569); font-family: var(--font-ui); font-size: 11px; font-weight: 500; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.zinoo-map-project-popup .zinoo-map-project-location { color: var(--ds-neutral-600, #475569); }
+.zinoo-map-project-popup .zinoo-map-project-price { color: var(--ds-cashback, #15803d); font-size: 16px; line-height: 1.2; }
+.zinoo-map-popup-actions { display: grid; grid-template-columns: minmax(0, 1fr) 44px 44px; gap: var(--ds-space-2, 8px); margin-top: var(--ds-space-1, 4px); }
+.zinoo-map-popup-actions button,
+.zinoo-map-popup-actions a { display: grid; min-width: 0; min-height: 44px; place-items: center; padding: 0; border: 1px solid var(--ds-border-strong, #cbd5e1); border-radius: var(--ds-radius-small, 8px); background: var(--ds-surface, #fff); color: var(--ds-neutral-600, #475569); font: 700 12px/1.3 var(--font-body); cursor: pointer; text-decoration: none; }
+.zinoo-map-popup-actions .zinoo-map-popup-details { border-color: var(--ds-trust, #1d4ed8); background: var(--ds-trust, #1d4ed8); color: var(--ds-white, #fff); }
+.zinoo-map-popup-actions .zinoo-map-popup-details:hover { border-color: var(--ds-trust-hover, #1e40af); background: var(--ds-trust-hover, #1e40af); }
+.zinoo-map-popup-share { grid-column: 3; }
+.zinoo-map-popup-icon-action svg { width: 18px; height: 18px; }
+.zinoo-map-popup-close { position: absolute; z-index: 2; top: var(--ds-space-2, 8px); right: var(--ds-space-2, 8px); display: grid; width: 44px; height: 44px; place-items: center; padding: 0; border: 1px solid var(--ds-border, #e2e8f0); border-radius: 50%; background: rgba(255,255,255,.96); color: var(--ds-neutral-700, #334155); font: 500 20px/1 var(--font-ui); cursor: pointer; }
+@keyframes zinoo-popup-in { from { opacity: 0; scale: .98; } to { opacity: 1; scale: 1; } }
+@media (max-width: 768px) { .zinoo-map-project-popup { grid-template-columns: 80px minmax(0, 1fr); width: min(288px, calc(100vw - 32px)); }.zinoo-map-project-popup > img { width: 80px; }.zinoo-map-project-popup-content { padding: 10px; } }
+@media (prefers-reduced-motion: reduce) { .zinoo-map-project-popup { animation: none; } }
 
-.druvio-project-marker::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  border: 7px solid transparent;
-  border-top-color: #fff;
-  transform: translateX(-50%);
+.zinoo-project-marker-anchor {
+  display: flex;
+  width: max-content;
+  flex-direction: column;
+  align-items: center;
+  overflow: visible;
 }
+.zinoo-project-marker-tail {
+  display: block;
+  width: 10px;
+  height: 5px;
+  background: #fff;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+.zinoo-project-marker.zinoo-project-marker-pin {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+.zinoo-project-marker.zinoo-project-marker-pin::before { display: none; }
 
-.druvio-cluster-marker {
+.zinoo-property-cluster-marker {
   display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border: 3px solid #d1fae5;
+  width: 44px;
+  height: 44px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid #dbeafe;
   border-radius: 50%;
-  background: #059669;
+  background: #2563eb;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, .30);
   color: #fff;
-  box-shadow: 0 6px 16px rgba(5, 150, 105, .28);
-  font: 800 12px/1 Arial, sans-serif;
+  font: 700 13px/1 var(--font-ui);
 }
+.zinoo-property-cluster-marker-md { width: 52px; height: 52px; font-size: 14px; }
+.zinoo-property-cluster-marker-lg { width: 60px; height: 60px; font-size: 15px; }
+.zinoo-property-cluster-marker-xl { width: 68px; height: 68px; font-size: 16px; }
+.zinoo-property-cluster-marker:focus-visible { outline: 3px solid #facc15; outline-offset: 3px; }
+
+.zinoo-cluster-marker {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 2px solid #dbeafe;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, .28);
+  font: 700 10px/1 var(--font-ui);
+}
+
+@media (max-width: 768px) {
+  .zinoo-cluster-marker {
+    width: 20px;
+    height: 20px;
+    font-size: 9px;
+  }
+}
+
 .map-availability-state {
   position: absolute;
   inset: 0;

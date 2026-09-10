@@ -56,7 +56,7 @@
 
 ## Styling
 
-- Treat `src/styles/druvio-design-system-v1.css` as final authority.
+- Treat `src/styles/zinoo-design-system-v1.css` as final authority.
 - Use `--ds-*` tokens and shared component classes first.
 - Avoid inline styles except dynamic geometry/order/value cases that cannot be expressed cleanly by class.
 - Use Lucide outline icons; do not mix icon systems.

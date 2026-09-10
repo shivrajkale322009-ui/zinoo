@@ -3,7 +3,8 @@ import test from 'node:test';
 import {
   createPropertyDisplayModel,
   getPropertyDisplayModel,
-  withPropertyDisplayModel
+  withPropertyDisplayModel,
+  withPropertyStartingPrice
 } from './propertyDisplayModel.js';
 
 test('creates a nested display model from legacy project fields', () => {
@@ -38,6 +39,99 @@ test('configured values override legacy fields and preserve editable arrays', ()
   assert.equal(display.featureChips.items[0].title, 'Bank Loan Available');
 });
 
+test('admin-configured verified name badge is preserved in the display model', () => {
+  const display = getPropertyDisplayModel({
+    name: 'Verified Meadows',
+    display: { verified: { showNameBadge: true } }
+  });
+
+  assert.equal(display.verified.showNameBadge, true);
+});
+
+test('name badge stays enabled when the legacy verified flag is off', () => {
+  const display = getPropertyDisplayModel({
+    name: 'Admin-marked Project',
+    verified: false,
+    showVerifiedNameBadge: true
+  });
+
+  assert.equal(display.verified.enabled, false);
+  assert.equal(display.verified.showNameBadge, true);
+});
+
+test('admin display amenities cannot replace seller-selected project amenities', () => {
+  const display = getPropertyDisplayModel({
+    amenities: ['Garden'],
+    display: {
+      amenities: {
+        showOnDetails: true,
+        items: [{ id: 'admin-pool', title: 'Swimming Pool', enabled: true }]
+      }
+    }
+  });
+  assert.deepEqual(display.amenities.items.map((item) => item.title), ['Garden']);
+});
+
+test('projects with no seller-selected amenities do not inherit configured defaults', () => {
+  const display = getPropertyDisplayModel({
+    amenities: [],
+    display: { amenities: { items: [{ id: 'master', title: 'Clubhouse', enabled: true }] } }
+  });
+  assert.deepEqual(display.amenities.items, []);
+});
+
+test('admin authoritative name replaces a stale nested project name', () => {
+  const persisted = withPropertyDisplayModel({
+    name: 'New Project',
+    status: 'active',
+    display: {
+      basic: {
+        projectName: 'Old Project',
+        shortTitle: 'Old Project'
+      }
+    }
+  }, {
+    authoritativeName: 'New Project',
+    previousName: 'Old Project'
+  });
+
+  assert.equal(persisted.name, 'New Project');
+  assert.equal(persisted.display.basic.projectName, 'New Project');
+  assert.equal(persisted.display.basic.shortTitle, 'New Project');
+  assert.equal(persisted.shortTitle, 'New Project');
+  assert.equal(persisted.status, 'active');
+});
+
+test('admin authoritative name preserves a customized short title', () => {
+  const persisted = withPropertyDisplayModel({
+    name: 'New Project',
+    display: {
+      basic: {
+        projectName: 'Old Project',
+        shortTitle: 'OP Special'
+      }
+    }
+  }, {
+    authoritativeName: 'New Project',
+    previousName: 'Old Project'
+  });
+
+  assert.equal(persisted.name, 'New Project');
+  assert.equal(persisted.display.basic.projectName, 'New Project');
+  assert.equal(persisted.display.basic.shortTitle, 'OP Special');
+  assert.equal(persisted.shortTitle, 'OP Special');
+});
+
+test('ordinary normalization keeps configured name precedence', () => {
+  const persisted = withPropertyDisplayModel({
+    name: 'Legacy name',
+    display: { basic: { projectName: 'Configured name' } }
+  });
+
+  assert.equal(persisted.name, 'Configured name');
+  assert.equal(persisted.display.basic.projectName, 'Configured name');
+});
+
 test('disabled cashback is synchronized to zero in legacy compatibility fields', () => {
   const project = withPropertyDisplayModel({
     name: 'No offer',
@@ -56,4 +150,72 @@ test('disabled cashback is synchronized to zero in legacy compatibility fields',
   assert.equal(project.display.cashback.enabled, false);
   assert.equal(project.cashbackAmount, 0);
   assert.equal(project.cashbackPerGuntha, 0);
+});
+
+test('admin price changes replace stale display pricing before persistence', () => {
+  const original = {
+    startingPrice: 1000000,
+    priceFrom: 1000000,
+    display: {
+      pricing: {
+        startingPrice: 1000000,
+        pricePrefix: 'Starting from'
+      }
+    }
+  };
+
+  const edited = withPropertyStartingPrice(original, '1250000');
+  const persisted = withPropertyDisplayModel(edited);
+
+  assert.equal(persisted.startingPrice, 1250000);
+  assert.equal(persisted.priceFrom, 1250000);
+  assert.equal(persisted.display.pricing.startingPrice, 1250000);
+});
+
+test('property normalization preserves document file metadata', () => {
+  const project = withPropertyDisplayModel({
+    documents: [{
+      id: 'layout-1',
+      type: 'approved_layout',
+      displayName: 'Approved Layout',
+      url: 'https://storage.example/layout.pdf',
+      fileName: 'layout.pdf',
+      fileType: 'PDF',
+      contentType: 'application/pdf',
+      storagePath: 'project-documents/layout.pdf',
+      status: 'verified'
+    }]
+  });
+
+  assert.equal(project.documents[0].fileName, 'layout.pdf');
+  assert.equal(project.documents[0].fileType, 'PDF');
+  assert.equal(project.documents[0].contentType, 'application/pdf');
+  assert.equal(project.documents[0].storagePath, 'project-documents/layout.pdf');
+});
+
+test('property normalization omits an absent optional RERA number', () => {
+  const withoutRera = withPropertyDisplayModel({ name: 'Optional RERA project' });
+  const withRera = withPropertyDisplayModel({ name: 'Registered project', reraNumber: 'P52100012345' });
+
+  assert.equal(Object.hasOwn(withoutRera, 'reraNumber'), false);
+  assert.equal(withRera.reraNumber, 'P52100012345');
+});
+
+test('canonical documents survive stale display configuration during editor round trips', () => {
+  const project = withPropertyDisplayModel({
+    documents: [{
+      id: 'new-document', type: 'other', displayName: 'Renamed canonical document',
+      url: 'https://storage.example/new.pdf', fileName: 'new.pdf', status: 'pending', storagePath: 'project-documents/new.pdf'
+    }],
+    display: {
+      documents: {
+        items: [{ id: 'old-document', title: 'Removed legacy document', url: 'https://storage.example/old.pdf', verified: true }]
+      }
+    }
+  });
+
+  assert.equal(project.display.documents.items.length, 1);
+  assert.equal(project.display.documents.items[0].id, 'new-document');
+  assert.equal(project.display.documents.items[0].title, 'Renamed canonical document');
+  assert.equal(project.documents[0].storagePath, 'project-documents/new.pdf');
 });

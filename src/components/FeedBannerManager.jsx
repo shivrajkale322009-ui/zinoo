@@ -53,7 +53,7 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
       dirty: true,
       isActive: true
     };
-    console.info('[Druvio Feed] Crop complete; banner staged.', {
+    console.info('[Zinoo Feed] Crop complete; banner staged.', {
       uid: auth.currentUser?.uid || null,
       file: { name: file.name, size: file.size, type: file.type },
       target: index === null ? 'new banner' : `replace banner ${index + 1}`
@@ -93,7 +93,7 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
     try {
       const authenticatedUser = auth.currentUser;
       if (!authenticatedUser || authenticatedUser.uid !== user?.uid) {
-        console.error('[Druvio Feed] Upload blocked: authenticated admin session is unavailable.', {
+        console.error('[Zinoo Feed] Upload blocked: authenticated admin session is unavailable.', {
           currentUser: authenticatedUser ? { uid: authenticatedUser.uid, email: authenticatedUser.email } : null,
           panelUserUid: user?.uid || null,
           projectId: firebaseProjectId,
@@ -115,7 +115,7 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
           reader.onerror = () => reject(reader.error || new Error('Unable to read the banner image.'));
           reader.readAsDataURL(item.file);
         });
-        console.info('[Druvio Feed] Starting banner upload.', {
+        console.info('[Zinoo Feed] Starting banner upload.', {
           currentUser: { uid: authenticatedUser.uid, email: authenticatedUser.email },
           projectId: firebaseProjectId,
           storageBucket: storage.app.options.storageBucket,
@@ -124,7 +124,7 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
           metadata: { contentType: item.file.type, uploadedBy: authenticatedUser.uid }
         });
         const result = await manageAsset({ action: 'upload', contentType: item.file.type, data: base64 });
-        console.info('[Druvio Feed] Cloud Function upload succeeded.', {
+        console.info('[Zinoo Feed] Cloud Function upload succeeded.', {
           uid: authenticatedUser.uid,
           storagePath: result.data.storagePath,
           hasDownloadUrl: Boolean(result.data.imageUrl)
@@ -158,14 +158,14 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
         });
       });
       saved.filter((item) => !retainedIds.has(item.id)).forEach((item) => batch.delete(doc(db, 'feed', item.id)));
-      console.info('[Druvio Feed] Starting Firestore feed batch.', {
+      console.info('[Zinoo Feed] Starting Firestore feed batch.', {
         uid: authenticatedUser.uid,
         databaseId: db._databaseId?.database || 'default',
         writes: finalBanners.length,
         deletes: saved.filter((item) => !retainedIds.has(item.id)).length
       });
       await batch.commit();
-      console.info('[Druvio Feed] Firestore feed batch succeeded.', {
+      console.info('[Zinoo Feed] Firestore feed batch succeeded.', {
         uid: authenticatedUser.uid,
         bannerCount: committedBanners.length
       });
@@ -181,7 +181,7 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
       onSuccess('Feed banners saved successfully.');
     } catch (error) {
       await Promise.allSettled(uploaded.map((path) => manageAsset({ action: 'delete', storagePath: path })));
-      console.error('[Druvio Feed] Save failed.', {
+      console.error('[Zinoo Feed] Save failed.', {
         currentUser: auth.currentUser ? { uid: auth.currentUser.uid, email: auth.currentUser.email } : null,
         projectId: firebaseProjectId,
         storageBucket: storage.app.options.storageBucket,

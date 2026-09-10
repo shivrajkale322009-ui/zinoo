@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { auth, db } from '../firebaseConfig';
-import { LogOut, Moon, Sun, MessageCircle, User, ChevronDown, Store, Home } from 'lucide-react';
+import { db } from '../firebaseConfig';
+import { logoutUser } from '../services/authSessionService';
+import { LogOut, Moon, Sun, MessageCircle, User, ChevronDown, Store, Home, Settings } from 'lucide-react';
 import EditProfileModal from './EditProfileModal';
 import BecomeSellerModal from './BecomeSellerModal';
+import SettingsModal from './SettingsModal';
+import UserAvatar from './UserAvatar';
 
 function ProfileDropdown({
   user,
@@ -15,17 +17,20 @@ function ProfileDropdown({
   onViewChange,
   onBackToAdmin,
   selectedSeller,
-  hideChevron = false
+  onCustomerSupport,
+  triggerProfile,
+  triggerUseSellerDefault = false,
+  hideChevron = false,
+  onAccountDeleted
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showBecomeSellerModal, setShowBecomeSellerModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [sellerRequestStatus, setSellerRequestStatus] = useState(null);
   const dropdownRef = useRef(null);
 
   const profileName = user?.displayName || user?.phoneNumber || user?.email || 'User';
-  const profileInitial = profileName.trim().charAt(0).toUpperCase() || 'U';
-
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -57,14 +62,15 @@ function ProfileDropdown({
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await logoutUser();
     } catch (error) {
       console.error('Logout error:', error);
     }
   };
 
   const handleCustomerSupport = () => {
-    window.open('mailto:support@druvio.com?subject=Customer Support Request', '_blank');
+    if (onCustomerSupport) onCustomerSupport();
+    setIsOpen(false);
   };
 
   const handleSwitchView = (view) => {
@@ -91,26 +97,14 @@ function ProfileDropdown({
         aria-haspopup="menu"
         aria-expanded={isOpen}
       >
-        <div className="profile-avatar">
-          {user?.photoURL ? (
-            <img src={user.photoURL} alt={`${profileName} avatar`} />
-          ) : (
-            <span>{profileInitial}</span>
-          )}
-        </div>
+        <UserAvatar profile={triggerProfile || user} fallbackLabel="User" className="profile-avatar" useSellerDefault={triggerUseSellerDefault} />
         {!hideChevron && <ChevronDown size={16} className={`chevron ${isOpen ? 'open' : ''}`} />}
       </button>
 
       {isOpen && (
         <div className="dropdown-menu" role="menu" aria-label="Account menu">
           <div className="dropdown-header">
-            <div className="dropdown-avatar">
-              {user?.photoURL ? (
-                <img src={user.photoURL} alt={`${profileName} avatar`} />
-              ) : (
-                <span>{profileInitial}</span>
-              )}
-            </div>
+            <UserAvatar profile={user} fallbackLabel="User" className="dropdown-avatar" />
             <div className="dropdown-user-info">
               <div className="dropdown-name">{profileName}</div>
               <div className="dropdown-email">{user.email || user.phoneNumber}</div>
@@ -168,6 +162,19 @@ function ProfileDropdown({
           >
             <User size={18} />
             <span>{adminReviewingSeller ? 'Edit Seller Profile' : 'Edit Profile'}</span>
+          </button>
+
+          <button
+            type="button"
+            className="dropdown-item"
+            onClick={() => {
+              setShowSettingsModal(true);
+              setIsOpen(false);
+            }}
+            role="menuitem"
+          >
+            <Settings size={18} />
+            <span>Settings</span>
           </button>
 
           {canBecomeSeller && (
@@ -243,6 +250,17 @@ function ProfileDropdown({
         <BecomeSellerModal
           user={user}
           onClose={() => setShowBecomeSellerModal(false)}
+        />
+      )}
+
+      {showSettingsModal && (
+        <SettingsModal
+          user={user}
+          isOpen={showSettingsModal}
+          isDarkMode={isDarkMode}
+          onThemeToggle={onThemeToggle}
+          onClose={() => setShowSettingsModal(false)}
+          onAccountDeleted={onAccountDeleted}
         />
       )}
     </div>

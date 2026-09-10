@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { updateDoc, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { updateProfile } from 'firebase/auth';
-import { db } from '../firebaseConfig';
-import { X, Save } from 'lucide-react';
+import { auth, db } from '../firebaseConfig';
+import { ArrowLeft, Camera, LockKeyhole, Mail, Phone, Save, UserRound, X } from 'lucide-react';
+import UserAvatar from './UserAvatar';
 
 function EditProfileModal({
   user,
   onClose,
   allowAuthUpdate = true,
-  title = 'Edit Profile',
+  title = 'Personal Information',
   successMessage = 'Profile updated successfully!',
-  onSave
+  onSave,
+  mobilePage = false,
+  companyName = ''
 }) {
   const [formData, setFormData] = useState({
     firstName: '',
@@ -69,7 +72,9 @@ function EditProfileModal({
       const displayName = `${formData.firstName} ${formData.lastName}`.trim();
 
       if (allowAuthUpdate) {
-        await updateProfile(user, {
+        const authUser = auth.currentUser;
+        if (!authUser) throw new Error('No authenticated user is available to update.');
+        await updateProfile(authUser, {
           displayName: displayName || user.displayName
         });
       }
@@ -117,22 +122,25 @@ function EditProfileModal({
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content edit-profile-modal">
-        <div className="modal-header">
+    <div className={mobilePage ? 'seller-edit-profile-page' : 'modal-overlay'}>
+      <div className={mobilePage ? 'seller-edit-profile-content' : 'modal-content edit-profile-modal'}>
+        <div className={mobilePage ? 'seller-edit-profile-bar' : 'modal-header'}>
+          {mobilePage && <button type="button" onClick={onClose} aria-label="Back to profile"><ArrowLeft size={23} /></button>}
           <h2>{title}</h2>
-          <button className="close-button" onClick={onClose} aria-label="Close modal">
+          {mobilePage ? <button type="submit" form="seller-edit-profile-form" disabled={loading}>{loading ? 'Saving…' : 'Save'}</button> : <button className="close-button" onClick={onClose} aria-label="Close modal">
             <X size={20} />
-          </button>
+          </button>}
         </div>
 
-        <form onSubmit={handleSubmit} className="edit-profile-form">
+        <form id="seller-edit-profile-form" onSubmit={handleSubmit} className={mobilePage ? 'edit-profile-form seller-edit-profile-form' : 'edit-profile-form'}>
           {error && <div className="modal-error">{error}</div>}
           {success && <div className="modal-success">{successMessage}</div>}
 
+          {mobilePage && <div className="seller-edit-profile-hero"><div><UserAvatar profile={user} fallbackLabel="Seller" useSellerDefault /><span className="seller-profile-camera-badge" aria-hidden="true"><Camera size={18} /></span></div><h1>{formData.firstName || formData.lastName ? `${formData.firstName} ${formData.lastName}`.trim() : user.displayName || 'Seller'}</h1><p>{companyName || user.businessName || 'Seller account'}</p></div>}
+
           <div className="form-group">
             <label htmlFor="firstName">First Name</label>
-            <input
+            <div className="edit-profile-input-shell">{mobilePage && <UserRound size={19} />}<input
               type="text"
               id="firstName"
               name="firstName"
@@ -140,36 +148,36 @@ function EditProfileModal({
               onChange={handleChange}
               required
               placeholder="Enter your first name"
-            />
+            /></div>
           </div>
 
           <div className="form-group">
             <label htmlFor="lastName">Last Name</label>
-            <input
+            <div className="edit-profile-input-shell">{mobilePage && <UserRound size={19} />}<input
               type="text"
               id="lastName"
               name="lastName"
               value={formData.lastName}
               onChange={handleChange}
               placeholder="Enter your last name"
-            />
+            /></div>
           </div>
 
           <div className="form-group">
             <label htmlFor="phoneNumber">Mobile Number</label>
-            <input
+            <div className="edit-profile-input-shell">{mobilePage && <Phone size={19} />}<input
               type="tel"
               id="phoneNumber"
               name="phoneNumber"
               value={formData.phoneNumber}
               onChange={handleChange}
               placeholder="Enter your mobile number"
-            />
+            /></div>
           </div>
 
           <div className="form-group">
             <label htmlFor="email">Email</label>
-            <input
+            <div className="edit-profile-input-shell">{mobilePage && <Mail size={19} />}<input
               type="email"
               id="email"
               name="email"
@@ -177,11 +185,11 @@ function EditProfileModal({
               onChange={handleChange}
               disabled
               className="disabled-field"
-            />
+            />{mobilePage && <LockKeyhole size={17} />}</div>
             <small className="field-note">Email is displayed for reference only.</small>
           </div>
 
-          <div className="modal-actions">
+          <div className={mobilePage ? 'modal-actions seller-edit-profile-actions' : 'modal-actions'}>
             <button type="button" className="btn-secondary" onClick={onClose}>
               Cancel
             </button>

@@ -50,12 +50,23 @@ export function matchesProjectFilters(project, filters = {}) {
   const startingPrice = Number(project?.priceFrom ?? project?.startingPrice ?? 0);
   const score = Number(project?.DruvioScore ?? project?.plotItScore ?? 0);
   const selectedZones = Array.isArray(filters.landZones) ? filters.landZones : [];
+  const selectedDiscoveryZones = Array.isArray(filters.zones) ? filters.zones : [];
   const selectedNaStatuses = Array.isArray(filters.naStatuses) ? filters.naStatuses : [];
 
   if (Number.isFinite(filters.budgetMax) && startingPrice > filters.budgetMax) return false;
+  if (Number.isFinite(filters.budgetMin) && startingPrice > 0 && startingPrice < filters.budgetMin) return false;
   if (filters.bankLoan && project?.bankLoan !== true) return false;
+  if (filters.verified && project?.verified !== true && project?.isVerified !== true) return false;
+  if (Number(filters.installmentMax) > 0) {
+    const monthlyInstallment = startingPrice * 0.009; // conservative 20-year financing estimate
+    if (monthlyInstallment > Number(filters.installmentMax)) return false;
+  }
   if (Number.isFinite(filters.minScore) && score < filters.minScore) return false;
   if (selectedZones.length && !selectedZones.includes(getProjectLandZone(project))) return false;
+  if (selectedDiscoveryZones.length) {
+    const projectArea = [project?.village, project?.locality, project?.area, project?.city].filter(Boolean).join(' ').toLowerCase();
+    if (!selectedDiscoveryZones.some((zone) => projectArea.includes(String(zone).toLowerCase()))) return false;
+  }
   if (selectedNaStatuses.length && !selectedNaStatuses.includes(getProjectNaStatus(project))) return false;
   return true;
 }

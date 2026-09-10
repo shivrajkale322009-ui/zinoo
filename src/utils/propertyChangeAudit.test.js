@@ -1,0 +1,5 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { getPropertyChangeAudit } from './propertyChangeAudit.js';
+test('property audit separates field changes from added and removed listing items', () => { const audit = getPropertyChangeAudit({ name: 'A', galleryImages: [{ id: 'one', fileName: 'one.jpg' }], amenities: ['Road'] }, { name: 'B', galleryImages: [{ id: 'two', fileName: 'two.jpg' }], amenities: ['Garden'] }); assert.ok(audit.changed.some((item) => item.label === 'Project Name' && item.before === 'A' && item.after === 'B')); assert.ok(audit.added.includes('Project image: two.jpg')); assert.ok(audit.removed.includes('Project image: one.jpg')); });
+test('property audit recognizes exact map marker confirmation as a saveable change', () => { const audit = getPropertyChangeAudit({ mapMarkerConfirmed: false }, { mapMarkerConfirmed: true }); assert.ok(audit.hasChanges); assert.ok(audit.changed.some((item) => item.label === 'Exact map marker confirmed' && item.before === 'No' && item.after === 'Yes')); });

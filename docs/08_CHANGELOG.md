@@ -19,7 +19,7 @@ Repository-observed changes only. Newest first.
 - Added cashback workspace, submission workflow, callable lifecycle management, audit logs, notifications, and indexes.
 - Added feed banner administration and buyer carousel with function-managed Storage assets.
 - Expanded property status and seller-association workflows.
-- Updated buyer, seller, and admin responsive workspaces and Druvio Design System v1.
+- Updated buyer, seller, and admin responsive workspaces and Zinoo Design System v1.
 
 > These items are present in the working tree. TODO: assign release identifiers after the changes are committed/released.
 

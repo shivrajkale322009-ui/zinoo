@@ -1,30 +1,40 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { BadgeIndianRupee, Handshake, ShieldCheck } from 'lucide-react';
 import { auth, db } from '../firebaseConfig';
+import { readStartupCache, scheduleIdleWork, writeStartupCache } from '../utils/startupCache';
+
+const HOME_HERO = {
+  id: 'zinoo-home-hero',
+  imageUrl: '/zinoo-home-hero.webp',
+  isZinooHero: true
+};
 
 export default function FeedBannerCarousel() {
-  const [banners, setBanners] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [banners, setBanners] = useState(() => [HOME_HERO, ...readStartupCache('feed-banners', [])]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [dragStart, setDragStart] = useState(null);
   const [dragOffset, setDragOffset] = useState(0);
   const viewportRef = useRef(null);
 
-  useEffect(() => onSnapshot(
-    query(collection(db, 'feed'), where('isActive', '==', true), orderBy('displayOrder', 'asc')),
-    (snapshot) => {
-      console.info('[Druvio Feed] Buyer banner query succeeded.', {
+  useEffect(() => {
+    let unsubscribe;
+    const cancelIdle = scheduleIdleWork(() => {
+      unsubscribe = onSnapshot(
+        query(collection(db, 'feed'), where('isActive', '==', true), orderBy('displayOrder', 'asc')),
+        (snapshot) => {
+      console.info('[Zinoo Feed] Buyer banner query succeeded.', {
         uid: auth.currentUser?.uid || null,
         databaseId: db._databaseId?.database || 'default',
         bannerCount: snapshot.size,
         fromCache: snapshot.metadata.fromCache
       });
-      setBanners(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })).filter((item) => item.imageUrl));
-      setActiveIndex(0);
-      setLoading(false);
-    },
-    (error) => {
-      console.error('[Druvio Feed] Buyer banner query failed.', {
+          const remoteBanners = snapshot.docs.map((item) => ({ id: item.id, ...item.data() })).filter((item) => item.imageUrl);
+          setBanners([HOME_HERO, ...remoteBanners]);
+          writeStartupCache('feed-banners', remoteBanners);
+        },
+        (error) => {
+      console.error('[Zinoo Feed] Buyer banner query failed.', {
         uid: auth.currentUser?.uid || null,
         databaseId: db._databaseId?.database || 'default',
         operation: 'query(feed where isActive == true orderBy displayOrder asc)',
@@ -32,16 +42,17 @@ export default function FeedBannerCarousel() {
         message: error?.message || String(error),
         error
       });
-      setBanners([]);
-      setLoading(false);
-    }
-  ), []);
+        }
+      );
+    }, 1400);
+    return () => { cancelIdle(); unsubscribe?.(); };
+  }, []);
 
   useEffect(() => {
     if (banners.length < 2 || dragStart !== null) return undefined;
     const timer = window.setInterval(() => {
       setActiveIndex((current) => (current + 1) % banners.length);
-    }, 5000);
+    }, 4000);
     return () => window.clearInterval(timer);
   }, [banners.length, dragStart]);
 
@@ -59,11 +70,8 @@ export default function FeedBannerCarousel() {
     setActiveIndex(0);
   };
 
-  if (!loading && banners.length === 0) return null;
-
   return (
-    <section className={`feed-banner-carousel ${loading ? 'is-loading' : ''}`} aria-label="Featured banners">
-      {loading ? <div className="feed-banner-shimmer" aria-label="Loading banners" /> : (
+    <section className="feed-banner-carousel" aria-label="Featured banners">
         <div
           ref={viewportRef}
           className="feed-banner-viewport"
@@ -92,11 +100,35 @@ export default function FeedBannerCarousel() {
                   draggable="false"
                   onError={() => skipBrokenImage(banner.id)}
                 />
+                {banner.isZinooHero && (
+                  <div className="zinoo-hero-copy">
+                    <h1 className="marathi-editorial">तुमच्या स्वप्नातील <strong>प्लॉट.</strong><br />आता सहज.</h1>
+                    <div className="zinoo-hero-trust">
+                      <span><ShieldCheck /> योग्य जागा.</span>
+                      <span><BadgeIndianRupee /> योग्य किंमत.</span>
+                      <span><Handshake /> पारदर्शक व्यवहार.</span>
+                    </div>
+                    <p>शोधा · पहा · निवडा<br />तुमच्या विश्वासाचा प्लॉट.</p>
+                  </div>
+                )}
               </div>
             ))}
           </div>
+          {banners.length > 1 && (
+            <div className="feed-banner-dots" aria-label="Choose banner">
+              {banners.map((banner, index) => (
+                <button
+                  type="button"
+                  key={banner.id}
+                  className={index === activeIndex ? 'active' : ''}
+                  aria-label={`Show banner ${index + 1}`}
+                  aria-current={index === activeIndex ? 'true' : undefined}
+                  onClick={() => setActiveIndex(index)}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      )}
     </section>
   );
 }

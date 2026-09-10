@@ -17,6 +17,31 @@ import { CHAKAN_LOCATION } from '../utils/chakanLocation';
 
 const projects = 'projects';
 const layouts = 'layouts';
+const PROJECT_CACHE_TTL_MS = 5 * 60 * 1000;
+let activeProjectsCache = null;
+let activeProjectsRequest = null;
+
+const invalidateActiveProjectsCache = () => {
+  activeProjectsCache = null;
+};
+
+const loadActiveProjects = async () => {
+  if (activeProjectsCache && Date.now() - activeProjectsCache.loadedAt < PROJECT_CACHE_TTL_MS) {
+    return activeProjectsCache.projects;
+  }
+  if (activeProjectsRequest) return activeProjectsRequest;
+
+  activeProjectsRequest = getDocs(query(collection(db, projects), where('status', '==', PROPERTY_STATUS.ACTIVE)))
+    .then((snapshot) => {
+      const loadedProjects = snapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+      activeProjectsCache = { loadedAt: Date.now(), projects: loadedProjects };
+      return loadedProjects;
+    })
+    .finally(() => {
+      activeProjectsRequest = null;
+    });
+  return activeProjectsRequest;
+};
 
 const isBlank = (value) => value === undefined || value === null || String(value).trim() === '';
 
@@ -122,6 +147,7 @@ export async function updateProjectMarker(projectId, position) {
     longitude: position.lng,
     updatedAt: serverTimestamp()
   });
+  invalidateActiveProjectsCache();
 }
 
 export async function updateProjectBoundary(projectId, geometry) {
@@ -132,6 +158,7 @@ export async function updateProjectBoundary(projectId, geometry) {
     layoutAreaSqFt: geometry.layoutAreaSqFt,
     updatedAt: serverTimestamp()
   });
+  invalidateActiveProjectsCache();
 }
 
 export async function updateProjectDetails(projectId, projectData) {
@@ -149,18 +176,17 @@ export async function updateProjectDetails(projectId, projectData) {
     ...adminAudit,
     updatedAt: serverTimestamp()
   });
+  invalidateActiveProjectsCache();
 }
 
 export async function deleteProject(projectId) {
   await deleteDoc(doc(db, projects, projectId));
+  invalidateActiveProjectsCache();
 }
 
 export async function loadProjectsInBounds(sw, ne) {
-  const ref = collection(db, projects);
-  const q = query(ref, where('status', '==', PROPERTY_STATUS.ACTIVE));
-  const snapshot = await getDocs(q);
-  return snapshot.docs
-    .map(item => ({ id: item.id, ...item.data() }))
+  const activeProjects = await loadActiveProjects();
+  return activeProjects
     .filter(isProjectPublishable)
     .filter((project) => {
       const position = getProjectCoordinates(project);

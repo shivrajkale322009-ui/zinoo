@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Zinoo Phone Auth Diagnostic</title>
+  <style>
+    body{font:14px system-ui;margin:32px;max-width:680px;color:#172033}button,input{font:inherit;padding:10px;margin:4px 0}input{width:260px}button{display:block}pre{white-space:pre-wrap;background:#f4f7fb;padding:16px;border-radius:8px;min-height:180px}
+  </style>
+</head>
+<body>
+  <h1>Zinoo Phone Auth Diagnostic</h1>
+  <p>This isolated page uses only Firebase Auth. It never prints the reCAPTCHA token, API key, phone number, or OTP.</p>
+  <label>Indian mobile number<br><input id="phone" inputmode="numeric" maxlength="10" autocomplete="tel-national"></label>
+  <button id="verify-captcha" type="button">1. Verify reCAPTCHA only</button>
+  <button id="send-otp" type="button">2. Send OTP through Firebase</button>
+  <div id="recaptcha"></div>
+  <pre id="log" aria-live="polite"></pre>
+  <script type="module">
+    const output = document.querySelector('#log');
+    const write = (event, data = {}) => {
+      output.textContent += `${new Date().toISOString()} ${event} ${JSON.stringify(data)}\n`;
+    };
+
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const url = String(args[0]?.url || args[0] || '');
+      const response = await nativeFetch(...args);
+      if (url.includes('identitytoolkit.googleapis.com') && url.includes('sendVerificationCode')) {
+        let backend = null;
+        try {
+          const payload = await response.clone().json();
+          backend = payload?.error ? {
+            code: payload.error.code,
+            message: payload.error.message,
+            status: payload.error.status || null
+          } : { success: true };
+        } catch (_) { backend = { unreadable: true }; }
+        write('sendVerificationCode response', { httpStatus: response.status, backend });
+      }
+      return response;
+    };
+
+    const { initializeApp } = await import('https://www.gstatic.com/firebasejs/12.17.0/firebase-app.js');
+    const { getAuth, RecaptchaVerifier, signInWithPhoneNumber } = await import('https://www.gstatic.com/firebasejs/12.17.0/firebase-auth.js');
+    const config = {
+      apiKey: 'AIzaSyDNbtexxjQhhxtjc9kGmlqm1cMyN3W-t84',
+      authDomain: 'druvio.firebaseapp.com',
+      projectId: 'druvio',
+      storageBucket: 'druvio.firebasestorage.app',
+      messagingSenderId: '23103959226',
+      appId: '1:23103959226:web:7a333301896a8e5bce9283'
+    };
+    const app = initializeApp(config, 'phone-diagnostic');
+    const auth = getAuth(app);
+    let verifier = null;
+    let verified = false;
+    const ensureVerifier = () => {
+      if (verifier) return verifier;
+      verifier = new RecaptchaVerifier(auth, 'recaptcha', {
+        size: 'normal',
+        callback: () => write('reCAPTCHA callback', { success: true }),
+        'expired-callback': () => { verified = false; write('reCAPTCHA expired'); }
+      });
+      write('Verifier creation PASS', {
+        origin: location.origin,
+        firebaseAppName: auth.app.name,
+        projectId: auth.app.options.projectId,
+        authDomain: auth.app.options.authDomain,
+        sameAuthInstance: auth === getAuth(app)
+      });
+      return verifier;
+    };
+    document.querySelector('#verify-captcha').addEventListener('click', async () => {
+      try {
+        const started = performance.now();
+        const token = await ensureVerifier().verify();
+        verified = true;
+        write('Verifier verify() PASS', { tokenExists: Boolean(token), tokenLength: token?.length || 0, elapsedMs: Math.round(performance.now() - started) });
+      } catch (error) {
+        write('Verifier verify() FAIL', { code: error?.code || null, message: error?.message || String(error) });
+      }
+    });
+    document.querySelector('#send-otp').addEventListener('click', async () => {
+      const digits = document.querySelector('#phone').value.replace(/\D/g, '');
+      if (!/^[6-9]\d{9}$/.test(digits)) { write('Phone validation FAIL'); return; }
+      try {
+        write('signInWithPhoneNumber START', { verifierAlreadyVerified: verified, origin: location.origin });
+        const result = await signInWithPhoneNumber(auth, `+91${digits}`, ensureVerifier());
+        write('signInWithPhoneNumber PASS', { confirmationResultPresent: Boolean(result), verificationIdPresent: Boolean(result?.verificationId) });
+      } catch (error) {
+        write('signInWithPhoneNumber FAIL', { code: error?.code || null, message: error?.message || String(error) });
+      }
+    });
+  </script>
+</body>
+</html>

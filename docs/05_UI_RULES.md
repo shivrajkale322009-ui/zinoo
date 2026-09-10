@@ -2,7 +2,7 @@
 
 ## Authority order
 
-1. `src/styles/druvio-design-system-v1.css` (loaded last)
+1. `src/styles/zinoo-design-system-v1.css` (loaded last)
 2. Existing feature styles in `src/index.css` and `src/maps/mapScreen.css`
 3. `DESIGN_SYSTEM.md`
 4. This behavioral summary
@@ -83,7 +83,7 @@ New UI must consume `--ds-*` tokens or an established semantic alias.
 
 ## Rules never to break
 
-- Do not add a new visual system beside Druvio Design System v1.
+- Do not add a new visual system beside Zinoo Design System v1.
 - Do not use arbitrary spacing/colors/radii when tokens exist.
 - Do not mix filled third-party icons with Lucide.
 - Do not hide error or empty states to make a screen appear complete.

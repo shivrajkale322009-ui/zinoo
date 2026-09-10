@@ -1,23 +1,23 @@
 {
-  "short_name": "Druvio",
-  "name": "Druvio – Hyperlocal Plot Buying Platform",
+  "short_name": "Zinoo",
+  "name": "Zinoo – Hyperlocal Plot Buying Platform",
   "icons": [
     {
-      "src": "/icon.svg",
-      "type": "image/svg+xml",
-      "sizes": "any",
+      "src": "/brand/zinoo-logo.png",
+      "type": "image/png",
+      "sizes": "512x512",
       "purpose": "any"
     },
     {
-      "src": "/icon-maskable.svg",
-      "type": "image/svg+xml",
-      "sizes": "any",
-      "purpose": "maskable"
+      "src": "/brand/zinoo-logo.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
     }
   ],
   "start_url": "/",
   "background_color": "#ffffff",
-  "theme_color": "#2563eb",
+  "theme_color": "#0a1733",
   "display": "standalone",
   "orientation": "portrait-primary"
 }

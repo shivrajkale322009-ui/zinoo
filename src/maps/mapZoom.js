@@ -6,9 +6,13 @@ export const MAP_MARKER_ZOOM = Object.freeze({
 });
 
 export const MARKER_COLLISION_PIXELS = Object.freeze({
-  LABEL_WIDTH: 120,
-  LABEL_HEIGHT: 56,
-  PIN_RADIUS: 28
+  LABEL_WIDTH: 50,
+  LABEL_HEIGHT: 32,
+  // Native price-label footprint: 46px minimum body width plus its 7px tail.
+  // This is a collision-only value; it does not alter marker rendering.
+  MOBILE_LABEL_WIDTH: 50,
+  MOBILE_LABEL_HEIGHT: 32,
+  PIN_RADIUS: 18
 });
 
 export function calculateMarkerPriority(project = {}, { isSelected = false } = {}) {
@@ -26,13 +30,7 @@ export function getProjectMarkerState({ zoom, project, selectedProjectId, collis
   const normalizedZoom = Number(zoom) || 0;
   const selected = Boolean(project?.id && project.id === selectedProjectId);
   const labelVisible = normalizedZoom >= MAP_MARKER_ZOOM.PROJECT_LABEL_MIN && (!collisionGroup || selected || visibleRank === 0);
-  const mode = normalizedZoom <= MAP_MARKER_ZOOM.HIDDEN_MAX
-    ? 'cluster'
-    : labelVisible || selected
-      ? 'full-label'
-      : normalizedZoom >= MAP_MARKER_ZOOM.POLYGON_MIN && collisionGroup
-        ? 'price-only'
-        : 'pin';
+  const mode = labelVisible ? 'full-label' : 'price-only';
   const priority = calculateMarkerPriority(project, { isSelected: selected });
 
   return {
@@ -43,8 +41,9 @@ export function getProjectMarkerState({ zoom, project, selectedProjectId, collis
     priority,
     markerScale: selected ? 1.08 : 1,
     zIndex: selected ? 9999 : Math.round(priority),
-    interactive: mode !== 'cluster',
+    interactive: true,
     selectedStyle: selected,
+    collisionGroup,
     clusterEligible: normalizedZoom <= MAP_MARKER_ZOOM.LOCATION_PIN_MAX
   };
 }

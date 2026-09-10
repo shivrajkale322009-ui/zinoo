@@ -1,0 +1,55 @@
+{
+  "project_info": {
+    "project_number": "23103959226",
+    "project_id": "druvio",
+    "storage_bucket": "druvio.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:23103959226:android:984744f76d3f3519ce9283",
+        "android_client_info": {
+          "package_name": "com.druvio.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "23103959226-79a148uk7lh32o2qe0r7iuphskpsdcet.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.druvio.app",
+            "certificate_hash": "6dfe8cb3092864aba80f1c100d835e133f1a54fa"
+          }
+        },
+        {
+          "client_id": "23103959226-tjgic9f56fe3q2vspmr6j6tjhedv0btk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.druvio.app",
+            "certificate_hash": "ba271c0fba6975c647b99fdbdd6268eb0e9fc8d4"
+          }
+        },
+        {
+          "client_id": "23103959226-7lk0vicgdr4knssjm4e0op44e61ti0th.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA3F7vMaXN_NwSZBbp143UTHjP-G8zGeC8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "23103959226-7lk0vicgdr4knssjm4e0op44e61ti0th.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

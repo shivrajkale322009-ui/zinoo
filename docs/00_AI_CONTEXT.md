@@ -1,10 +1,10 @@
-# Druvio AI Context
+# Zinoo AI Context
 
 > Start every coding task here. This file is an index and operating contract; detailed facts live in the linked documents.
 
 ## Product
 
-- Druvio is an authenticated, role-based real-estate PWA for discovering and managing land/plot projects.
+- Zinoo is an authenticated, role-based real-estate PWA for discovering and managing land/plot projects.
 - Current geographic copy and defaults are Pune/Chakan-oriented. Do not generalize coverage without a requirement.
 - Roles are cumulative permissions:
   - Buyer: discover active projects, book visits, submit and track cashback requests.
@@ -22,7 +22,7 @@
 | Data | Cloud Firestore database ID `default`, real-time listeners |
 | Files | Firebase Storage |
 | Maps | Google Maps JavaScript API in the active buyer map; Leaflet remains installed and `BuyerMap.jsx` is legacy/not mounted |
-| UI | CSS, Lucide React, Druvio Design System v1 |
+| UI | CSS, Lucide React, Zinoo Design System v1 |
 | Hosting | Firebase Hosting, SPA rewrite to `index.html`, PWA manifest/service worker |
 | Tests | Node built-in test runner for `src/**/*.test.js` |
 
@@ -34,7 +34,7 @@ src/
   firebaseConfig.js        only Firebase client initialization point
   components/              buyer, seller, admin, auth, profile, feed, cashback, property UI
   maps/                    active Google map, layouts, geometry, map UI
-  styles/                  Druvio Design System v1 override layer
+  styles/                  Zinoo Design System v1 override layer
   utils/                   domain normalization and calculations
 functions/
   index.js                 callable functions and authoritative workflows
@@ -114,7 +114,7 @@ See [07_CODE_STANDARDS.md](./07_CODE_STANDARDS.md).
 
 ## UI and business constraints
 
-- `src/styles/druvio-design-system-v1.css` loads after legacy CSS and is the final visual authority.
+- `src/styles/zinoo-design-system-v1.css` loads after legacy CSS and is the final visual authority.
 - Use `--ds-*` tokens and existing shared classes for new UI.
 - Respect mobile layouts, 48 px control/touch containers, visible focus, and reduced motion.
 - Keep UI behavior in [05_UI_RULES.md](./05_UI_RULES.md) and domain behavior in [06_BUSINESS_RULES.md](./06_BUSINESS_RULES.md).

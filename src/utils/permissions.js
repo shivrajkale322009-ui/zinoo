@@ -5,9 +5,18 @@ export const DEFAULT_PERMISSIONS = Object.freeze({
 });
 
 export function normalizePermissions(permissions = {}) {
-  // Support legacy role-based documents
-  if (permissions.role) {
-    switch (permissions.role) {
+  // Accept both a permissions map and the complete Firestore user document.
+  // Some legacy accounts store `role` at the document root while newer
+  // accounts store booleans inside `permissions`.
+  const permissionMap = permissions?.permissions && typeof permissions.permissions === 'object'
+    ? permissions.permissions
+    : permissions;
+  const role = String(permissions?.role ?? permissionMap?.role ?? '')
+    .trim()
+    .toLowerCase();
+
+  if (role) {
+    switch (role) {
       case "admin":
         return {
           buyer: true,
@@ -32,9 +41,9 @@ export function normalizePermissions(permissions = {}) {
   }
 
   const normalized = {
-    buyer: Boolean(permissions?.buyer),
-    seller: Boolean(permissions?.seller),
-    admin: Boolean(permissions?.admin)
+    buyer: permissionMap?.buyer === true,
+    seller: permissionMap?.seller === true,
+    admin: permissionMap?.admin === true
   };
 
   if (normalized.admin) {

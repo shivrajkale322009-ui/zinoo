@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { signOut } from 'firebase/auth';
 import {
   Building,
   ClipboardList,
@@ -18,8 +17,6 @@ import {
   FileText,
   Images,
   ExternalLink,
-  Search,
-  Filter,
   AlertTriangle,
   CheckCircle,
   Edit,
@@ -33,7 +30,25 @@ import {
   Save,
   AlertCircle,
   Menu,
-  X
+  X,
+  Trash2,
+  MoreVertical,
+  CircleDollarSign,
+  Layers3,
+  Clock3,
+  LoaderCircle,
+  Image as ImageIcon,
+  Sparkles,
+  ChevronRight,
+  ChevronDown,
+  Bell,
+  UserCheck,
+  Activity,
+  Megaphone,
+  BarChart3,
+  TrendingUp,
+  Bot,
+  Copy
 } from 'lucide-react';
 import {
   collection,
@@ -45,27 +60,78 @@ import {
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import EditProfileModal from './EditProfileModal';
+import ProfileDropdown from './ProfileDropdown';
+import UserAvatar from './UserAvatar';
 import { auth, db, functions } from '../firebaseConfig';
+import { logoutUser } from '../services/authSessionService';
 import { isApprovedSellerAccount, normalizePermissions } from '../utils/permissions';
-import { isProjectPublishable, PROPERTY_STATUS, PROPERTY_STATUSES } from '../utils/projectVisibility';
+import { getProjectStatus, isProjectPublishable, PROPERTY_STATUS, PROPERTY_STATUSES } from '../utils/projectVisibility';
 import { getLandZoneLabel, getNaStatusLabel, LAND_ZONE_OPTIONS, NA_STATUS_OPTIONS } from '../utils/projectLand';
 import { getProjectDocumentLabel, normalizeProjectDocuments } from '../utils/projectDocuments';
 import { validateProperty, validatePropertyLocation } from '../utils/adminPropertyUtils';
 import ProjectLocationPicker from './ProjectLocationPicker';
-import PropertyMediaDocumentsManager, { InAppDocumentViewer } from './PropertyMediaDocumentsManager';
+import { applyHighwayResult } from '../utils/highwayInfo';
+import PropertyMediaDocumentsManager, { InAppDocumentViewer, openDocumentPreview } from './PropertyMediaDocumentsManager';
+import PropertyDisplayEditor from './PropertyDisplayEditor';
 import AdminPropertyDetails from './AdminPropertyDetails';
+import AmenityCatalogManager from './AmenityCatalogManager';
 import useMediaQuery from '../utils/useMediaQuery';
 import CashbackWorkspace from './CashbackWorkspace';
 import FeedBannerManager from './FeedBannerManager';
-import PropertyDisplayEditor from './PropertyDisplayEditor';
-import { withPropertyDisplayModel } from '../utils/propertyDisplayModel';
+import FeaturedDeveloperManager from './FeaturedDeveloperManager';
+import SearchBar from './ui/SearchBar';
+import { withPropertyDisplayModel, withPropertyStartingPrice } from '../utils/propertyDisplayModel';
+import DeletePropertyModal from './DeletePropertyModal';
+import PropertyRejectionModal from './PropertyRejectionModal';
+import AdminSellerReview from './AdminSellerReview';
+import { deleteProperty } from '../services/propertyService';
+import { AccountDeletionService } from '../services/accountDeletionService';
+import AdminAIAssistant from './AdminAIAssistant';
+import { getPropertyGovernance } from '../utils/propertyGovernance';
+import { getSellerApplicationGovernance, isActionableSellerApplication } from '../utils/sellerGovernance.js';
 
 const getName = (account) => account?.displayName || account?.name || account?.businessName || account?.userName || account?.email || 'Unknown';
+const getBuyerName = (account) => account?.displayName || account?.name || account?.userName || 'Unknown buyer';
+const getInitials = (account) => getBuyerName(account).split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part.charAt(0)).join('').toUpperCase() || 'B';
+const getDateValue = (value) => {
+  if (!value) return 0;
+  const date = value?.toDate?.() || (Number.isFinite(value?.seconds) ? new Date(value.seconds * 1000) : new Date(value));
+  const time = date?.getTime?.();
+  return Number.isFinite(time) ? time : 0;
+};
+const formatAdminDate = (value) => {
+  const time = getDateValue(value);
+  return time ? new Date(time).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'date unavailable';
+};
 
 const getProjectOwnerName = (project, sellers) => {
   const owner = sellers.find((item) => item.id === project.ownerId);
   return owner ? getName(owner) : (project.developer || 'Unknown seller');
 };
+
+function AnimatedMetric({ value }) {
+  const target = Number(value) || 0;
+  const [displayValue, setDisplayValue] = useState(0);
+
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayValue(target);
+      return undefined;
+    }
+
+    let frame;
+    const startedAt = performance.now();
+    const tick = (now) => {
+      const progress = Math.min((now - startedAt) / 650, 1);
+      setDisplayValue(Math.round(target * (1 - Math.pow(1 - progress, 3))));
+      if (progress < 1) frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [target]);
+
+  return displayValue;
+}
 
 function AdminPanel({
   projects,
@@ -80,6 +146,13 @@ function AdminPanel({
   onSwitchToSeller,
   onSelectSeller,
   onListenerDebug,
+  permissions,
+  currentView = 'admin',
+  onViewChange,
+  onCustomerSupport,
+  onBackToAdmin,
+  selectedSeller,
+  canDeleteProperties = false,
   initialTab = 'home'
 }) {
   const isAndroidLayout = useMediaQuery('(max-width: 768px)');
@@ -105,9 +178,27 @@ function AdminPanel({
   const [propertyDetailsOrigin, setPropertyDetailsOrigin] = useState('properties');
   const [selectedBuyerProfile, setSelectedBuyerProfile] = useState(null);
   const [selectedSellerProfile, setSelectedSellerProfile] = useState(null);
+  const [selectedSellerRequest, setSelectedSellerRequest] = useState(null);
+  const [sellerPendingRejection, setSellerPendingRejection] = useState(null);
+  const [sellerRejectionError, setSellerRejectionError] = useState('');
+  const [sellerSearchQuery, setSellerSearchQuery] = useState('');
   const [editingProperty, setEditingProperty] = useState(null);
   const [isDirty, setIsDirty] = useState(false);
-  const [collapsedSections, setCollapsedSections] = useState({ legal: true, amenities: true, media: true, siteVisit: true });
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const warnBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [isDirty]);
+  const [collapsedSections, setCollapsedSections] = useState({ legal: false, amenities: false, media: false, siteVisit: false, audit: false });
+  const [propertyPendingRejection, setPropertyPendingRejection] = useState(null);
+  const [propertyRejectionError, setPropertyRejectionError] = useState('');
+  const [amenityOptions, setAmenityOptions] = useState([]);
+  const [propertySectionQuery, setPropertySectionQuery] = useState('');
+  const [aiProjectContext, setAiProjectContext] = useState(null);
 
   // Pending media files (held in memory until Save Changes succeeds)
   const [pendingCoverFile, setPendingCoverFile] = useState(null);
@@ -119,6 +210,11 @@ function AdminPanel({
   const [pendingBrochureFile, setPendingBrochureFile] = useState(null);
   const [pendingBrochurePreviewUrl, setPendingBrochurePreviewUrl] = useState(null);
   const [previewModal, setPreviewModal] = useState(null); // { type, url, name }
+  const [propertyPendingDeletion, setPropertyPendingDeletion] = useState(null);
+  const [deletePropertyError, setDeletePropertyError] = useState('');
+  const [deletingProperty, setDeletingProperty] = useState(false);
+  const [propertyActionsMenu, setPropertyActionsMenu] = useState(null);
+  const propertyActionsMenuRef = useRef(null);
 
   // File input refs (for programmatic click)
   const coverFileInputRef = useRef(null);
@@ -126,8 +222,8 @@ function AdminPanel({
   const zoneCertFileInputRef = useRef(null);
   const brochureFileInputRef = useRef(null);
 
-  const [sortField, setSortField] = useState('name');
-  const [sortDirection, setSortDirection] = useState('asc');
+  const [sortField, setSortField] = useState('createdAt');
+  const [sortDirection, setSortDirection] = useState('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
@@ -136,22 +232,37 @@ function AdminPanel({
   }, [initialTab]);
 
   useEffect(() => {
+    // The shared editor needs live catalog changes so Admin and Seller always
+    // edit the same project-specific amenities from the same option source.
+    const unsubscribe = onSnapshot(collection(db, 'amenityCatalog'), (snapshot) => {
+      setAmenityOptions(snapshot.docs
+        .map((item) => ({ id: item.id, ...item.data() }))
+        .filter((item) => item.isActive !== false)
+        .sort((left, right) => String(left.name || '').localeCompare(String(right.name || ''))));
+    }, (error) => {
+      console.error('Admin amenity catalog listener failed:', error);
+      setErrorMessage('Unable to load the amenity catalog.');
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     const path = 'sellerRequests';
     const filters = 'unfiltered';
-    console.info('[Druvio Firestore] Admin listener starting', { path, filters, uid: auth.currentUser?.uid });
+    console.info('[Zinoo Firestore] Admin listener starting', { path, filters, uid: auth.currentUser?.uid });
     onListenerDebug?.(path, { status: 'connecting', path, filters });
     const unsubscribe = onSnapshot(
       collection(db, 'sellerRequests'),
       (snapshot) => {
         const lastSnapshotTime = new Date().toISOString();
-        console.info('[Druvio Firestore] Admin snapshot received', { path, filters, documentCount: snapshot.size, lastSnapshotTime });
+        console.info('[Zinoo Firestore] Admin snapshot received', { path, filters, documentCount: snapshot.size, lastSnapshotTime });
         const requests = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
         setSellerRequests(requests);
         onListenerDebug?.(path, { status: 'connected', path, filters, documentCount: snapshot.size, lastSnapshotTime });
       },
       (error) => {
         const detail = { code: error?.code || 'unknown', message: error?.message || String(error) };
-        console.error('[Druvio Firestore] Admin listener failed', { path, filters, uid: auth.currentUser?.uid, ...detail, error });
+        console.error('[Zinoo Firestore] Admin listener failed', { path, filters, uid: auth.currentUser?.uid, ...detail, error });
         onListenerDebug?.(path, { status: 'error', path, filters, error: detail });
         setErrorMessage(`Firestore ${path} sync failed [${detail.code}]: ${detail.message}`);
       }
@@ -162,13 +273,13 @@ function AdminPanel({
   useEffect(() => {
     const path = 'users';
     const filters = 'unfiltered (Admin Buyer Accounts)';
-    console.info('[Druvio Firestore] Admin listener starting', { path, filters, uid: auth.currentUser?.uid });
+    console.info('[Zinoo Firestore] Admin listener starting', { path, filters, uid: auth.currentUser?.uid });
     onListenerDebug?.(path, { status: 'connecting', path, filters });
     const unsubscribe = onSnapshot(
       collection(db, 'users'),
       (snapshot) => {
         const lastSnapshotTime = new Date().toISOString();
-        console.info('[Druvio Firestore] Admin snapshot received', { path, filters, documentCount: snapshot.size, lastSnapshotTime });
+        console.info('[Zinoo Firestore] Admin snapshot received', { path, filters, documentCount: snapshot.size, lastSnapshotTime });
         const accounts = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
 
         const sellerList = accounts.filter((account) => {
@@ -187,7 +298,7 @@ function AdminPanel({
       },
       (error) => {
         const detail = { code: error?.code || 'unknown', message: error?.message || String(error) };
-        console.error('[Druvio Firestore] Admin listener failed', { path, filters, uid: auth.currentUser?.uid, ...detail, error });
+        console.error('[Zinoo Firestore] Admin listener failed', { path, filters, uid: auth.currentUser?.uid, ...detail, error });
         onListenerDebug?.(path, { status: 'error', path, filters, error: detail });
         setErrorMessage(`Firestore ${path} sync failed [${detail.code}]: ${detail.message}`);
       }
@@ -227,7 +338,7 @@ function AdminPanel({
       if (p.status === PROPERTY_STATUS.DRAFT) draft++;
       if (p.hasErrors) withErrors++;
       if (p.locationStatus !== 'verified') missingLocation++;
-      const createdTime = p.createdAt ? new Date(p.createdAt).getTime() : 0;
+      const createdTime = getDateValue(p.createdAt);
       if (createdTime > sevenDaysAgo) recentlyAdded++;
     });
 
@@ -289,7 +400,7 @@ function AdminPanel({
         if (p.locationStatus === 'verified') return false;
       } else if (propertiesFilterTab === 'recent') {
         const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-        const createdTime = p.createdAt ? new Date(p.createdAt).getTime() : 0;
+        const createdTime = getDateValue(p.createdAt);
         if (createdTime <= sevenDaysAgo) return false;
       }
 
@@ -311,9 +422,9 @@ function AdminPanel({
         valA = a.name || '';
         valB = b.name || '';
       }
-      if (sortField === 'updatedAt') {
-        valA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-        valB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+      if (sortField === 'updatedAt' || sortField === 'createdAt') {
+        valA = getDateValue(a[sortField]);
+        valB = getDateValue(b[sortField]);
       }
       if (typeof valA === 'string') {
         return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
@@ -332,7 +443,12 @@ function AdminPanel({
   const totalPages = Math.ceil(filteredProperties.length / itemsPerPage) || 1;
 
   const handleSaveProperty = async (updatedData) => {
-    const displayReadyData = withPropertyDisplayModel(updatedData);
+    const original = projects.find(p => p.id === updatedData.id) || {};
+    const nameWasEdited = updatedData.name !== original.name;
+    const displayReadyData = withPropertyDisplayModel(updatedData, nameWasEdited ? {
+      authoritativeName: updatedData.name,
+      previousName: original.name || original.display?.basic?.projectName
+    } : undefined);
     const valResult = validateProperty(displayReadyData);
 
     const updatedRecord = {
@@ -346,9 +462,7 @@ function AdminPanel({
     };
 
     const changes = [];
-    const original = projects.find(p => p.id === displayReadyData.id) || {};
-
-    if (original.name !== updatedData.name) changes.push(`Name changed: "${original.name || ''}" -> "${updatedData.name || ''}"`);
+    if (original.name !== displayReadyData.name) changes.push(`Name changed: "${original.name || ''}" -> "${displayReadyData.name || ''}"`);
     if (Number(original.startingPrice ?? original.priceFrom) !== Number(updatedData.startingPrice ?? updatedData.priceFrom)) {
       changes.push(`Price changed: ${original.startingPrice ?? original.priceFrom} -> ${updatedData.startingPrice ?? updatedData.priceFrom}`);
     }
@@ -374,7 +488,7 @@ function AdminPanel({
     try {
       const originalSellerId = original.sellerId || original.sellerUid || original.ownerId || '';
       const nextSellerId = updatedData.sellerId || updatedData.sellerUid || updatedData.ownerId || '';
-      console.info('[Druvio Admin Save] Started', {
+      console.info('[Zinoo Admin Save] Started', {
         projectId: updatedData.id,
         sellerChanged: originalSellerId !== nextSellerId,
         coordinates: {
@@ -384,15 +498,15 @@ function AdminPanel({
       });
       if (originalSellerId !== nextSellerId) {
         const assignmentResult = await httpsCallable(functions, 'assignProjectSeller')({ projectId: updatedData.id, sellerId: nextSellerId });
-        console.info('[Druvio Admin Save] Seller assignment completed', assignmentResult.data);
+        console.info('[Zinoo Admin Save] Seller assignment completed', assignmentResult.data);
       }
       await updateProject(updatedRecord);
-      console.info('[Druvio Admin Save] Project update completed', { projectId: updatedData.id });
+      console.info('[Zinoo Admin Save] Project update completed', { projectId: updatedData.id });
       setStatusMessage("Property details updated and revalidated successfully.");
       setIsDirty(false);
       setEditingProperty(null);
     } catch (err) {
-      console.error('[Druvio Admin Save] Failed', {
+      console.error('[Zinoo Admin Save] Failed', {
         projectId: updatedData.id,
         code: err?.code,
         message: err?.message
@@ -400,6 +514,74 @@ function AdminPanel({
       setErrorMessage("Failed to save property changes: " + err.message);
     }
   };
+
+  const handleDeleteProperty = async (confirmation) => {
+    if (!propertyPendingDeletion || deletingProperty) return;
+    setDeletingProperty(true);
+    setDeletePropertyError('');
+    setErrorMessage('');
+    try {
+      await deleteProperty(propertyPendingDeletion.id, confirmation);
+      setPropertyPendingDeletion(null);
+      setStatusMessage('Property deleted successfully.');
+    } catch (error) {
+      setDeletePropertyError(error.message);
+    } finally {
+      setDeletingProperty(false);
+    }
+  };
+
+  const handleDeleteBuyer = async (buyerId) => {
+    if (!window.confirm("Are you sure you want to permanently delete this buyer account and all associated data?")) return;
+    try {
+      setWorkingKey(`delete-buyer-${buyerId}`);
+      await AccountDeletionService.deleteFirestoreData(buyerId);
+      await AccountDeletionService.deleteStorageData(buyerId);
+      setStatusMessage("Buyer deleted successfully.");
+      setSelectedBuyerProfile(null);
+    } catch (error) {
+      console.error("Failed to delete buyer:", error);
+      setErrorMessage("Failed to delete buyer account.");
+    } finally {
+      setWorkingKey('');
+    }
+  };
+
+  useEffect(() => {
+    if (!propertyActionsMenu) return undefined;
+    const closeMenu = (event) => {
+      if (!event.target.closest('.admin-overflow-menu') && !event.target.closest('.admin-overflow-trigger')) {
+        setPropertyActionsMenu(null);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setPropertyActionsMenu(null);
+    };
+    const closeOnViewportChange = () => setPropertyActionsMenu(null);
+    document.addEventListener('mousedown', closeMenu);
+    document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('resize', closeOnViewportChange);
+    window.addEventListener('scroll', closeOnViewportChange, true);
+    return () => {
+      document.removeEventListener('mousedown', closeMenu);
+      document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('resize', closeOnViewportChange);
+      window.removeEventListener('scroll', closeOnViewportChange, true);
+    };
+  }, [propertyActionsMenu]);
+
+  useEffect(() => {
+    if (!propertyActionsMenu || !propertyActionsMenuRef.current) return;
+    const menu = propertyActionsMenuRef.current;
+    const rect = menu.getBoundingClientRect();
+    const nextTop = Math.max(8, Math.min(propertyActionsMenu.top, window.innerHeight - rect.height - 8));
+    const nextRight = Math.max(8, Math.min(propertyActionsMenu.right, window.innerWidth - rect.width - 8));
+    if (nextTop !== propertyActionsMenu.top || nextRight !== propertyActionsMenu.right) {
+      setPropertyActionsMenu((current) => current?.id === propertyActionsMenu.id
+        ? { ...current, top: nextTop, right: nextRight }
+        : current);
+    }
+  }, [propertyActionsMenu]);
 
   const activeProjectList = useMemo(
     () => projects.filter((project) => {
@@ -413,7 +595,7 @@ function AdminPanel({
     [projects]
   );
   const pendingSellerRequests = useMemo(
-    () => sellerRequests.filter((request) => request.status === 'pending').length,
+    () => sellerRequests.filter(isActionableSellerApplication).length,
     [sellerRequests]
   );
   const sortedBuyers = useMemo(
@@ -424,9 +606,19 @@ function AdminPanel({
     () => [...sellers].sort((left, right) => getName(left).localeCompare(getName(right))),
     [sellers]
   );
+  const visibleSellers = useMemo(() => {
+    const queryText = sellerSearchQuery.trim().toLowerCase();
+    if (!queryText) return sortedSellers;
+    return sortedSellers.filter((seller) => [seller.id, seller.businessName, seller.displayName, seller.name, seller.email, seller.phoneNumber, seller.phone].some((value) => String(value || '').toLowerCase().includes(queryText)));
+  }, [sellerSearchQuery, sortedSellers]);
+  const sellerProjectCounts = useMemo(() => projects.reduce((counts, project) => {
+    const sellerId = project.ownerId || project.sellerUid || project.sellerId;
+    if (sellerId) counts.set(sellerId, (counts.get(sellerId) || 0) + 1);
+    return counts;
+  }, new globalThis.Map()), [projects]);
   const pendingRequests = useMemo(
     () => sellerRequests
-      .filter((request) => request.status === 'pending')
+      .filter(isActionableSellerApplication)
       .sort((left, right) => getName(left).localeCompare(getName(right))),
     [sellerRequests]
   );
@@ -437,6 +629,11 @@ function AdminPanel({
   };
 
   const handleApproveSellerRequest = async (request) => {
+    const governance = getSellerApplicationGovernance(request, projects);
+    if (!governance.approvalEligible) {
+      setErrorMessage(`Seller approval is blocked by ${governance.blockers.length} unresolved requirement${governance.blockers.length === 1 ? '' : 's'}.`);
+      return;
+    }
     const actionKey = `approve-request-${request.id}`;
     setWorkingKey(actionKey);
     resetFeedback();
@@ -448,6 +645,7 @@ function AdminPanel({
       });
 
       setStatusMessage(`${getName(request)} has been approved as a seller.`);
+      setSelectedSellerRequest(null);
     } catch (error) {
       console.error('Failed to approve seller request:', error);
       setErrorMessage(error?.message || 'Unable to approve the seller request right now.');
@@ -456,7 +654,7 @@ function AdminPanel({
     }
   };
 
-  const handleRejectSellerRequest = async (request) => {
+  const handleRejectSellerRequest = async (request, reason) => {
     const actionKey = `reject-request-${request.id}`;
     setWorkingKey(actionKey);
     resetFeedback();
@@ -464,19 +662,27 @@ function AdminPanel({
     try {
       await httpsCallable(functions, 'reviewSellerRequest')({
         requestId: request.id,
-        decision: 'rejected'
+        decision: 'rejected',
+        reason
       });
 
       setStatusMessage(`${getName(request)} has been marked as rejected.`);
+      setSellerPendingRejection(null);
+      setSelectedSellerRequest(null);
     } catch (error) {
       console.error('Failed to reject seller request:', error);
-      setErrorMessage(error?.message || 'Unable to reject the seller request right now.');
+      setSellerRejectionError(error?.message || 'Unable to reject the seller request right now.');
     } finally {
       setWorkingKey('');
     }
   };
 
   const handleApproveProject = async (project) => {
+    const currentStatus = getProjectStatus(project);
+    if (currentStatus !== PROPERTY_STATUS.PENDING) {
+      setErrorMessage(`This property is already ${currentStatus}; only pending properties can be reviewed.`);
+      return;
+    }
     if (!project.sellerAssociationValid) {
       setErrorMessage('Unable to approve property. Assign a valid seller before approval.');
       return;
@@ -499,7 +705,21 @@ function AdminPanel({
     }
   };
 
-  const handleListingStatus = async (projectId, status) => {
+  const handleListingStatus = async (project, status) => {
+    const projectId = typeof project === 'string' ? project : project?.id;
+    const currentProject = typeof project === 'string' ? projects.find((item) => item.id === project) : project;
+    const currentStatus = getProjectStatus(currentProject);
+    const allowedTransitions = {
+      [PROPERTY_STATUS.APPROVED]: [PROPERTY_STATUS.ACTIVE, PROPERTY_STATUS.INACTIVE, PROPERTY_STATUS.SOLD],
+      [PROPERTY_STATUS.ACTIVE]: [PROPERTY_STATUS.INACTIVE, PROPERTY_STATUS.SOLD],
+      [PROPERTY_STATUS.INACTIVE]: [PROPERTY_STATUS.ACTIVE, PROPERTY_STATUS.SOLD]
+    };
+    if (!projectId || !allowedTransitions[currentStatus]?.includes(status)) {
+      setErrorMessage(currentStatus === status
+        ? `This property is already ${status}.`
+        : `Cannot change a ${currentStatus || 'unknown'} property to ${status}. Refresh and try again.`);
+      return;
+    }
     const actionKey = `${status}-project-${projectId}`;
     setWorkingKey(actionKey);
     resetFeedback();
@@ -514,7 +734,7 @@ function AdminPanel({
     }
   };
 
-  const handleRejectProject = async (projectId) => {
+  const handleRejectProject = async (projectId, reason) => {
     const actionKey = `reject-project-${projectId}`;
     setWorkingKey(actionKey);
     resetFeedback();
@@ -522,12 +742,15 @@ function AdminPanel({
     try {
       await httpsCallable(functions, 'reviewProject')({
         projectId,
-        decision: PROPERTY_STATUS.REJECTED
+        decision: PROPERTY_STATUS.REJECTED,
+        reason
       });
       setStatusMessage('Property listing rejected successfully.');
+      setPropertyPendingRejection(null);
+      setPropertyRejectionError('');
     } catch (error) {
       console.error('Failed to reject property:', error);
-      setErrorMessage('Unable to reject this property right now.');
+      setPropertyRejectionError(error?.message || 'Unable to reject this property right now.');
     } finally {
       setWorkingKey('');
     }
@@ -569,7 +792,7 @@ function AdminPanel({
           <div key={`${document.id || document.type}-${index}`} className="admin-document-review-row">
             <FileText size={15} />
             <span><strong>{getProjectDocumentLabel(document.type)}</strong><small className={`document-review-status ${document.status}`}>{document.status}</small></span>
-            <button type="button" onClick={() => setPreviewModal(document)} aria-label={`Preview ${getProjectDocumentLabel(document.type)}`}><Eye size={14} /></button>
+            <button type="button" onClick={() => openDocumentPreview(document, setPreviewModal)} aria-label={`Preview ${getProjectDocumentLabel(document.type)}`}><Eye size={14} /></button>
             <button type="button" disabled={workingKey.startsWith(`document-${project.id}-${index}`) || document.status === 'verified'} onClick={() => handleDocumentDecision(project, index, 'verified')}>Verify</button>
             <button type="button" className="danger" disabled={workingKey.startsWith(`document-${project.id}-${index}`) || document.status === 'rejected'} onClick={() => handleDocumentDecision(project, index, 'rejected')}>Reject</button>
           </div>
@@ -602,8 +825,52 @@ function AdminPanel({
     setPropertiesFilterTab('all');
     setPropertiesSearchQuery('');
     setEditingProperty(property);
+    setAiProjectContext(property.id);
     setIsDirty(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const togglePropertyNameBadge = async (property) => {
+    if (!property?.id) return;
+    const actionKey = `toggle-property-name-badge-${property.id}`;
+    const showNameBadge = !Boolean(property.display?.verified?.showNameBadge ?? property.showVerifiedNameBadge);
+    setWorkingKey(actionKey);
+    resetFeedback();
+    try {
+      const updatedProperty = withPropertyDisplayModel({
+        ...property,
+        showVerifiedNameBadge: showNameBadge,
+        display: {
+          ...(property.display || {}),
+          verified: { ...(property.display?.verified || {}), showNameBadge }
+        },
+        updatedAt: new Date().toISOString(),
+        updatedBy: user.uid
+      });
+      await updateProject(updatedProperty);
+      setStatusMessage(`Property name verification badge ${showNameBadge ? 'shown' : 'hidden'}.`);
+    } catch (error) {
+      console.error('Failed to update property name verification badge:', error);
+      setErrorMessage('Unable to update the property name verification badge.');
+    } finally {
+      setWorkingKey('');
+    }
+  };
+
+  const requestSellerRejection = (request) => {
+    setSellerRejectionError('');
+    setSellerPendingRejection(request);
+  };
+
+  const discardPropertyChanges = () => {
+    setEditingProperty(null);
+    setIsDirty(false);
+  };
+
+  const requestPropertyRejection = (property) => {
+    setPropertyActionsMenu(null);
+    setPropertyRejectionError('');
+    setPropertyPendingRejection(property);
   };
 
   const closePropertyDetails = () => {
@@ -613,7 +880,7 @@ function AdminPanel({
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await logoutUser();
     } catch (error) {
       console.error('Logout error:', error);
       setErrorMessage('Unable to log out right now.');
@@ -621,26 +888,38 @@ function AdminPanel({
   };
 
   const handleSupport = () => {
-    window.open('mailto:support@druvio.com?subject=Admin Support Request', '_blank');
+    window.open('mailto:support@zinoo.com?subject=Admin Support Request', '_blank');
   };
 
   const sidebarGroups = [
     {
-      label: 'Main',
+      label: 'Overview',
       items: [
         { key: 'home', label: 'Dashboard', icon: LayoutDashboard, count: null },
+        { key: 'ai_assistant', label: 'AI Assistant', icon: Bot, count: null }
+      ]
+    },
+    {
+      label: 'Operations',
+      items: [
         { key: 'properties', label: 'Properties', icon: Building, count: propertiesMetrics.withErrors > 0 ? propertiesMetrics.withErrors : null },
-        { key: 'buyers', label: 'Buyers', icon: Users, count: buyers.length },
-        { key: 'sellers', label: 'Sellers', icon: Store, count: sellers.length },
-        { key: 'requests', label: 'Seller Requests', icon: ClipboardList, count: pendingSellerRequests },
         { key: 'listings', label: 'Property Reviews', icon: Building, count: pendingProjects.length },
+        { key: 'requests', label: 'Seller Requests', icon: ClipboardList, count: pendingSellerRequests },
         { key: 'cashbacks', label: 'Cashback Management', icon: IndianRupee, count: cashbacks.filter(item => item.status === 'Pending Admin Review').length }
+      ]
+    },
+    {
+      label: 'Accounts',
+      items: [
+        { key: 'buyers', label: 'Buyers', icon: Users, count: buyers.length },
+        { key: 'sellers', label: 'Sellers', icon: Store, count: sellers.length }
       ]
     },
     {
       label: 'Content Management',
       items: [
-        { key: 'feed', label: 'Feed', icon: Images, count: null }
+        { key: 'feed', label: 'Feed', icon: Images, count: null },
+        { key: 'developers', label: 'Featured Developers', icon: Building, count: null }
       ]
     },
     {
@@ -655,6 +934,11 @@ function AdminPanel({
 
   const handleSidebarAction = (key) => {
     resetFeedback();
+
+    if (isDirty) {
+      setErrorMessage('Save or discard your changes before leaving the property editor.');
+      return;
+    }
 
     if (key === 'buyer_mode') {
       onSwitchToBuyer();
@@ -683,38 +967,55 @@ function AdminPanel({
   const viewMeta = {
     home: {
       title: 'Dashboard',
+      description: 'Review pending work and monitor the marketplace.'
+    },
+    ai_assistant: {
+      title: 'AI Assistant',
+      description: 'Ask project-aware questions using the latest saved Firestore data.'
     },
     properties: {
       title: 'Properties',
+      description: 'Find, review, and maintain every property listing.'
     },
     buyers: {
       title: 'Buyer Accounts',
+      description: 'Find buyers and inspect their property activity.'
     },
     sellers: {
       title: 'Seller Accounts',
+      description: 'Manage approved sellers and enter their workspaces.'
 
     },
     requests: {
       title: 'Seller Requests',
+      description: 'Review and decide pending seller applications.'
 
     },
     listings: {
       title: 'Property Review Queue',
+      description: 'Approve or reject submitted property listings.'
 
     },
     cashbacks: {
       title: 'Cashback Management',
+      description: 'Review claims, approvals, and payout progress.'
 
     },
     feed: {
       title: 'Feed',
       description: 'Manage the promotional banners shown on Buyer Home.'
     },
+    developers: {
+      title: 'Featured Developers',
+      description: 'Curate the trusted developers shown on Buyer Home.'
+    },
     profile: {
       title: 'Profile',
+      description: 'Manage your administrator account details.'
     },
     settings: {
       title: 'Settings',
+      description: 'Configure shared catalogs and workspace preferences.'
     }
   };
 
@@ -727,33 +1028,53 @@ function AdminPanel({
   return (
     <div className="admin-shell">
       {isAndroidLayout && (
-        <header className="admin-mobile-top-app-bar m3-mobile-top-app-bar">
+        <header className={`admin-mobile-top-app-bar m3-mobile-top-app-bar ${activeTab === 'home' ? 'admin-home-mobile-bar' : ''}`}>
           <button type="button" className="m3-icon-button" onClick={() => setMobileDrawerOpen(true)} aria-label="Open admin navigation">
             <Menu size={24} />
           </button>
-          <div><span>Admin</span><strong>{currentMeta.title}</strong></div>
-          <button type="button" className="m3-icon-button" onClick={() => setShowProfileModal(true)} aria-label="Open profile">
-            <User size={24} />
-          </button>
+          <div className="admin-mobile-brand"><img src="/brand/zinoo-logo.png" alt="Zinoo" /><span>Admin</span></div>
+          {activeTab === 'home' && (
+            <button type="button" className="m3-icon-button admin-mobile-notification" onClick={() => setActiveTab('requests')} aria-label="Open pending notifications">
+              <Bell size={20} />
+              {(pendingSellerRequests + pendingProjects.length) > 0 && <b>{pendingSellerRequests + pendingProjects.length}</b>}
+            </button>
+          )}
+          <ProfileDropdown
+            user={user}
+            onThemeToggle={onThemeToggle}
+            isDarkMode={isDarkMode}
+            permissions={permissions}
+            currentView={currentView}
+            onViewChange={onViewChange}
+            onCustomerSupport={onCustomerSupport}
+            onBackToAdmin={onBackToAdmin}
+            selectedSeller={selectedSeller}
+            hideChevron
+          />
         </header>
       )}
       {isAndroidLayout && mobileDrawerOpen && (
         <div className="admin-mobile-drawer-scrim" role="presentation" onClick={() => setMobileDrawerOpen(false)}>
           <aside className="admin-mobile-drawer" role="dialog" aria-modal="true" aria-label="Admin navigation" onClick={(event) => event.stopPropagation()}>
             <div className="admin-mobile-drawer-head">
-              <div><span>Druvio</span><strong>Admin workspace</strong></div>
+              <div><span>Zinoo</span><strong>Admin workspace</strong></div>
               <button type="button" className="m3-icon-button" onClick={() => setMobileDrawerOpen(false)} aria-label="Close navigation"><X size={24} /></button>
             </div>
             <nav>
-              {sidebarGroups.flatMap((group) => group.items).map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button key={item.key} type="button" className={activeTab === item.key ? 'active' : ''} onClick={() => selectAdminDestination(item.key)}>
-                    <Icon size={22} /><span>{item.label}</span>
-                    {typeof item.count === 'number' && <b>{item.count}</b>}
-                  </button>
-                );
-              })}
+              {sidebarGroups.map((group) => (
+                <div key={group.label} className="admin-mobile-drawer-group">
+                  <span>{group.label}</span>
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button key={item.key} type="button" className={`${activeTab === item.key ? 'active' : ''}${item.tone === 'danger' ? ' danger' : ''}`} onClick={() => selectAdminDestination(item.key)}>
+                        <Icon size={20} /><span>{item.label}</span>
+                        {typeof item.count === 'number' && <b>{item.count}</b>}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
             </nav>
           </aside>
         </div>
@@ -791,106 +1112,103 @@ function AdminPanel({
         </nav>
       </aside>}
 
-      <section className="admin-content">
-        <div className="admin-content-header">
+      <section className={`admin-content ${editingProperty ? 'admin-content-property-editor' : ''}`}>
+        {activeTab !== 'home' && <div className={`admin-content-header ${editingProperty ? 'admin-content-header-editor' : ''}`}>
           <div>
-            <h2>{currentMeta.title}</h2>
+            <h1>{currentMeta.title}</h1>
             <p>{currentMeta.description}</p>
           </div>
-        </div>
+        </div>}
 
         {statusMessage && <div className="app-success" role="status">{statusMessage}</div>}
         {errorMessage && <div className="app-error" role="alert">{errorMessage}</div>}
 
         {activeTab === 'cashbacks' && <CashbackWorkspace role="admin" cashbacks={cashbacks} />}
         {activeTab === 'feed' && <FeedBannerManager user={user} onSuccess={setStatusMessage} onError={setErrorMessage} />}
+        {activeTab === 'developers' && <FeaturedDeveloperManager onSuccess={setStatusMessage} onError={setErrorMessage} />}
+        {activeTab === 'ai_assistant' && <AdminAIAssistant projects={projects} contextProjectId={aiProjectContext} onContextChange={setAiProjectContext} />}
 
         {activeTab === 'home' && (
-          <div className="admin-panel-stack">
-            <div className="admin-metric-grid">
-              <article className="admin-metric-card">
-                <span>Active sellers</span>
-                <strong>{sellers.length}</strong>
-              </article>
-              <article className="admin-metric-card">
-                <span>Buyer accounts</span>
-                <strong>{buyers.length}</strong>
-              </article>
-              <article className="admin-metric-card">
-                <span>Approved properties</span>
-                <strong>{activeProjectList.length}</strong>
-              </article>
-              <article className="admin-metric-card">
-                <span>Pending requests</span>
-                <strong>{pendingSellerRequests}</strong>
-              </article>
-              <article className="admin-metric-card">
-                <span>Pending listings</span>
-                <strong>{pendingProjects.length}</strong>
-              </article>
-            </div>
+          <div className="admin-panel-stack admin-executive-dashboard">
+            <header className="admin-executive-header">
+              <div>
+                <span><Sun size={14} /> Operations overview</span>
+                <h1>Dashboard</h1>
+                <p>{pendingSellerRequests + pendingProjects.length > 0 ? `${pendingSellerRequests + pendingProjects.length} item${pendingSellerRequests + pendingProjects.length === 1 ? '' : 's'} need review.` : 'No seller or property approvals are waiting.'}</p>
+              </div>
+            </header>
 
-            <div className="admin-dashboard-grid">
-              <section className="admin-panel-section">
-                <div className="admin-panel-section-head">
-                  <div>
-                    <span className="admin-panel-kicker">Approval Queue</span>
-                    <h3>Seller requests</h3>
-                  </div>
-                  <button type="button" className="btn-secondary" onClick={() => setActiveTab('requests')}>
-                    Open queue
-                  </button>
+            <section className="admin-operation-card admin-approval-center">
+              <div className="admin-operation-heading">
+                <div><span>Approval Center</span><h2>Seller Requests</h2></div>
+                <b>{pendingSellerRequests} Pending</b>
+              </div>
+              {dashboardRequestsPreview.length === 0 ? (
+                <div className="admin-approval-healthy">
+                  <span><CheckCircle /> Everything is up to date.</span>
+                  <p>There are no seller verification requests waiting.</p>
                 </div>
-
-                {dashboardRequestsPreview.length === 0 ? (
-                  <div className="admin-empty-state">No pending seller requests right now.</div>
-                ) : (
-                  <div className="admin-list-preview">
-                    {dashboardRequestsPreview.map((request) => (
-                      <div key={request.id} className="admin-list-preview-row">
-                        <div>
-                          <strong>{getName(request)}</strong>
-                          <span>{request.businessName || 'Business not provided'}</span>
-                        </div>
-                        <button type="button" className="btn-secondary seller-inline-button" onClick={() => setActiveTab('requests')}>
-                          Review
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              <section className="admin-panel-section">
-                <div className="admin-panel-section-head">
-                  <div>
-                    <span className="admin-panel-kicker">Property Queue</span>
-                    <h3>Listings under review</h3>
-                  </div>
-                  <button type="button" className="btn-secondary" onClick={() => setActiveTab('listings')}>
-                    Open reviews
-                  </button>
+              ) : (
+                <div className="admin-approval-list">
+                  {dashboardRequestsPreview.map((request) => (
+                    <div key={request.id}>
+                      <span className="admin-approval-avatar">{getName(request).charAt(0).toUpperCase()}</span>
+                      <div><strong>{getName(request)}</strong><small>Pending verification</small></div>
+                      <button type="button" onClick={() => setActiveTab('requests')}>Review <ChevronRight /></button>
+                    </div>
+                  ))}
                 </div>
+              )}
+              <button type="button" className="admin-open-queue" onClick={() => setActiveTab('requests')}>
+                Open Approval Queue <ArrowRight />
+              </button>
+              <button type="button" className="admin-property-review-link" onClick={() => setActiveTab('listings')}>
+                {dashboardListingPreview.length} propert{dashboardListingPreview.length === 1 ? 'y' : 'ies'} awaiting review <ChevronRight />
+              </button>
+            </section>
 
-                {dashboardListingPreview.length === 0 ? (
-                  <div className="admin-empty-state">No property listings are waiting for approval.</div>
-                ) : (
-                  <div className="admin-list-preview">
-                    {dashboardListingPreview.map((project) => (
-                      <div key={project.id} className="admin-list-preview-row">
-                        <div>
-                          <strong>{project.name}</strong>
-                          <span>{getProjectOwnerName(project, sellers)}</span>
-                        </div>
-                        <button type="button" className="btn-secondary seller-inline-button" onClick={() => setActiveTab('listings')}>
-                          Review
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-            </div>
+            <section className="admin-executive-metrics" aria-label="Operational summary">
+              <article className="admin-executive-metric featured blue">
+                <div className="admin-metric-icon"><Store /></div>
+                <div><span>Approved Sellers</span><strong><AnimatedMetric value={sellers.length} /></strong></div>
+                <small>Seller access granted</small>
+              </article>
+              <article className="admin-executive-metric indigo">
+                <div className="admin-metric-icon"><Users /></div>
+                <div><span>Buyers</span><strong><AnimatedMetric value={buyers.length} /></strong></div>
+                <small>Total accounts</small>
+              </article>
+              <article className="admin-executive-metric green">
+                <div className="admin-metric-icon"><ShieldCheck /></div>
+                <div><span>Live Properties</span><strong><AnimatedMetric value={activeProjectList.length} /></strong></div>
+                <small>Published listings</small>
+              </article>
+              <article className="admin-executive-metric orange">
+                <div className="admin-metric-icon"><Clock3 /></div>
+                <div><span>Needs Review</span><strong><AnimatedMetric value={pendingSellerRequests + pendingProjects.length} /></strong></div>
+                <small>Sellers and properties</small>
+              </article>
+            </section>
+
+            <section className="admin-operation-card admin-activity-card">
+              <div className="admin-operation-heading"><div><span>Live Overview</span><h2>Today&apos;s Activity</h2></div></div>
+              <div className="admin-activity-list">
+                <div><span className="indigo"><Users /></span><strong>{buyers.length} buyer accounts</strong><small>Current</small></div>
+                <div><span className="orange"><UserCheck /></span><strong>{pendingSellerRequests} seller applications</strong><small>Pending</small></div>
+                <div><span className="green"><Building /></span><strong>{activeProjectList.length} properties published</strong><small>Live</small></div>
+                <div><span className="purple"><ClipboardList /></span><strong>{pendingProjects.length} listings in review</strong><small>Now</small></div>
+              </div>
+            </section>
+
+            <section className="admin-quick-actions" aria-label="Quick actions">
+              <h2>Quick Actions</h2>
+              <div>
+                <button type="button" onClick={() => setActiveTab('properties')}><Plus /> Add Property</button>
+                <button type="button" onClick={() => setActiveTab('requests')}><UserCheck /> Review Seller Applications</button>
+                <button type="button" onClick={() => setActiveTab('cashbacks')}><BarChart3 /> Reports</button>
+                <button type="button" onClick={() => setActiveTab('feed')}><Megaphone /> Broadcast</button>
+              </div>
+            </section>
           </div>
         )}
 
@@ -900,6 +1218,9 @@ function AdminPanel({
             seller={sellers.find((item) => item.id === (viewingProperty.sellerId || viewingProperty.sellerUid || viewingProperty.ownerId))}
             onBack={closePropertyDetails}
             onOpenEditor={openMasterPropertyEditor}
+            onApprove={handleApproveProject}
+            onReject={requestPropertyRejection}
+            workingKey={workingKey}
           />
         )}
 
@@ -911,6 +1232,9 @@ function AdminPanel({
                 seller={sellers.find((item) => item.id === (viewingProperty.sellerId || viewingProperty.sellerUid || viewingProperty.ownerId))}
                 onBack={closePropertyDetails}
                 onOpenEditor={openMasterPropertyEditor}
+                onApprove={handleApproveProject}
+                onReject={requestPropertyRejection}
+                workingKey={workingKey}
               />
             )}
             {/* View Property Mode */}
@@ -921,7 +1245,7 @@ function AdminPanel({
                     <ArrowLeft size={16} /> Back to List
                   </button>
                   <div className="admin-actions-row">
-                    <button type="button" className="btn-primary" onClick={() => { setEditingProperty(viewingProperty); setViewingProperty(null); }}>
+                    <button type="button" className="btn-primary" onClick={() => openMasterPropertyEditor(viewingProperty.id)}>
                       <Edit size={16} /> Edit Property
                     </button>
                   </div>
@@ -961,7 +1285,6 @@ function AdminPanel({
                       <p><strong>Max Plot Area:</strong> {viewingProperty.maximumPlotArea || viewingProperty.plotAreaMaxSqFt || 'N/A'} {viewingProperty.plotAreaUnit || 'sq.ft.'}</p>
                       <p><strong>Starting Price:</strong> ₹{viewingProperty.startingPrice || viewingProperty.priceFrom || 'N/A'}</p>
                       <p><strong>Max Price:</strong> ₹{viewingProperty.maximumPrice || 'N/A'}</p>
-                      <p><strong>Total Plots:</strong> {viewingProperty.totalPlots || 'N/A'} (Available: {viewingProperty.availablePlots || viewingProperty.remainingPlots || 'N/A'})</p>
                     </div>
                   </section>
 
@@ -1044,731 +1367,59 @@ function AdminPanel({
             )}
 
             {/* Edit Property Mode */}
-            {editingProperty && (() => {
-              // Calculate dynamic validations
-              const val = validateProperty(editingProperty);
-              const completion = (() => {
-                let fields = ['name', 'startingPrice', 'landZone', 'naStatus', 'latitude', 'longitude', 'completeAddress', 'totalPlots'];
-                let filled = fields.filter(f => {
-                  const v = editingProperty[f] ?? (f === 'startingPrice' ? editingProperty.priceFrom : null);
-                  return v !== undefined && v !== null && String(v).trim() !== '' && v !== 0;
-                });
-                return Math.round((filled.length / fields.length) * 100);
-              })();
-
-              // Check section validity for collapsible sections
-              const isLegalCollapsed = collapsedSections.legal && !val.errors.some(e => e.type === 'missing_legal_information');
-              const isAmenitiesCollapsed = collapsedSections.amenities && !val.errors.some(e => e.type === 'incomplete_contact');
-              const isMediaCollapsed = collapsedSections.media && !val.errors.some(e => e.type === 'missing_cover_image' || e.type === 'media_error');
-              const isSiteVisitCollapsed = collapsedSections.siteVisit && !val.errors.some(e => e.type === 'incomplete_contact');
-
-              const triggerScrollTo = (selector) => {
-                const el = document.querySelector(selector);
-                if (el) {
-                  el.scrollIntoView({ behavior: 'smooth' });
-                  // If it's collapsed, expand it
-                  if (selector.includes('legal')) setCollapsedSections(prev => ({ ...prev, legal: false }));
-                  if (selector.includes('amenities')) setCollapsedSections(prev => ({ ...prev, amenities: false }));
-                  if (selector.includes('media')) setCollapsedSections(prev => ({ ...prev, media: false }));
-                  if (selector.includes('sitevisit')) setCollapsedSections(prev => ({ ...prev, siteVisit: false }));
-                }
-              };
-
-              // Maps a section ID to its relevant validation error types.
-              // Returns true if the section has no errors, false if it has at least one.
-              const isSectionValid = (sectionId) => {
-                const sectionErrorTypes = {
-                  basic: ['missing_name', 'invalid_property_status'],
-                  pricing: ['missing_price'],
-                  location: ['exact_location_missing', 'invalid_coordinates', 'marker_not_confirmed'],
-                  legal: ['missing_legal_information'],
-                  amenities: [],
-                  media: ['missing_cover_image', 'media_error'],
-                  siteVisit: ['incomplete_contact'],
-                  contact: ['incomplete_contact'],
-                };
-                const relevantTypes = sectionErrorTypes[sectionId] || [];
-                if (relevantTypes.length === 0) return true;
-                return !val.errors.some(e => relevantTypes.includes(e.type));
-              };
-
-              return (
-                <div className="admin-property-edit-workspace">
-                  {/* Sticky Header */}
-                  <header className="property-edit-header">
-                    <div className="header-left">
-                      <button type="button" className="back-to-properties-btn" onClick={() => {
-                        if (isDirty && !window.confirm("You have unsaved changes. Leaving this page will discard your recent edits. Are you sure you want to leave?")) return;
-                        setEditingProperty(null);
-                        setIsDirty(false);
-                      }}>
-                        &larr; Properties
-                      </button>
-                      <div className="title-area">
-                        <h1>Edit Property</h1>
-                        <span className="project-sub-meta">
-                          <strong>{editingProperty.name || 'Unnamed Property'}</strong> &middot; ID: {editingProperty.projectId || editingProperty.id || 'N/A'}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="header-badges">
-                      <span className={`badge-status badge-status-${String(editingProperty.status || 'draft').toLowerCase()}`}>
-                        {editingProperty.status || 'Draft'}
-                      </span>
-                      <span className={`badge-location location-status-${val.locationStatus}`}>
-                        {val.locationStatus === 'verified' ? 'Location Verified' : 'Location Missing'}
-                      </span>
-                      <span className="badge-completion">
-                        {completion}% Complete
-                      </span>
-                    </div>
-                  </header>
-
-                  <div className="property-edit-body-content">
-                    {/* Completion and Error Summary Card */}
-                    <div className="completion-error-summary-card">
-                      <div className="summary-radial-info">
-                        <h3>Property Completion: {completion}%</h3>
-                        <div className="summary-meters-row">
-                          <span className="summary-badge-indicator">
-                            <strong>{val.errors.length}</strong> Error(s)
-                          </span>
-                          <span className="summary-badge-indicator warning">
-                            <strong>{completion < 80 ? 1 : 0}</strong> Warning(s)
-                          </span>
-                        </div>
-                      </div>
-                      {val.errors.length > 0 && (
-                        <div className="required-attention-issues">
-                          <h4>Required Attention:</h4>
-                          <ul>
-                            {val.errors.map(err => {
-                              let targetSelector = '.form-section-basic';
-                              if (err.type.includes('location') || err.type.includes('coordinates') || err.type.includes('marker')) {
-                                targetSelector = '.form-section-location';
-                              } else if (err.type.includes('price')) {
-                                targetSelector = '.form-section-pricing';
-                              } else if (err.type.includes('cover') || err.type.includes('media')) {
-                                targetSelector = '.form-section-media';
-                              } else if (err.type.includes('legal')) {
-                                targetSelector = '.form-section-legal';
-                              }
-                              return (
-                                <li key={err.id} className={`severity-${err.severity}`}>
-                                  <span>&bull; {err.description}</span>
-                                  <button type="button" className="jump-to-fix-btn" onClick={() => triggerScrollTo(targetSelector)}>
-                                    Fix Issue &rarr;
-                                  </button>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-
-                    <form onSubmit={(e) => { e.preventDefault(); handleSaveProperty(editingProperty); }} className="admin-redesigned-form-body">
-                      <PropertyDisplayEditor
-                        property={editingProperty}
-                        onChange={(nextProperty) => {
-                          setEditingProperty(nextProperty);
-                          setIsDirty(true);
-                        }}
-                      />
-                      {/* Basic Info Section */}
-                      <section className="form-section form-section-basic">
-                        <h2 className="section-title">Basic Information</h2>
-                        <p className="section-description">Core details regarding the plotting property name, developer, and overall status.</p>
-
-                        <div className="form-grid-3">
-                          <label className="admin-field">
-                            <span className="form-label">Property Name *</span>
-                            <input type="text" className="form-control" required value={editingProperty.name || ''} onChange={e => { setEditingProperty({ ...editingProperty, name: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Project ID *</span>
-                            <input type="text" className="form-control" required value={editingProperty.projectId || editingProperty.id || ''} onChange={e => { setEditingProperty({ ...editingProperty, projectId: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Listing Status</span>
-                            <select className="form-control" value={editingProperty.status || PROPERTY_STATUS.DRAFT} disabled title="Use the review and listing actions to change status.">
-                              {PROPERTY_STATUSES.map((status) => <option key={status} value={status}>{status.replace(/_/g, ' ')}</option>)}
-                            </select>
-                          </label>
-
-                          <label className="admin-field">
-                            <span className="form-label">Seller Association</span>
-                            <select className="form-control" value={editingProperty.sellerId || editingProperty.sellerUid || editingProperty.ownerId || ''} onChange={(event) => { const sellerId = event.target.value; setEditingProperty({ ...editingProperty, sellerId, sellerUid: sellerId, ownerId: sellerId }); setIsDirty(true); }}>
-                              <option value="">Select a valid seller</option>
-                              {sortedSellers.map((seller) => <option key={seller.id} value={seller.id}>{getName(seller)}</option>)}
-                            </select>
-                          </label>
-
-                          <label className="admin-field">
-                            <span className="form-label">Developer or Seller Name</span>
-                            <input type="text" className="form-control" value={editingProperty.developerName || editingProperty.developer || ''} onChange={e => { setEditingProperty({ ...editingProperty, developerName: e.target.value, developer: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Contact Number</span>
-                            <input type="text" className="form-control" value={editingProperty.contactNumber || ''} onChange={e => { setEditingProperty({ ...editingProperty, contactNumber: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Land Zone</span>
-                            <select className="form-control" value={editingProperty.landZone || ''} onChange={e => { setEditingProperty({ ...editingProperty, landZone: e.target.value }); setIsDirty(true); }}>
-                              <option value="">Select Land Zone</option>
-                              {LAND_ZONE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                            </select>
-                          </label>
-                        </div>
-
-                        <div className="form-grid-1" style={{ marginTop: '20px' }}>
-                          <label className="admin-field">
-                            <span className="form-label">Detailed Description</span>
-                            <textarea className="form-control" rows={4} value={editingProperty.description || ''} onChange={e => { setEditingProperty({ ...editingProperty, description: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                        </div>
-                      </section>
-
-                      {/* Location & Map Section */}
-                      <section className="form-section form-section-location">
-                        <h2 className="section-title">Location & Exact Map Position</h2>
-                        <p className="section-description">Provide localized structural address points and verify the exact satellites coordinates.</p>
-
-                        <div className="form-grid-3">
-                          <label className="admin-field">
-                            <span className="form-label">State</span>
-                            <input type="text" className="form-control" value={editingProperty.state || ''} onChange={e => { setEditingProperty({ ...editingProperty, state: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">District</span>
-                            <input type="text" className="form-control" value={editingProperty.district || ''} onChange={e => { setEditingProperty({ ...editingProperty, district: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">City</span>
-                            <input type="text" className="form-control" value={editingProperty.city || ''} onChange={e => { setEditingProperty({ ...editingProperty, city: e.target.value }); setIsDirty(true); }} />
-                          </label>
-
-                          <label className="admin-field">
-                            <span className="form-label">Area</span>
-                            <input type="text" className="form-control" value={editingProperty.area || ''} onChange={e => { setEditingProperty({ ...editingProperty, area: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Locality</span>
-                            <input type="text" className="form-control" value={editingProperty.locality || ''} onChange={e => { setEditingProperty({ ...editingProperty, locality: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Landmark</span>
-                            <input type="text" className="form-control" value={editingProperty.landmark || ''} onChange={e => { setEditingProperty({ ...editingProperty, landmark: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                        </div>
-
-                        <div className="form-grid-2-1" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginTop: '20px' }}>
-                          <label className="admin-field">
-                            <span className="form-label">Complete Address</span>
-                            <input type="text" className="form-control" value={editingProperty.completeAddress || ''} onChange={e => { setEditingProperty({ ...editingProperty, completeAddress: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Postal Code</span>
-                            <input type="text" className="form-control" value={editingProperty.postalCode || ''} onChange={e => { setEditingProperty({ ...editingProperty, postalCode: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                        </div>
-
-                        <div className="coordinates-confirm-box" style={{ marginTop: '24px' }}>
-                          <h3>Map Coordinates Validation</h3>
-
-                          {/* Exact Map Location Alert Banner */}
-                          {val.locationStatus !== 'verified' ? (
-                            <div className="exact-location-alert red-banner">
-                              <AlertCircle size={20} />
-                              <div>
-                                <h4>Exact location required</h4>
-                                <p>This property does not have a confirmed exact map marker. Place the marker at the project entrance and confirm the location.</p>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="exact-location-alert green-banner">
-                              <CheckCircle size={20} />
-                              <div>
-                                <h4>Exact location confirmed</h4>
-                                <p>Latitude: {editingProperty.latitude} &middot; Longitude: {editingProperty.longitude}</p>
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="form-grid-3" style={{ margin: '16px 0' }}>
-                            <label className="admin-field">
-                              <span className="form-label">Latitude</span>
-                              <input type="number" step="0.000001" className="form-control" value={editingProperty.latitude || ''} onChange={e => { setEditingProperty({ ...editingProperty, latitude: parseFloat(e.target.value) || 0 }); setIsDirty(true); }} />
-                            </label>
-                            <label className="admin-field">
-                              <span className="form-label">Longitude</span>
-                              <input type="number" step="0.000001" className="form-control" value={editingProperty.longitude || ''} onChange={e => { setEditingProperty({ ...editingProperty, longitude: parseFloat(e.target.value) || 0 }); setIsDirty(true); }} />
-                            </label>
-                            <label className="checkbox-field-wrapper" style={{ alignSelf: 'end', height: '44px' }}>
-                              <input type="checkbox" checked={editingProperty.mapMarkerConfirmed || false} onChange={e => { setEditingProperty({ ...editingProperty, mapMarkerConfirmed: e.target.checked }); setIsDirty(true); }} />
-                              <span>Confirm Exact Marker Location</span>
-                            </label>
-                          </div>
-
-                          <div className="map-picker-container-admin" style={{ height: '420px', border: '1px solid #cbd5e1', borderRadius: '12px', overflow: 'hidden' }}>
-                            <ProjectLocationPicker
-                              latitude={editingProperty.latitude}
-                              longitude={editingProperty.longitude}
-                              layoutPolygon={editingProperty.layoutPolygon}
-                              onChange={({ latitude, longitude }) => {
-                                setEditingProperty(curr => ({ ...curr, latitude, longitude, mapMarkerConfirmed: true }));
-                                setIsDirty(true);
-                              }}
-                              onLayoutChange={(geometry) => {
-                                setEditingProperty(curr => ({ ...curr, ...geometry }));
-                                setIsDirty(true);
-                              }}
-                            />
-                          </div>
-                          <span className="field-help" style={{ marginTop: '8px', display: 'block' }}>
-                            Place the marker at the exact project entrance and draw the project boundary where available.
-                          </span>
-                        </div>
-                      </section>
-
-                      {/* Plot & Inventory Section */}
-                      <section className="form-section form-section-plots">
-                        <h2 className="section-title">Plot & Inventory Details</h2>
-                        <p className="section-description">Enter the dimension limits, units, plot numbers, and inventory totals.</p>
-
-                        <div className="form-grid-3">
-                          <label className="admin-field">
-                            <span className="form-label">Total Number of Plots</span>
-                            <input type="number" className="form-control" value={editingProperty.totalPlots || ''} onChange={e => { setEditingProperty({ ...editingProperty, totalPlots: parseInt(e.target.value) || 0 }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Available Plots</span>
-                            <input type="number" className="form-control" value={editingProperty.availablePlots || editingProperty.remainingPlots || ''} onChange={e => { setEditingProperty({ ...editingProperty, availablePlots: parseInt(e.target.value) || 0, remainingPlots: parseInt(e.target.value) || 0 }); setIsDirty(true); }} />
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Development Stage</span>
-                            <input type="text" className="form-control" placeholder="e.g. Under Construction" value={editingProperty.developmentStage || ''} onChange={e => { setEditingProperty({ ...editingProperty, developmentStage: e.target.value }); setIsDirty(true); }} />
-                          </label>
-                        </div>
-                      </section>
-
-                      {/* Pricing Section */}
-                      <section className="form-section form-section-pricing">
-                        <h2 className="section-title">Pricing & Financials</h2>
-                        <p className="section-description">Specify project cost limitations, sq.ft. rates, and booking deposits.</p>
-
-                        <div className="form-grid-3">
-                          <label className="admin-field">
-                            <span className="form-label">Starting Price *</span>
-                            <div className="input-with-prefix">
-                              <span className="prefix">₹</span>
-                              <input type="number" className="form-control" required value={editingProperty.startingPrice || editingProperty.priceFrom || ''} onChange={e => { setEditingProperty({ ...editingProperty, startingPrice: parseFloat(e.target.value) || 0, priceFrom: parseFloat(e.target.value) || 0 }); setIsDirty(true); }} />
-                            </div>
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Price Per Sq. Ft.</span>
-                            <div className="input-with-prefix">
-                              <span className="prefix">₹</span>
-                              <input type="number" className="form-control" value={editingProperty.pricePerSqFt || ''} onChange={e => { setEditingProperty({ ...editingProperty, pricePerSqFt: parseFloat(e.target.value) || 0 }); setIsDirty(true); }} />
-                            </div>
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Booking Amount</span>
-                            <div className="input-with-prefix">
-                              <span className="prefix">₹</span>
-                              <input type="number" className="form-control" value={editingProperty.bookingAmount || ''} onChange={e => { setEditingProperty({ ...editingProperty, bookingAmount: parseFloat(e.target.value) || 0 }); setIsDirty(true); }} />
-                            </div>
-                          </label>
-                          <label className="admin-field">
-                            <span className="form-label">Cashback Amount Per Guntha</span>
-                            <div className="input-with-prefix">
-                              <span className="prefix">₹</span>
-                              <input type="number" className="form-control" value={editingProperty.cashbackPerGuntha || editingProperty.cashbackAmount || ''} onChange={e => { setEditingProperty({ ...editingProperty, cashbackPerGuntha: parseFloat(e.target.value) || 0 }); setIsDirty(true); }} />
-                            </div>
-                          </label>
-                        </div>
-                      </section>
-
-                      {/* Legal and Approvals - Collapsible */}
-                      <section className={`form-section form-section-legal ${isLegalCollapsed ? 'collapsed' : ''}`}>
-                        <div className="section-collapsible-header" onClick={() => setCollapsedSections(prev => ({ ...prev, legal: !prev.legal }))}>
-                          <div>
-                            <h2 className="section-title">
-                              Legal & Approvals
-                              {!isSectionValid('legal', editingProperty) && <span className="red-dot" title="Has unresolved errors">&bull;</span>}
-                            </h2>
-                            <p className="section-description">RERA registrations, local authority approvals, and structural notes.</p>
-                          </div>
-                          <span className="expand-indicator-chevron">{isLegalCollapsed ? 'Expand +' : 'Collapse -'}</span>
-                        </div>
-
-                        {!isLegalCollapsed && (
-                          <div className="collapsible-content-body" style={{ marginTop: '20px' }}>
-                            <div className="form-grid-3">
-                              <label className="admin-field">
-                                <span className="form-label">RERA Status</span>
-                                <select className="form-control" value={editingProperty.reraStatus || ''} onChange={e => { setEditingProperty({ ...editingProperty, reraStatus: e.target.value }); setIsDirty(true); }}>
-                                  <option value="">Select RERA Status</option>
-                                  <option value="verified">Verified</option>
-                                  <option value="pending">Pending</option>
-                                  <option value="not_applicable">Not Applicable</option>
-                                </select>
-                              </label>
-                              {editingProperty.reraStatus === 'verified' && (
-                                <label className="admin-field">
-                                  <span className="form-label">RERA Registration Number</span>
-                                  <input type="text" className="form-control" value={editingProperty.reraNumber || ''} onChange={e => { setEditingProperty({ ...editingProperty, reraNumber: e.target.value }); setIsDirty(true); }} />
-                                </label>
-                              )}
-                              <label className="admin-field">
-                                <span className="form-label">NA Status</span>
-                                <select className="form-control" value={editingProperty.naStatus || ''} onChange={e => { setEditingProperty({ ...editingProperty, naStatus: e.target.value }); setIsDirty(true); }}>
-                                  <option value="">Select NA Status</option>
-                                  {NA_STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                </select>
-                              </label>
-
-                              <label className="admin-field">
-                                <span className="form-label">Title Status</span>
-                                <input type="text" className="form-control" value={editingProperty.titleStatus || ''} onChange={e => { setEditingProperty({ ...editingProperty, titleStatus: e.target.value }); setIsDirty(true); }} />
-                              </label>
-                              <label className="admin-field">
-                                <span className="form-label">PMRDA Approval Status</span>
-                                <select className="form-control" value={editingProperty.pmrdaApproved ? 'yes' : 'no'} onChange={e => { setEditingProperty({ ...editingProperty, pmrdaApproved: e.target.value === 'yes' }); setIsDirty(true); }}>
-                                  <option value="no">Not Confirmed</option>
-                                  <option value="yes">Approved</option>
-                                </select>
-                              </label>
-                              <label className="admin-field">
-                                <span className="form-label">Collector Approval Status</span>
-                                <select className="form-control" value={editingProperty.collectorApproved ? 'yes' : 'no'} onChange={e => { setEditingProperty({ ...editingProperty, collectorApproved: e.target.value === 'yes' }); setIsDirty(true); }}>
-                                  <option value="no">Not Confirmed</option>
-                                  <option value="yes">Approved</option>
-                                </select>
-                              </label>
-                            </div>
-                            <div className="form-grid-1" style={{ marginTop: '20px' }}>
-                              <label className="admin-field">
-                                <span className="form-label">Legal Notes</span>
-                                <textarea className="form-control" rows={3} value={editingProperty.legalNotes || ''} onChange={e => { setEditingProperty({ ...editingProperty, legalNotes: e.target.value }); setIsDirty(true); }} />
-                              </label>
-                            </div>
-                          </div>
-                        )}
-                      </section>
-
-                      {/* Amenities - Collapsible */}
-                      <section className={`form-section form-section-amenities ${isAmenitiesCollapsed ? 'collapsed' : ''}`}>
-                        <div className="section-collapsible-header" onClick={() => setCollapsedSections(prev => ({ ...prev, amenities: !prev.amenities }))}>
-                          <div>
-                            <h2 className="section-title">Amenities & Infrastructure</h2>
-                            <p className="section-description">Indicate what utilities and internal setups are live at the project.</p>
-                          </div>
-                          <span className="expand-indicator-chevron">{isAmenitiesCollapsed ? 'Expand +' : 'Collapse -'}</span>
-                        </div>
-
-                        {!isAmenitiesCollapsed && (
-                          <div className="collapsible-content-body" style={{ marginTop: '20px' }}>
-                            <div className="amenities-selection-cards-grid">
-                              {[
-                                { key: 'roadAccess', title: 'Road Access', desc: 'Internal concrete or asphalt road access' },
-                                { key: 'electricity', title: 'Electricity', desc: 'Active high tension or standard electrical poles' },
-                                { key: 'waterSupply', title: 'Water Supply', desc: 'Direct borewell or municipal drinking supply' },
-                                { key: 'drainage', title: 'Drainage', desc: 'Stormwater channels and underground drainage lines' },
-                                { key: 'streetLights', title: 'Street Lights', desc: 'Solar or LED electrical street illuminators' },
-                                { key: 'compoundBoundary', title: 'Compound Boundary', desc: 'Precast or brick compound perimeter wall' }
-                              ].map(amenity => (
-                                <label key={amenity.key} className={`amenity-card-selector ${editingProperty[amenity.key] ? 'selected' : ''}`}>
-                                  <input type="checkbox" checked={editingProperty[amenity.key] || false} onChange={e => { setEditingProperty({ ...editingProperty, [amenity.key]: e.target.checked }); setIsDirty(true); }} />
-                                  <div className="card-selector-details">
-                                    <strong>{amenity.title}</strong>
-                                    <span>{amenity.desc}</span>
-                                  </div>
-                                </label>
-                              ))}
-                            </div>
-                            <div className="form-grid-1" style={{ marginTop: '20px' }}>
-                              <label className="admin-field">
-                                <span className="form-label">Nearby Facilities & Details</span>
-                                <input type="text" className="form-control" placeholder="e.g. School (2km), Hospital (5km)" value={editingProperty.nearbyFacilities || ''} onChange={e => { setEditingProperty({ ...editingProperty, nearbyFacilities: e.target.value }); setIsDirty(true); }} />
-                              </label>
-                            </div>
-                          </div>
-                        )}
-                      </section>
-
-                      {/* Media - Collapsible */}
-                      <section className={`form-section form-section-media ${isMediaCollapsed ? 'collapsed' : ''}`}>
-                        <div className="section-collapsible-header" onClick={() => setCollapsedSections(prev => ({ ...prev, media: !prev.media }))}>
-                          <div>
-                            <h2 className="section-title">Media & Documents</h2>
-                            <p className="section-description">Cover image gallery, blueprint blueprints, brochures, and video promotions.</p>
-                          </div>
-                          <span className="expand-indicator-chevron">{isMediaCollapsed ? 'Expand +' : 'Collapse -'}</span>
-                        </div>
-
-                        {!isMediaCollapsed && (
-                          <div className="collapsible-content-body" style={{ marginTop: '20px' }}>
-                            <PropertyMediaDocumentsManager
-                              property={editingProperty}
-                              user={user}
-                              onChange={(nextProperty) => {
-                                setEditingProperty(nextProperty);
-                                setIsDirty(true);
-                              }}
-                            />
-                          </div>
-                        )}
-                      </section>
-
-                      {/* Site Visit - Collapsible */}
-                      <section className={`form-section form-section-sitevisit ${isSiteVisitCollapsed ? 'collapsed' : ''}`}>
-                        <div className="section-collapsible-header" onClick={() => setCollapsedSections(prev => ({ ...prev, siteVisit: !prev.siteVisit }))}>
-                          <div>
-                            <h2 className="section-title">Site Visit Information</h2>
-                            <p className="section-description">Site visit contact coordinators and availability details.</p>
-                          </div>
-                          <span className="expand-indicator-chevron">{isSiteVisitCollapsed ? 'Expand +' : 'Collapse -'}</span>
-                        </div>
-
-                        {!isSiteVisitCollapsed && (
-                          <div className="collapsible-content-body" style={{ marginTop: '20px' }}>
-                            <div className="form-grid-3">
-                              <label className="checkbox-field-wrapper" style={{ height: '44px', display: 'flex', alignItems: 'center' }}>
-                                <input type="checkbox" checked={editingProperty.siteVisitAvailable || false} onChange={e => { setEditingProperty({ ...editingProperty, siteVisitAvailable: e.target.checked }); setIsDirty(true); }} />
-                                <span>Site Visit Available</span>
-                              </label>
-                              {editingProperty.siteVisitAvailable && (
-                                <label className="admin-field">
-                                  <span className="form-label">Site Visit Contact Phone</span>
-                                  <input type="text" className="form-control" placeholder="Optional" value={editingProperty.siteVisitContactNumber || ''} onChange={e => { setEditingProperty({ ...editingProperty, siteVisitContactNumber: e.target.value }); setIsDirty(true); }} />
-                                </label>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </section>
-
-                      {/* Audit History & Systems - Collapsible */}
-                      <section className={`form-section form-section-audit ${collapsedSections.audit ? 'collapsed' : ''}`}>
-                        <div className="section-collapsible-header" onClick={() => setCollapsedSections(prev => ({ ...prev, audit: !prev.audit }))}>
-                          <div>
-                            <h2 className="section-title">Audit History & System Metadata</h2>
-                            <p className="section-description">Timeline log of historical changes, errors captured, and detected dates.</p>
-                          </div>
-                          <span className="expand-indicator-chevron">{collapsedSections.audit ? 'Expand +' : 'Collapse -'}</span>
-                        </div>
-
-                        {!collapsedSections.audit && (
-                          <div className="collapsible-content-body" style={{ marginTop: '20px' }}>
-                            <div className="property-logs-section" style={{ gridTemplateColumns: '1fr', border: 'none', paddingTop: 0 }}>
-                              <div className="logs-column">
-                                <h3>Audit Logs</h3>
-                                {editingProperty.auditLog?.length > 0 ? (
-                                  <div className="audit-history-list">
-                                    {editingProperty.auditLog.map(audit => (
-                                      <div key={audit.id} className="audit-log-card" style={{ background: '#f8fafc' }}>
-                                        <p>{audit.change}</p>
-                                        <div className="audit-log-meta">
-                                          <span>By: {audit.adminName}</span>
-                                          <span>{new Date(audit.timestamp).toLocaleString()}</span>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <p className="no-logs">No change history recorded.</p>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </section>
-                    </form>
-                  </div>
-
-                  {/* Sticky Save Action Bar */}
-                  <footer className="sticky-action-bar-bottom">
-                    <div className="left-meta">
-                      {isDirty ? (
-                        <span className="unsaved-warning-span">
-                          <AlertTriangle size={16} /> Unsaved changes pending
-                        </span>
-                      ) : (
-                        <span className="saved-clean-span">All changes saved</span>
-                      )}
-                    </div>
-                    <div className="right-buttons">
-                      <button type="button" className="btn-secondary" onClick={() => {
-                        if (isDirty && !window.confirm("You have unsaved changes. Leaving this page will discard your recent edits. Are you sure you want to leave?")) return;
-                        setEditingProperty(null);
-                        setIsDirty(false);
-                      }}>
-                        Cancel
-                      </button>
-                      <button type="button" className="btn-secondary" onClick={() => {
-                        const draftData = { ...editingProperty, status: 'draft' };
-                        handleSaveProperty(draftData);
-                      }}>
-                        Save Draft
-                      </button>
-                      <button type="button" className="btn-primary" onClick={() => handleSaveProperty(editingProperty)}>
-                        Save Changes
-                      </button>
-                    </div>
-                  </footer>
-                </div>
-              );
-            })()}
-
+            {editingProperty && (
+              <PropertyDisplayEditor mode="edit" role="admin" user={user} property={editingProperty} amenityOptions={amenityOptions}
+                onChange={(nextProperty) => { setEditingProperty(nextProperty); setIsDirty(true); }} onSubmit={(event) => { event.preventDefault(); handleSaveProperty(editingProperty); }} onCancel={discardPropertyChanges} onReset={() => setEditingProperty(projects.find((item) => item.id === editingProperty.id) || editingProperty)} autoDetectHighway isDirty={isDirty} onDirtyChange={setIsDirty} submitError={errorMessage} />
+            )}
             {/* List Mode */}
             {!viewingProperty && !editingProperty && (
               <>
                 {propertiesMetrics.sellerMissing > 0 && (
                   <div className="app-error" role="alert">Action required: Some properties are not associated with a valid seller.</div>
                 )}
-                {/* Metric Summary Cards */}
-                <div className="admin-metric-grid admin-properties-metrics-grid">
-                  <article className={`admin-metric-card ${propertiesFilterTab === 'all' ? 'active-metric' : ''}`} onClick={() => setPropertiesFilterTab('all')}>
-                    <span>Total Properties</span>
-                    <strong>{propertiesMetrics.total}</strong>
-                  </article>
-                  <article className={`admin-metric-card ${propertiesFilterTab === 'active' ? 'active-metric' : ''}`} onClick={() => setPropertiesFilterTab('active')}>
-                    <span>Active Properties</span>
-                    <strong>{propertiesMetrics.active}</strong>
-                  </article>
-                  <article className={`admin-metric-card ${propertiesFilterTab === 'draft' ? 'active-metric' : ''}`} onClick={() => setPropertiesFilterTab('draft')}>
-                    <span>Draft Properties</span>
-                    <strong>{propertiesMetrics.draft}</strong>
-                  </article>
-                  <article className={`admin-metric-card ${propertiesFilterTab === 'errors' ? 'active-metric' : ''}`} onClick={() => setPropertiesFilterTab('errors')}>
-                    <span>Properties with Errors</span>
-                    <strong className="text-error">{propertiesMetrics.withErrors}</strong>
-                  </article>
-                  <article className={`admin-metric-card ${propertiesFilterTab === 'missing_location' ? 'active-metric' : ''}`} onClick={() => setPropertiesFilterTab('missing_location')}>
-                    <span>Missing Location</span>
-                    <strong className="text-warning">{propertiesMetrics.missingLocation}</strong>
-                  </article>
-                  <article className={`admin-metric-card ${propertiesFilterTab === 'recent' ? 'active-metric' : ''}`} onClick={() => setPropertiesFilterTab('recent')}>
-                    <span>Recently Added</span>
-                    <strong>{propertiesMetrics.recentlyAdded}</strong>
-                  </article>
-                </div>
-
-                {/* Filters and Search Workspace */}
-                <div className="admin-properties-controls">
-                  <div className="admin-search-wrapper">
-                    <Search size={16} />
-                    <input
-                      type="text"
-                      placeholder="Search by property name, project ID, developer, city, locality, or landmark"
+                <section className="admin-property-list" aria-label="Property management list">
+                  <div className="admin-property-list-search-row">
+                    <SearchBar
+                      className="admin-property-list-search"
+                      placeholder="Search by property name, project ID..."
                       value={propertiesSearchQuery}
                       onChange={(e) => { setPropertiesSearchQuery(e.target.value); setCurrentPage(1); }}
+                      trailingWidget={propertiesSearchQuery ? (
+                        <button type="button" className="clear-search-btn" aria-label="Clear property search" onClick={() => setPropertiesSearchQuery('')}>
+                          <X size={16} />
+                        </button>
+                      ) : null}
                     />
-                    {propertiesSearchQuery && (
-                      <button type="button" className="clear-search-btn" onClick={() => setPropertiesSearchQuery('')}>
-                        <X size={14} />
-                      </button>
-                    )}
                   </div>
 
-                  {/* Tab Filters */}
-                  <div className="admin-filter-tabs">
-                    {[
-                      { key: 'all', label: 'All Properties' },
-                      { key: PROPERTY_STATUS.ACTIVE, label: 'Active' },
-                      { key: PROPERTY_STATUS.PENDING, label: 'Pending Review' },
-                      { key: 'draft', label: 'Draft' },
-                      { key: PROPERTY_STATUS.INACTIVE, label: 'Inactive' },
-                      { key: 'errors', label: 'With Errors' },
-                      { key: 'missing_location', label: 'Missing Location' },
-                      { key: 'recent', label: 'Recently Added' }
-                    ].map(tab => (
-                      <button
-                        key={tab.key}
-                        type="button"
-                        className={`filter-tab-btn ${propertiesFilterTab === tab.key ? 'active' : ''}`}
-                        onClick={() => { setPropertiesFilterTab(tab.key); setCurrentPage(1); }}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Advanced Filters dropdowns */}
-                  <div className="admin-advanced-filters-grid">
-                    <label className="admin-field">
-                      <span>City</span>
-                      <select value={propertiesCityFilter} onChange={e => { setPropertiesCityFilter(e.target.value); setCurrentPage(1); }}>
-                        <option value="">All Cities</option>
-                        {uniqueCities.map(c => <option key={c} value={c}>{c}</option>)}
+                  <div className="admin-property-list-summary">
+                    <strong>{filteredProperties.length} {filteredProperties.length === 1 ? 'Property' : 'Properties'} Found</strong>
+                    <label className="admin-property-sort">
+                      <span>Sort:</span>
+                      <select value={sortField} onChange={(event) => {
+                        const nextField = event.target.value;
+                        setSortField(nextField);
+                        setSortDirection(nextField === 'name' ? 'asc' : 'desc');
+                        setCurrentPage(1);
+                      }} aria-label="Sort properties">
+                        <option value="createdAt">Recently Added</option>
+                        <option value="updatedAt">Recently Updated</option>
+                        <option value="name">Name A–Z</option>
                       </select>
-                    </label>
-
-                    <label className="admin-field">
-                      <span>Locality</span>
-                      <select value={propertiesLocalityFilter} onChange={e => { setPropertiesLocalityFilter(e.target.value); setCurrentPage(1); }}>
-                        <option value="">All Localities</option>
-                        {uniqueLocalities.map(l => <option key={l} value={l}>{l}</option>)}
-                      </select>
-                    </label>
-
-                    <label className="admin-field">
-                      <span>Developer</span>
-                      <select value={propertiesDeveloperFilter} onChange={e => { setPropertiesDeveloperFilter(e.target.value); setCurrentPage(1); }}>
-                        <option value="">All Developers</option>
-                        {uniqueDevelopers.map(d => <option key={d} value={d}>{d}</option>)}
-                      </select>
-                    </label>
-
-                    <label className="admin-field">
-                      <span>Error Type</span>
-                      <select value={propertiesErrorTypeFilter} onChange={e => { setPropertiesErrorTypeFilter(e.target.value); setCurrentPage(1); }}>
-                        <option value="">All Errors</option>
-                        <option value="exact_location_missing">Exact Map Location Missing</option>
-                        <option value="invalid_coordinates">Invalid Coordinates</option>
-                        <option value="marker_not_confirmed">Marker Not Confirmed</option>
-                        <option value="missing_name">Missing Name</option>
-                        <option value="missing_price">Missing Price</option>
-                        <option value="missing_cover_image">Missing Cover Image</option>
-                        <option value="missing_legal_information">Missing Required Legal Information</option>
-                        <option value="incomplete_contact">Incomplete Contact Info</option>
-                      </select>
-                    </label>
-
-                    <label className="admin-field">
-                      <span>Location Status</span>
-                      <select value={propertiesLocationStatusFilter} onChange={e => { setPropertiesLocationStatusFilter(e.target.value); setCurrentPage(1); }}>
-                        <option value="">All Statuses</option>
-                        <option value="verified">Verified</option>
-                        <option value="missing">Location Missing</option>
-                        <option value="invalid">Invalid Coordinates</option>
-                        <option value="not_confirmed">Marker Not Confirmed</option>
-                        <option value="needs_review">Needs Review</option>
-                      </select>
+                      <ChevronDown size={16} aria-hidden="true" />
                     </label>
                   </div>
-                </div>
 
-                {/* Table View */}
-                <div className="table-container admin-properties-table-container">
+                  <div className="admin-property-card-list">
                   {filteredProperties.length === 0 ? (
                     <div className="admin-empty-state-card">
                       <AlertCircle size={32} />
-                      {propertiesSearchQuery || propertiesCityFilter || propertiesLocalityFilter || propertiesDeveloperFilter || propertiesErrorTypeFilter || propertiesLocationStatusFilter ? (
+                      {propertiesSearchQuery ? (
                         <>
                           <h4>No matching properties found</h4>
-                          <p>No properties match your active filters or search terms.</p>
-                          <button type="button" className="btn-secondary" onClick={() => {
-                            setPropertiesSearchQuery('');
-                            setPropertiesCityFilter('');
-                            setPropertiesLocalityFilter('');
-                            setPropertiesDeveloperFilter('');
-                            setPropertiesErrorTypeFilter('');
-                            setPropertiesLocationStatusFilter('');
-                            setPropertiesFilterTab('all');
-                          }}>
-                            Clear Filters
+                          <p>No properties match your search.</p>
+                          <button type="button" className="btn-secondary" onClick={() => setPropertiesSearchQuery('')}>
+                            Clear Search
                           </button>
                         </>
                       ) : (
@@ -1780,117 +1431,135 @@ function AdminPanel({
                     </div>
                   ) : (
                     <>
-                      <table className="dash-table admin-properties-table">
-                        <thead>
-                          <tr>
-                            <th>Cover</th>
-                            <th onClick={() => { setSortField('name'); setSortDirection(curr => curr === 'asc' ? 'desc' : 'asc'); }}>Property Name & ID</th>
-                            <th>Location</th>
-                            <th>Developer</th>
-                            <th>Status</th>
-                            <th>Map Location Status</th>
-                            <th>Error Status</th>
-                            <th onClick={() => { setSortField('updatedAt'); setSortDirection(curr => curr === 'asc' ? 'desc' : 'asc'); }}>Last Updated</th>
-                            <th>Admin Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {paginatedProperties.map((property) => {
-                            const mainImg = property.thumbnail || property.heroImage || property.coverImage || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=120&q=80';
-                            return (
-                              <tr key={property.id} className={property.hasErrors ? 'row-has-errors' : ''}>
-                                <td>
-                                  <img src={mainImg} alt="" className="table-row-thumbnail" />
-                                </td>
-                                <td>
-                                  <strong className="primary-property-name">{property.name || 'Untitled Project'}</strong>
-                                  <div className="secondary-project-id">ID: {property.projectId || property.id || 'N/A'}</div>
-                                  {!property.sellerAssociationValid && <><span className="badge badge-danger">Seller Missing</span><div className="text-error">Seller association missing. This property cannot be approved.</div></>}
-                                </td>
-                                <td>
-                                  {[property.village, property.area, property.city].filter(Boolean).join(', ') || 'N/A'}
-                                </td>
-                                <td>{property.developerName || property.developer || 'N/A'}</td>
-                                <td>
-                                  <span className={`badge badge-status-${String(property.status || 'draft').toLowerCase()}`}>
-                                    {property.status || 'Draft'}
+                      <div className="admin-property-cards">
+                        {paginatedProperties.map((property) => {
+                          const mainImg = property.thumbnail || property.heroImage || property.coverImage || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=240&q=80';
+                          const addedAt = property.createdAt || property.updatedAt;
+                          const status = getProjectStatus(property);
+                          const statusLabel = status === PROPERTY_STATUS.PENDING ? 'Pending Review' : status.replace(/_/g, ' ');
+                          const propertySeller = sellers.find((seller) => seller.id === (property.sellerId || property.sellerUid || property.ownerId));
+                          return (
+                            <article key={property.id} className={`admin-property-list-card ${property.hasErrors ? 'has-errors' : ''} ${propertyActionsMenu?.id === property.id ? 'has-open-menu' : ''}`}>
+                              <button type="button" className="admin-property-card-main" onClick={() => openPropertyDetails(property, 'properties')} aria-label={`View ${property.name || 'property'}`}>
+                                <img src={mainImg} alt="" className="admin-property-card-thumbnail" />
+                                <span className="admin-property-card-copy">
+                                  <strong>{property.name || 'Untitled Project'}{property.display?.verified?.showNameBadge && <ShieldCheck className="property-name-verified-badge" aria-label="Verified property" />}</strong>
+                                  <span className="admin-property-card-id">ID: {property.projectId || property.id || 'N/A'}</span>
+                                  <span className="admin-property-card-location"><MapPin size={14} aria-hidden="true" /> {[property.village, property.area, property.city].filter(Boolean).join(', ') || 'Location unavailable'}</span>
+                                  <span className="admin-property-card-seller">Seller: {propertySeller?.businessName || propertySeller?.displayName || propertySeller?.name || property.developerName || 'Unassigned'}</span>
+                                  <span className="admin-property-card-badges">
+                                    <span className={`admin-property-pill status-${status}`}>{statusLabel}</span>
+                                    {property.locationStatus === 'verified' && <span className="admin-property-pill is-success">Verified</span>}
+                                    {property.hasErrors
+                                      ? <span className="admin-property-pill is-error">{property.errors?.length || 1} {property.errors?.length === 1 ? 'Error' : 'Errors'}</span>
+                                      : <span className="admin-property-pill is-success">Healthy</span>}
+                                    {!property.sellerAssociationValid && <span className="admin-property-pill is-error">Seller Missing</span>}
                                   </span>
-                                </td>
-                                <td>
-                                  <span className={`badge location-status-${property.locationStatus || 'missing'}`}>
-                                    {property.locationStatus === 'verified' ? 'Verified' :
-                                      property.locationStatus === 'missing' ? 'Location Missing' :
-                                        property.locationStatus === 'invalid' ? 'Invalid Coordinates' :
-                                          property.locationStatus === 'not_confirmed' ? 'Marker Not Confirmed' :
-                                            'Needs Review'}
-                                  </span>
-                                </td>
-                                <td>
-                                  {property.hasErrors ? (
-                                    <span className="badge badge-danger badge-error-info">
-                                      <AlertTriangle size={12} /> {property.errors?.length || 1} Error(s)
-                                    </span>
-                                  ) : (
-                                    <span className="badge badge-success">
-                                      <CheckCircle size={12} /> Healthy
-                                    </span>
-                                  )}
-                                  {property.status === PROPERTY_STATUS.ACTIVE && property.locationStatus !== 'verified' && (
-                                    <div className="text-warning">Active property is missing valid map coordinates and will not appear on the buyer map.</div>
-                                  )}
-                                </td>
-                                <td>
-                                  {property.updatedAt ? new Date(property.updatedAt).toLocaleDateString() : 'N/A'}
-                                </td>
-                                <td>
-                                  <div className="table-actions-cell">
-                                    <button type="button" className="btn-table-action" onClick={() => openPropertyDetails(property, 'properties')}>
-                                      View
+                                  <span className="admin-property-card-date"><Clock3 size={14} aria-hidden="true" /> Added on {formatAdminDate(addedAt)}</span>
+                                </span>
+                              </button>
+                              <div className="admin-property-card-actions">
+                                <button
+                                      type="button"
+                                      className="admin-property-card-overflow admin-overflow-trigger"
+                                      aria-label={`More actions for ${property.name || 'property'}`}
+                                      aria-haspopup="menu"
+                                      aria-expanded={propertyActionsMenu?.id === property.id}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        const rect = event.currentTarget.getBoundingClientRect();
+                                        setPropertyActionsMenu((current) => current?.id === property.id ? null : {
+                                          id: property.id,
+                                          top: rect.bottom + 6,
+                                          right: Math.max(8, window.innerWidth - rect.right)
+                                        });
+                                      }}
+                                    >
+                                      <MoreVertical size={20} aria-hidden="true" />
                                     </button>
-                                    <button type="button" className="btn-table-action action-edit-btn" onClick={() => setEditingProperty(property)}>
-                                      {property.sellerAssociationValid ? 'Edit' : 'Assign Seller'}
-                                    </button>
-                                    {property.status === PROPERTY_STATUS.PENDING && (
-                                      <button type="button" className="btn-table-action" disabled={!property.sellerAssociationValid || workingKey === `approve-project-${property.id}`} onClick={() => handleApproveProject(property)}>
-                                        Approve
-                                      </button>
+                                    {propertyActionsMenu?.id === property.id && (
+                                      <div
+                                        className="admin-overflow-menu"
+                                        role="menu"
+                                        ref={propertyActionsMenuRef}
+                                        style={{ top: propertyActionsMenu.top, right: propertyActionsMenu.right }}
+                                      >
+                                        <button type="button" role="menuitem" onClick={() => { setPropertyActionsMenu(null); openPropertyDetails(property, 'properties'); }}>
+                                          <Eye size={15} /> View
+                                        </button>
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          disabled={workingKey === `toggle-property-name-badge-${property.id}`}
+                                          onClick={async () => {
+                                            await togglePropertyNameBadge(property);
+                                            setPropertyActionsMenu(null);
+                                          }}
+                                        >
+                                          <ShieldCheck size={15} /> {property.display?.verified?.showNameBadge ?? property.showVerifiedNameBadge ? 'Hide name badge' : 'Show name badge'}
+                                        </button>
+                                        {status === PROPERTY_STATUS.PENDING && (
+                                          <button type="button" role="menuitem" disabled={!getPropertyGovernance(property, { sellerAssociationValid: property.sellerAssociationValid }).approvalEligible || workingKey === `approve-project-${property.id}`} onClick={async () => { await handleApproveProject(property); setPropertyActionsMenu(null); }}>
+                                            {workingKey === `approve-project-${property.id}` ? <><LoaderCircle className="button-spinner" size={15} /> Approving…</> : <><CheckCircle size={15} /> Approve</>}
+                                          </button>
+                                        )}
+                                        {[PROPERTY_STATUS.APPROVED, PROPERTY_STATUS.INACTIVE].includes(status) && (
+                                          <button type="button" role="menuitem" disabled={workingKey === `active-project-${property.id}`} onClick={async () => { await handleListingStatus(property, PROPERTY_STATUS.ACTIVE); setPropertyActionsMenu(null); }}>{workingKey === `active-project-${property.id}` ? <><LoaderCircle className="button-spinner" size={15} /> Activating…</> : <><Activity size={15} /> Activate</>}</button>
+                                        )}
+                                        {status === PROPERTY_STATUS.ACTIVE && (
+                                          <button type="button" role="menuitem" onClick={() => { setPropertyActionsMenu(null); handleListingStatus(property, PROPERTY_STATUS.INACTIVE); }}><Clock3 size={15} /> Deactivate</button>
+                                        )}
+                                        <button type="button" role="menuitem" onClick={() => {
+                                          setPropertyActionsMenu(null);
+                                          openMasterPropertyEditor(property.id);
+                                        }}>
+                                          <Edit size={15} /> {property.sellerAssociationValid ? 'Edit' : 'Assign Seller'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          disabled={![PROPERTY_STATUS.APPROVED, PROPERTY_STATUS.ACTIVE, PROPERTY_STATUS.INACTIVE].includes(status)}
+                                          onClick={() => {
+                                            setPropertyActionsMenu(null);
+                                            handleListingStatus(property, PROPERTY_STATUS.SOLD);
+                                          }}
+                                        >
+                                          <CheckCircle size={15} /> Mark Sold
+                                        </button>
+                                        {property.locationStatus !== 'verified' && (
+                                          <button type="button" role="menuitem" onClick={() => {
+                                            setPropertyActionsMenu(null);
+                                            openMasterPropertyEditor(property.id);
+                                          }}>
+                                            <AlertTriangle size={15} /> Fix Location
+                                          </button>
+                                        )}
+                                        <button type="button" role="menuitem" onClick={() => {
+                                          setPropertyActionsMenu(null);
+                                          if (property.latitude && property.longitude) {
+                                            window.open(`https://www.google.com/maps/search/?api=1&query=${property.latitude},${property.longitude}`, '_blank');
+                                          } else {
+                                            alert('No valid map coordinates saved for this property.');
+                                          }
+                                        }}>
+                                          <MapPin size={15} /> Map
+                                        </button>
+                                        {canDeleteProperties && (
+                                          <button type="button" role="menuitem" className="danger" onClick={() => {
+                                            setPropertyActionsMenu(null);
+                                            setDeletePropertyError('');
+                                            setPropertyPendingDeletion(property);
+                                          }}>
+                                            <Trash2 size={15} /> Delete
+                                          </button>
+                                        )}
+                                      </div>
                                     )}
-                                    {[PROPERTY_STATUS.APPROVED, PROPERTY_STATUS.INACTIVE].includes(property.status) && (
-                                      <button type="button" className="btn-table-action" onClick={() => handleListingStatus(property.id, PROPERTY_STATUS.ACTIVE)}>Activate</button>
-                                    )}
-                                    {property.status === PROPERTY_STATUS.ACTIVE && (
-                                      <button type="button" className="btn-table-action" onClick={() => handleListingStatus(property.id, PROPERTY_STATUS.INACTIVE)}>Deactivate</button>
-                                    )}
-                                    {[PROPERTY_STATUS.APPROVED, PROPERTY_STATUS.ACTIVE, PROPERTY_STATUS.INACTIVE].includes(property.status) && (
-                                      <button type="button" className="btn-table-action" onClick={() => handleListingStatus(property.id, PROPERTY_STATUS.SOLD)}>Mark Sold</button>
-                                    )}
-                                    <button type="button" className="btn-table-action" onClick={() => {
-                                      if (property.latitude && property.longitude) {
-                                        window.open(`https://www.google.com/maps/search/?api=1&query=${property.latitude},${property.longitude}`, '_blank');
-                                      } else {
-                                        alert('No valid map coordinates saved for this property.');
-                                      }
-                                    }}>
-                                      Map
-                                    </button>
-                                    {property.locationStatus !== 'verified' && (
-                                      <button type="button" className="btn-table-action action-fix-btn" onClick={() => {
-                                        setEditingProperty(property);
-                                        setTimeout(() => {
-                                          const el = document.querySelector('.form-category-location');
-                                          el?.scrollIntoView({ behavior: 'smooth' });
-                                        }, 150);
-                                      }}>
-                                        Fix Location
-                                      </button>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
 
                       {/* Pagination Controls */}
                       {totalPages > 1 && (
@@ -1906,15 +1575,16 @@ function AdminPanel({
                       )}
                     </>
                   )}
-                </div>
+                  </div>
+                </section>
               </>
             )}
           </div>
         )}
 
         {activeTab === 'buyers' && (
-          <div className="admin-panel-section">
-            {false && selectedBuyerProfile ? (() => {
+          <div className="admin-panel-section admin-buyers-section">
+            {selectedBuyerProfile ? (() => {
               const interestedIds = new Set(leads.filter((lead) => lead.createdBy === selectedBuyerProfile.id).map((lead) => lead.projectId).filter(Boolean));
               const interestedProperties = projects.filter((property) => interestedIds.has(property.id));
               return (
@@ -1923,8 +1593,8 @@ function AdminPanel({
                     <button type="button" className="btn-secondary" onClick={() => setSelectedBuyerProfile(null)}><ArrowLeft size={16} /> Back to Buyers</button>
                   </div>
                   <div className="admin-account-profile-header">
-                    <span className="admin-account-avatar">{getName(selectedBuyerProfile).charAt(0).toUpperCase()}</span>
-                    <div><span className="admin-panel-kicker">Buyer Profile</span><h2>{getName(selectedBuyerProfile)}</h2><p>{selectedBuyerProfile.email || 'No email'} · {selectedBuyerProfile.phoneNumber || selectedBuyerProfile.phone || 'No phone'}</p></div>
+                    <span className="admin-account-avatar">{getInitials(selectedBuyerProfile)}</span>
+                    <div><span className="admin-panel-kicker">Buyer Profile</span><h2>{getBuyerName(selectedBuyerProfile)}</h2><p>{selectedBuyerProfile.phoneNumber || selectedBuyerProfile.phone || 'N/A'}</p></div>
                   </div>
                   <div className="admin-profile-section-title"><div><h3>Interested Properties</h3><p>Properties connected to this buyer through enquiries and visits.</p></div><span>{interestedProperties.length}</span></div>
                   <div className="admin-related-properties-grid">
@@ -1937,30 +1607,39 @@ function AdminPanel({
                   </div>
                 </div>
               );
-            })() : <div className="table-container">
+            })() : isAndroidLayout ? (
+              <div className="admin-mobile-buyer-list" role="list" aria-label="Buyer accounts">
+                {sortedBuyers.length === 0 ? <div className="admin-mobile-buyer-empty"><strong>No buyers found</strong><span>Buyer accounts will appear here.</span></div> : sortedBuyers.map((buyer) => (
+                  <button key={buyer.id} type="button" className="admin-mobile-buyer-row" role="listitem" onClick={() => setSelectedBuyerProfile(buyer)} aria-label={`Open ${getBuyerName(buyer)} details`}>
+                    <span className="admin-mobile-buyer-avatar" aria-hidden="true">{getInitials(buyer)}</span>
+                    <div className="admin-mobile-buyer-copy">
+                      <strong>{getBuyerName(buyer)}</strong>
+                      <span>{buyer.phoneNumber || buyer.phone || 'N/A'}</span>
+                    </div>
+                    <ChevronRight size={17} className="admin-mobile-buyer-chevron" aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            ) : <div className="table-container">
               <table className="dash-table">
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Email</th>
                     <th>Phone</th>
-                    <th>Role</th>
-                    {false && <th>Actions</th>}
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedBuyers.length === 0 ? (
                     <tr>
-                      <td colSpan="4" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No buyer-only accounts found.</td>
+                      <td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No buyer accounts found.</td>
                     </tr>
                   ) : (
                     sortedBuyers.map((buyer) => (
                       <tr key={buyer.id}>
-                        <td><strong>{getName(buyer)}</strong></td>
-                        <td>{buyer.email || 'N/A'}</td>
+                        <td><strong>{getBuyerName(buyer)}</strong></td>
                         <td>{buyer.phoneNumber || buyer.phone || 'N/A'}</td>
-                        <td><span className="badge badge-info">Buyer</span></td>
-                        {false && <td><button type="button" className="btn-secondary seller-inline-button" onClick={() => setSelectedBuyerProfile(buyer)}><Eye size={14} /> View Profile</button></td>}
+                        <td><button type="button" className="btn-secondary seller-inline-button" onClick={() => setSelectedBuyerProfile(buyer)}><Eye size={14} /> View Profile</button></td>
                       </tr>
                     ))
                   )}
@@ -1972,17 +1651,21 @@ function AdminPanel({
 
         {activeTab === 'sellers' && (
           <div className="admin-panel-section">
-            {false && selectedSellerProfile ? (() => {
+            {!selectedSellerProfile && <div className="admin-properties-toolbar"><SearchBar value={sellerSearchQuery} onChange={(event) => setSellerSearchQuery(event.target.value)} placeholder="Search seller, business, phone, email or ID" /></div>}
+            {selectedSellerProfile ? (() => {
               const sellerProperties = projects.filter((property) => (property.ownerId || property.sellerUid || property.sellerId) === selectedSellerProfile.id);
+              const pendingApprovals = sellerProperties.filter((property) => ['pending', 'pending_review'].includes(String(property.status || property.approvalStatus || property.reviewStatus || '').toLowerCase())).length;
               return (
                 <div className="admin-account-profile">
                   <div className="admin-section-header">
                     <button type="button" className="btn-secondary" onClick={() => setSelectedSellerProfile(null)}><ArrowLeft size={16} /> Back to Sellers</button>
                   </div>
                   <div className="admin-account-profile-header">
-                    <span className="admin-account-avatar">{getName(selectedSellerProfile).charAt(0).toUpperCase()}</span>
-                    <div><span className="admin-panel-kicker">Seller Profile</span><h2>{getName(selectedSellerProfile)}</h2><p>{selectedSellerProfile.businessName || 'Independent seller'} · {selectedSellerProfile.email || 'No email'} · {selectedSellerProfile.phoneNumber || selectedSellerProfile.phone || 'No phone'}</p></div>
+                    <UserAvatar profile={selectedSellerProfile} fallbackLabel="Seller" className="admin-account-avatar" useSellerDefault />
+                    <div><span className="admin-panel-kicker">Seller Profile</span><h2>{selectedSellerProfile.businessName || getName(selectedSellerProfile)}</h2><p>{selectedSellerProfile.email || 'No email'} · {selectedSellerProfile.phoneNumber || selectedSellerProfile.phone || 'No phone'}</p></div>
                   </div>
+                  <div className="admin-mobile-seller-facts"><div><span>Approval state</span><strong>Approved</strong></div><div><span>Pending properties</span><strong>{pendingApprovals}</strong></div></div>
+                  <button type="button" className="btn-primary admin-mobile-seller-workspace" onClick={() => openSellerWorkspace(selectedSellerProfile)}><Users size={16} /> Go to Seller Side</button>
                   <div className="admin-profile-section-title"><div><h3>Properties</h3><p>All properties associated with this seller.</p></div><span>{sellerProperties.length}</span></div>
                   <div className="admin-related-properties-grid">
                     {sellerProperties.length ? sellerProperties.map((property) => (
@@ -1994,7 +1677,24 @@ function AdminPanel({
                   </div>
                 </div>
               );
-            })() : <div className="table-container">
+            })() : isAndroidLayout ? (
+              <div className="admin-mobile-seller-list" role="list">
+                {visibleSellers.length === 0 ? <div className="admin-mobile-seller-empty">No approved sellers match this search.</div> : visibleSellers.map((seller) => {
+                  const propertyCount = sellerProjectCounts.get(seller.id) || 0;
+                  return (
+                    <button type="button" role="listitem" className="admin-mobile-seller-row" key={seller.id} onClick={() => setSelectedSellerProfile(seller)}>
+                      <UserAvatar profile={seller} fallbackLabel="Seller" className="admin-mobile-seller-avatar" useSellerDefault />
+                      <span className="admin-mobile-seller-copy">
+                        <strong>{seller.businessName || seller.displayName || seller.name || 'Unknown'}</strong>
+                        <small>{seller.phoneNumber || seller.phone || 'Phone unavailable'}</small>
+                      </span>
+                      <span className="admin-mobile-seller-meta"><b>Approved</b><small>{propertyCount} {propertyCount === 1 ? 'Property' : 'Properties'}</small></span>
+                      <ChevronRight size={20} />
+                    </button>
+                  );
+                })}
+              </div>
+            ) : <div className="table-container">
               <table className="dash-table">
                 <thead>
                   <tr>
@@ -2008,13 +1708,13 @@ function AdminPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedSellers.length === 0 ? (
+                  {visibleSellers.length === 0 ? (
                     <tr>
                       <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No approved sellers found.</td>
                     </tr>
                   ) : (
-                    sortedSellers.map((seller) => {
-                      const sellerProjects = projects.filter((project) => project.ownerId === seller.id);
+                    visibleSellers.map((seller) => {
+                      const sellerProjects = projects.filter((project) => [project.ownerId, project.sellerId, project.sellerUid].includes(seller.id));
                       return (
                         <tr key={seller.id}>
                           <td><strong>{seller.displayName || seller.name || seller.businessName || 'Unknown'}</strong></td>
@@ -2023,9 +1723,12 @@ function AdminPanel({
                           <td>{seller.businessName || 'N/A'}</td>
                           <td>{sellerProjects.length}</td>
                           <td>
-                            <span className="badge badge-success">Active</span>
+                            <span className="badge badge-success">Approved</span>
                           </td>
                           <td>
+                            <button type="button" className="btn-secondary seller-inline-button" onClick={() => setSelectedSellerProfile(seller)}>
+                              <Eye size={14} /> View seller
+                            </button>
                             <button type="button" className="btn-secondary seller-inline-button" onClick={() => openSellerWorkspace(seller)}>
                               <Users size={14} /> Go to Seller Side
                             </button>
@@ -2049,7 +1752,24 @@ function AdminPanel({
 
         {activeTab === 'requests' && (
           <div className="admin-panel-section">
-            <div className="table-container">
+            {selectedSellerRequest ? <AdminSellerReview application={selectedSellerRequest} properties={projects} workingKey={workingKey} onBack={() => setSelectedSellerRequest(null)} onApprove={handleApproveSellerRequest} onReject={requestSellerRejection} onOpenProperty={(property) => openPropertyDetails(property, 'requests')} /> : isAndroidLayout ? (
+              <div className="admin-mobile-review-list" role="list" aria-label="Pending seller requests">
+                {pendingRequests.length === 0 ? (
+                  <div className="admin-empty-state-card"><CheckCircle size={30} /><h4>No pending requests</h4><p>All seller applications have been reviewed.</p></div>
+                ) : pendingRequests.map((request) => (
+                  <article key={request.id} className="admin-mobile-review-card" role="listitem">
+                    <header><div><h3>{getName(request)}</h3><p>{request.businessName || 'Business name not provided'}</p></div><span className="badge badge-warning">Pending</span></header>
+                    <div className="admin-mobile-review-meta">
+                      <span><small>Phone</small><strong>{request.contactPhone || request.userPhone || 'N/A'}</strong></span>
+                      <span><small>Email</small><strong>{request.userEmail || request.contactEmail || 'No email'}</strong></span>
+                    </div>
+                    <div className="admin-mobile-review-actions">
+                      <button type="button" className="btn-primary" onClick={() => setSelectedSellerRequest(request)}><Eye size={16} /> Review seller</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : <div className="table-container">
               <table className="dash-table">
                 <thead>
                   <tr>
@@ -2076,38 +1796,43 @@ function AdminPanel({
                         <td>{request.contactPhone || request.userPhone || 'N/A'}</td>
                         <td><span className="badge badge-warning">Pending</span></td>
                         <td>
-                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              className="btn-primary seller-inline-button"
-                              disabled={workingKey === `approve-request-${request.id}`}
-                              onClick={() => handleApproveSellerRequest(request)}
-                            >
-                              <ShieldCheck size={14} /> Approve
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-secondary seller-inline-button"
-                              disabled={workingKey === `reject-request-${request.id}`}
-                              onClick={() => handleRejectSellerRequest(request)}
-                            >
-                              <ShieldX size={14} /> Reject
-                            </button>
-                          </div>
+                          <button type="button" className="btn-primary seller-inline-button" onClick={() => setSelectedSellerRequest(request)}><Eye size={14} /> Review seller</button>
                         </td>
                       </tr>
                     ))
                   )}
                 </tbody>
               </table>
-            </div>
+            </div>}
           </div>
         )}
 
         {activeTab === 'listings' && (
           <div className="admin-panel-stack">
             <div className="admin-panel-section">
-              <div className="table-container">
+              {isAndroidLayout ? (
+                <div className="admin-mobile-review-list" role="list" aria-label="Properties awaiting review">
+                  {pendingProjects.length === 0 ? (
+                    <div className="admin-empty-state-card"><CheckCircle size={30} /><h4>No properties waiting</h4><p>All submitted listings have been reviewed.</p></div>
+                  ) : pendingProjects.map((project) => {
+                    const seller = sellers.find((item) => item.id === project.ownerId);
+                    return <article key={project.id} className="admin-mobile-review-card" role="listitem">
+                      <header><div><h3>{project.name || 'Untitled project'}</h3><p>{getProjectOwnerName(project, sellers)}</p></div><span className="badge badge-warning">Pending</span></header>
+                      <div className="admin-mobile-review-meta">
+                        <span><small>Village</small><strong>{project.village || 'N/A'}</strong></span>
+                        <span><small>Land zone</small><strong>{getLandZoneLabel(project)}</strong></span>
+                        <span><small>NA status</small><strong>{getNaStatusLabel(project)}</strong></span>
+                        <span><small>Documents</small><strong>{normalizeProjectDocuments(project).length} uploaded</strong></span>
+                      </div>
+                      <div className="admin-mobile-review-actions">
+                        <button type="button" className="btn-primary" disabled={workingKey === `approve-project-${project.id}`} onClick={() => handleApproveProject({ ...project, sellerAssociationValid: Boolean((project.sellerId || project.sellerUid || project.ownerId) && sellers.some((entry) => entry.id === (project.sellerId || project.sellerUid || project.ownerId))) })}>{workingKey === `approve-project-${project.id}` ? <><LoaderCircle className="button-spinner" size={16} /> Approving…</> : <><ShieldCheck size={16} /> Approve</>}</button>
+                        <button type="button" className="btn-secondary danger" disabled={workingKey === `reject-project-${project.id}`} onClick={() => requestPropertyRejection(project)}><ShieldX size={16} /> Reject</button>
+                      </div>
+                      {seller && <button type="button" className="btn-secondary" onClick={() => openSellerWorkspace(seller)}><Store size={16} /> Open seller workspace</button>}
+                    </article>;
+                  })}
+                </div>
+              ) : <div className="table-container">
                 <table className="dash-table">
                   <thead>
                     <tr>
@@ -2149,13 +1874,13 @@ function AdminPanel({
                                   disabled={workingKey === `approve-project-${project.id}`}
                                   onClick={() => handleApproveProject({ ...project, sellerAssociationValid: Boolean((project.sellerId || project.sellerUid || project.ownerId) && sellers.some((seller) => seller.id === (project.sellerId || project.sellerUid || project.ownerId))) })}
                                 >
-                                  <ShieldCheck size={14} /> Approve
+                                  {workingKey === `approve-project-${project.id}` ? <><LoaderCircle className="button-spinner" size={14} /> Approving…</> : <><ShieldCheck size={14} /> Approve</>}
                                 </button>
                                 <button
                                   type="button"
-                                  className="btn-secondary seller-inline-button"
+                                  className="btn-secondary seller-inline-button danger"
                                   disabled={workingKey === `reject-project-${project.id}`}
-                                  onClick={() => handleRejectProject(project.id)}
+                                  onClick={() => requestPropertyRejection(project)}
                                 >
                                   <ShieldX size={14} /> Reject
                                 </button>
@@ -2176,7 +1901,7 @@ function AdminPanel({
                     )}
                   </tbody>
                 </table>
-              </div>
+              </div>}
             </div>
             <div className="admin-panel-section">
               <div className="admin-panel-section-head">
@@ -2186,7 +1911,21 @@ function AdminPanel({
                 </div>
                 <span>{activeProjectList.length}</span>
               </div>
-              <div className="table-container">
+              {isAndroidLayout ? (
+                <div className="admin-mobile-review-list admin-mobile-active-projects" role="list" aria-label="Active projects">
+                  {activeProjectList.map((project) => (
+                    <article key={project.id} className="admin-mobile-review-card" role="listitem">
+                      <header><div><h3>{project.name || 'Unnamed project'}</h3><p>{[project.village, project.area].filter(Boolean).join(', ') || 'Location not provided'}</p></div><span className="badge badge-success">Active</span></header>
+                      <div className="admin-mobile-review-meta">
+                        <span><small>Seller</small><strong>{getProjectOwnerName(project, sellers)}</strong></span>
+                        <span><small>Land</small><strong>{getLandZoneLabel(project)}</strong></span>
+                        <span><small>NA status</small><strong>{getNaStatusLabel(project)}</strong></span>
+                        <span><small>Documents</small><strong>{normalizeProjectDocuments(project).length} uploaded</strong></span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : <div className="table-container">
                 <table className="dash-table">
                   <thead><tr><th>Project</th><th>Projected by</th><th>Location</th><th>Land Zone</th><th>NA Status</th><th>Status</th></tr></thead>
                   <tbody>
@@ -2202,7 +1941,7 @@ function AdminPanel({
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </div>}
             </div>
           </div>
         )}
@@ -2227,6 +1966,7 @@ function AdminPanel({
 
         {activeTab === 'settings' && (
           <section className="admin-settings-panel">
+            <AmenityCatalogManager onSuccess={setStatusMessage} onError={(catalogError) => setErrorMessage(catalogError?.message || 'Unable to update amenities.')} />
             <div className="admin-settings-card">
               <div>
                 <span className="admin-panel-kicker">Appearance</span>
@@ -2262,6 +2002,32 @@ function AdminPanel({
         />
       )}
       <InAppDocumentViewer document={previewModal} onClose={() => setPreviewModal(null)} />
+      <DeletePropertyModal
+        property={propertyPendingDeletion}
+        deleting={deletingProperty}
+        error={deletePropertyError}
+        onCancel={() => {
+          if (!deletingProperty) {
+            setPropertyPendingDeletion(null);
+            setDeletePropertyError('');
+          }
+        }}
+        onConfirm={handleDeleteProperty}
+      />
+      <PropertyRejectionModal
+        property={propertyPendingRejection}
+        rejecting={Boolean(propertyPendingRejection && workingKey === `reject-project-${propertyPendingRejection.id}`)}
+        error={propertyRejectionError}
+        onCancel={() => { if (!workingKey.startsWith('reject-project-')) { setPropertyPendingRejection(null); setPropertyRejectionError(''); } }}
+        onConfirm={(reason) => handleRejectProject(propertyPendingRejection.id, reason)}
+      />
+      <PropertyRejectionModal
+        seller={sellerPendingRejection}
+        rejecting={Boolean(sellerPendingRejection && workingKey === `reject-request-${sellerPendingRejection.id}`)}
+        error={sellerRejectionError}
+        onCancel={() => { if (!workingKey.startsWith('reject-request-')) { setSellerPendingRejection(null); setSellerRejectionError(''); } }}
+        onConfirm={(reason) => handleRejectSellerRequest(sellerPendingRejection, reason)}
+      />
     </div>
   );
 }

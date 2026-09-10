@@ -1,38 +1,22 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { httpsCallable } from 'firebase/functions';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import MapScreen from '../maps/MapScreen';
 import {
   formatDocumentDate,
   getProjectDocumentLabel,
-  getVerifiedDocumentCount,
-  normalizeProjectDocuments,
-  PROJECT_DOCUMENT_OPTIONS
+  normalizeProjectDocuments
 } from '../utils/projectDocuments';
 import {
   Gift,
-  Heart,
-  MapPin,
+  BadgeCheck,
   Search,
-  SlidersHorizontal,
-  ChevronLeft,
   MessageSquare,
   Check,
   X,
-  Plus,
-  Trash2,
-  Copy,
-  LayoutGrid,
-  Image as ImageIcon,
-  Upload,
   Globe,
   ExternalLink,
-  Compass,
-  Navigation,
-  Share2,
-  FileCheck,
   FileText,
   Camera,
-  CalendarDays,
   Loader2,
   IndianRupee,
   UserRound,
@@ -40,24 +24,18 @@ import {
   ChevronRight,
   Clock3,
   Eye,
-  Leaf,
-  Maximize2,
   PieChart,
   Route,
-  ShieldCheck
+  Share2,
+  ChevronUp,
+  Heart
 } from 'lucide-react';
-import { storage } from '../firebaseConfig';
-import { isProjectPublishable, PROPERTY_STATUS, PROPERTY_STATUSES } from '../utils/projectVisibility';
+import { functions, storage } from '../firebaseConfig';
+import { isProjectPublishable, PROPERTY_STATUS } from '../utils/projectVisibility';
 import useMediaQuery from '../utils/useMediaQuery';
-import CashbackWorkspace from './CashbackWorkspace';
 import { getProjectPurchaseValue } from '../utils/purchaseValue';
 import { calculateCashbackForArea, getCashbackPerGuntha, squareFeetToGuntha } from '../utils/projectArea';
-import { CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
-import { getProjectCompleteness } from '../utils/projectCompleteness';
-import FeedBannerCarousel from './FeedBannerCarousel';
-import { ImageLightbox, InAppDocumentViewer, normalizePropertyImages } from './PropertyMediaDocumentsManager';
-import PropertyCard from './PropertyCard';
-import CashbackBadge from './CashbackBadge';
+import { normalizePropertyImages, openDocumentPreview } from './PropertyMediaDocumentsManager';
 import { getPropertyDisplayModel } from '../utils/propertyDisplayModel';
 import {
   LAND_ZONE_OPTIONS,
@@ -66,26 +44,49 @@ import {
   getNaStatusLabel,
   matchesProjectFilters
 } from '../utils/projectLand';
-import { loadGoogleMaps } from '../maps/googleMaps';
 import {
   loadProjectLayouts,
   deleteProjectLayout,
   duplicateProjectLayout,
-  deleteProject,
-  updateProjectDetails
+  deleteProject
 } from '../maps/projectMapService';
 import { DEFAULT_FILTERS, SIDEBAR_ITEMS } from './Buyer/buyerConstants';
 import BuyerDesktopNavigation from './Buyer/Navigation/BuyerDesktopNavigation';
 import BuyerMobileNavigation from './Buyer/Navigation/BuyerMobileNavigation';
-import BuyerWorkspaceHeader from './Buyer/Shell/BuyerWorkspaceHeader';
+import DesktopHeader from './Buyer/Shell/DesktopHeader';
+import BuyerHomePanel from './Buyer/Home/BuyerHomePanel';
+import BuyerHomeScreen from './Buyer/Home/BuyerHomeScreen';
+import { readPersistentCache, writeStartupCache } from '../utils/startupCache';
+import { CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
+import BuyerProjectActions from './Buyer/ProjectDetails/BuyerProjectActions';
+import BuyerProjectMedia from './Buyer/ProjectDetails/BuyerProjectMedia';
+import useBuyerSearch from './Buyer/Search/useBuyerSearch';
 import {
   buildWhatsAppUrl,
   formatCashbackLabel,
+  formatExactINR,
   formatINR,
-  getDisplayLocation,
   getNavigateUrl,
   hasValue
 } from './Buyer/buyerPresentation';
+import { trackLead, trackViewContent } from '../utils/metaPixel';
+import { getProjectPublicUrl } from '../utils/projectPublicUrl';
+
+const InteractiveMap = lazy(() => import('./map/InteractiveMap'));
+const CashbackWorkspace = lazy(() => import('./CashbackWorkspace'));
+const BuyerSupportScreen = lazy(() => import('./Buyer/Support/BuyerSupportScreen'));
+const BuyerDeveloperProfile = lazy(() => import('./Buyer/Developer/BuyerDeveloperProfile'));
+const BuyerProjectDetails = lazy(() => import('./Buyer/ProjectDetails/BuyerProjectDetails'));
+const BuyerSavedScreen = lazy(() => import('./Buyer/Saved/BuyerSavedScreen'));
+
+const getSafeAreaInsetTop = () => {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top, 0px)';
+  document.body.append(probe);
+  const inset = Number.parseFloat(getComputedStyle(probe).paddingTop) || 0;
+  probe.remove();
+  return inset;
+};
 
 function BuyerApp({
   projects,
@@ -106,26 +107,53 @@ function BuyerApp({
   currentView,
   onViewChange,
   onBackToAdmin,
-  selectedSeller
+  selectedSeller,
+  projectsLoading = false,
+  onAccountDeleted,
+  onRequireAuth,
+  routeProject = null,
+  routeStatus = 'idle',
+  routeSlug = '',
+  onProjectRouteChange
 }) {
   const isAndroidLayout = useMediaQuery('(max-width: 768px)');
-  const [activeScreen, setActiveScreen] = useState('home');
+  const [activeScreen, setActiveScreen] = useState(() => {
+    const requestedScreen = window.sessionStorage.getItem('flinokBuyerDestination');
+    window.sessionStorage.removeItem('flinokBuyerDestination');
+    return requestedScreen === 'support' ? 'support' : 'map';
+  });
   const [panelMode, setPanelMode] = useState(null);
-  const [mobileSheetHeight, setMobileSheetHeight] = useState(34);
+  const [mobileSheetSnap, setMobileSheetSnap] = useState('expanded');
+  // Preserve the compact map-marker preview when the selected project's URL
+  // route finishes resolving after a marker tap.
+  const [mapMarkerPreviewProjectId, setMapMarkerPreviewProjectId] = useState('');
   const mobileSheetDragRef = useRef(null);
+  const mobileSheetRef = useRef(null);
+  const mobileSheetCompactRef = useRef(null);
+  const mobileSheetMetricsRef = useRef(null);
+  const mobileSheetFrameRef = useRef(null);
+  const resumedPublicIntentRef = useRef(false);
+  const trackedProjectDetailRef = useRef('');
   const [selectedProject, setSelectedProject] = useState(null);
+  const [pendingMapFocusProjectId, setPendingMapFocusProjectId] = useState('');
+  const [selectedDeveloper, setSelectedDeveloper] = useState(null);
+  const [developerProfile, setDeveloperProfile] = useState(null);
+  const [developerProfileLoading, setDeveloperProfileLoading] = useState(false);
+  const [developerProfileError, setDeveloperProfileError] = useState('');
+  const [mapDeveloperId, setMapDeveloperId] = useState('');
   const [projectLayouts, setProjectLayouts] = useState([]);
   const [activeLayout, setActiveLayout] = useState(null);
   const [loadingLayouts, setLoadingLayouts] = useState(false);
-  const [visibleProjects, setVisibleProjects] = useState([]);
-  const [homeSearchQuery, setHomeSearchQuery] = useState('');
-  const [placeSuggestions, setPlaceSuggestions] = useState([]);
-  const [placeSearchError, setPlaceSearchError] = useState('');
-  const [voiceSearchActive, setVoiceSearchActive] = useState(false);
-  const placesSessionTokenRef = useRef(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // The map is a separate destination. Keep it dormant while Home owns the
+  // viewport so its canvas can never replace or bleed through the home feed.
+  const [interactiveMap, setInteractiveMap] = useState(activeScreen === 'map');
+  const [interactiveMapReady, setInteractiveMapReady] = useState(false);
+  const enableInteractiveMap = useCallback(() => setInteractiveMap(true), []);
+  const handleInteractiveMapReady = useCallback(() => setInteractiveMapReady(true), []);
   const [mapFilters, setMapFilters] = useState(DEFAULT_FILTERS);
-  const [savedProjectIds, setSavedProjectIds] = useState(() => new Set());
+  const savedCacheKey = `saved-projects:${user?.uid || 'guest'}`;
+  const [savedProjectIds, setSavedProjectIds] = useState(() => new Set(readPersistentCache(savedCacheKey, [])));
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [bookingForm, setBookingForm] = useState({ name: '', phone: '', date: '', time: '11:00 AM' });
   const [bookingSuccess, setBookingSuccess] = useState(false);
@@ -138,17 +166,48 @@ function BuyerApp({
   const [galleryViewerIndex, setGalleryViewerIndex] = useState(null);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [projectScrollTop, setProjectScrollTop] = useState(0);
+  const isAuthenticated = Boolean(user?.uid);
+  const requireAuthentication = useCallback((intent) => {
+    window.dispatchEvent(new CustomEvent('zinoo:capture-map-auth-context'));
+    onRequireAuth?.({
+      ...intent,
+      activeScreen,
+      mapFilters,
+      panelMode,
+      selectedProjectId: selectedProject?.id || '',
+      mobileSheetSnap
+    });
+  }, [activeScreen, mapFilters, mobileSheetSnap, onRequireAuth, panelMode, selectedProject?.id]);
 
   const activeProjects = useMemo(
     () => projects.filter(isProjectPublishable),
     [projects]
   );
+  const savedProjects = useMemo(
+    () => activeProjects.filter((project) => savedProjectIds.has(project.id)),
+    [activeProjects, savedProjectIds]
+  );
+  const unavailableSavedProjectCount = Math.max(0, savedProjectIds.size - savedProjects.length);
+
+  useEffect(() => {
+    setSavedProjectIds(new Set(readPersistentCache(savedCacheKey, [])));
+  }, [savedCacheKey]);
   const filteredProjects = useMemo(
     () => activeProjects.filter((project) => matchesProjectFilters(project, mapFilters)),
     [activeProjects, mapFilters]
   );
+  const developerProjects = useMemo(() => selectedDeveloper ? activeProjects.filter((project) => project.ownerId === selectedDeveloper.sellerId) : [], [activeProjects, selectedDeveloper]);
+  const mapProjects = useMemo(() => mapDeveloperId ? filteredProjects.filter((project) => project.ownerId === mapDeveloperId) : filteredProjects, [filteredProjects, mapDeveloperId]);
   useEffect(() => {
-    console.debug('[Druvio listings] Buyer filters applied', {
+    if (!selectedDeveloper?.sellerId) return;
+    let active = true;
+    setDeveloperProfileLoading(true);
+    setDeveloperProfileError('');
+    httpsCallable(functions, 'getDeveloperProfile')({ sellerId: selectedDeveloper.sellerId }).then((result) => { if (active) setDeveloperProfile(result.data.profile); }).catch((error) => { console.error('[Zinoo Developer Profile] Load failed.', error); if (active) setDeveloperProfileError('Developer profile is temporarily unavailable.'); }).finally(() => { if (active) setDeveloperProfileLoading(false); });
+    return () => { active = false; };
+  }, [selectedDeveloper?.sellerId]);
+  useEffect(() => {
+    console.debug('[Zinoo listings] Buyer filters applied', {
       fetchedCount: projects.length,
       fetchedStatuses: projects.map(({ id, status }) => ({ id, status })),
       publicStatus: PROPERTY_STATUS.ACTIVE,
@@ -187,34 +246,140 @@ function BuyerApp({
     refreshLayouts(selectedProject.id)
       .then(() => setLoadingLayouts(false))
       .catch((err) => {
-        console.error('[Druvio] Error loading layouts:', err);
+        console.error('[Zinoo] Error loading layouts:', err);
         setLoadingLayouts(false);
       });
   }, [panelMode, refreshLayouts, selectedProject]);
 
   useEffect(() => {
+    if (panelMode !== 'project' || !selectedProject) {
+      trackedProjectDetailRef.current = '';
+      return;
+    }
+    const projectKey = String(selectedProject.id || selectedProject.name || 'project');
+    if (trackedProjectDetailRef.current === projectKey) return;
+    trackedProjectDetailRef.current = projectKey;
+    trackViewContent(selectedProject);
+  }, [panelMode, selectedProject]);
+
+  useEffect(() => {
     const handleLayoutSaved = (event) => {
       if (!selectedProject?.id || event.detail?.projectId !== selectedProject.id) return;
       refreshLayouts(selectedProject.id, event.detail?.layoutId)
-        .catch((err) => console.error('[Druvio] Error refreshing layouts:', err));
+        .catch((err) => console.error('[Zinoo] Error refreshing layouts:', err));
     };
 
-    window.addEventListener('druvio-layout-saved', handleLayoutSaved);
-    return () => window.removeEventListener('druvio-layout-saved', handleLayoutSaved);
+    window.addEventListener('flinok-layout-saved', handleLayoutSaved);
+    return () => window.removeEventListener('flinok-layout-saved', handleLayoutSaved);
   }, [refreshLayouts, selectedProject]);
 
-  const handleProjectSelect = useCallback((project) => {
+  const handleProjectSelect = useCallback((project, { mobileSheetSnap: nextMobileSheetSnap = 'expanded', fromMapMarker = false } = {}) => {
     if (!project) {
       setSelectedProject(null);
       setPanelMode(null);
+      setMapMarkerPreviewProjectId('');
+      onProjectRouteChange?.(null);
       return;
     }
+    enableInteractiveMap();
+    setMapMarkerPreviewProjectId(fromMapMarker ? String(project.id || '') : '');
+    onProjectRouteChange?.(project);
     setSelectedProject(project);
     setActiveScreen('map');
     setPanelMode('project');
-    setMobileSheetHeight(34);
+    setMobileSheetSnap(nextMobileSheetSnap);
     setProjectScrollTop(0);
+  }, [enableInteractiveMap, onProjectRouteChange]);
+
+  useEffect(() => {
+    if (!routeSlug) {
+      setMapMarkerPreviewProjectId('');
+      if (selectedProject && panelMode === 'project') {
+        setSelectedProject(null);
+        setPanelMode(null);
+      }
+      return;
+    }
+    // The parent route state updates asynchronously. Do not let the previous
+    // ready project replace a newly tapped marker while its route is loading.
+    if (routeStatus !== 'ready' || !routeProject || routeProject.slug !== routeSlug) return;
+    enableInteractiveMap();
+    setSelectedProject((current) => {
+      if (String(current?.id || '') !== String(routeProject.id || '')) return routeProject;
+      // The public route projection can briefly lag behind the admin update.
+      // Retain the already-selected property's presentation flag until the
+      // projection catches up, rather than flashing the name badge away.
+      const showVerifiedNameBadge = current.showVerifiedNameBadge === true
+        || current.display?.verified?.showNameBadge === true
+        || routeProject.showVerifiedNameBadge === true
+        || routeProject.display?.verified?.showNameBadge === true;
+      const resolvedRouteProject = {
+        ...routeProject,
+        ...(showVerifiedNameBadge ? { showVerifiedNameBadge: true } : {})
+      };
+      const currentImage = current.thumbnail || current.heroImage || current.primaryImage || '';
+      const routeImage = routeProject.thumbnail || routeProject.heroImage || routeProject.primaryImage || '';
+      const currentImageIsFallback = String(currentImage).includes('zinoo-home-hero.webp');
+      if (!currentImage || currentImageIsFallback || currentImage === routeImage) return resolvedRouteProject;
+      return {
+        ...resolvedRouteProject,
+        thumbnail: currentImage,
+        heroImage: currentImage,
+        primaryImage: currentImage,
+        images: current.images?.length ? current.images : routeProject.images
+      };
+    });
+    setActiveScreen('map');
+    setPanelMode('project');
+    setMobileSheetSnap(isAndroidLayout && mapMarkerPreviewProjectId === String(routeProject.id || '') ? 'collapsed' : 'expanded');
+    setProjectScrollTop(0);
+  }, [enableInteractiveMap, isAndroidLayout, mapMarkerPreviewProjectId, panelMode, routeProject, routeSlug, routeStatus]);
+
+  const handleHomeProjectSelect = useCallback((project) => {
+    if (!project) return;
+    setPendingMapFocusProjectId(project.id || 'selected-project');
+    handleProjectSelect(project);
+  }, [handleProjectSelect]);
+
+  const handleMapProjectSelect = useCallback((project) => {
+    if (!project) {
+      handleProjectSelect(null);
+      return;
+    }
+    handleProjectSelect(project, {
+      fromMapMarker: isAndroidLayout,
+      mobileSheetSnap: isAndroidLayout ? 'collapsed' : 'expanded'
+    });
+  }, [handleProjectSelect, isAndroidLayout]);
+
+  const handleDeveloperSelect = useCallback((developer) => {
+    if (!developer?.sellerId) return;
+    setSelectedProject(null);
+    setPanelMode(null);
+    setSelectedDeveloper(developer);
+    setDeveloperProfile(null);
+    setActiveScreen('developer');
   }, []);
+
+  useEffect(() => {
+    if (resumedPublicIntentRef.current || !activeProjects.length) return;
+    const storedIntent = window.sessionStorage.getItem('flinokPendingPropertyIntent');
+    if (!storedIntent) return;
+    let intent;
+    try {
+      intent = JSON.parse(storedIntent);
+    } catch {
+      window.sessionStorage.removeItem('flinokPendingPropertyIntent');
+      return;
+    }
+    const normalizedName = String(intent?.project || '').trim().toLowerCase();
+    const project = activeProjects.find((item) => item.id === intent?.projectId)
+      || activeProjects.find((item) => String(item.name || '').trim().toLowerCase() === normalizedName);
+    if (!project) return;
+    resumedPublicIntentRef.current = true;
+    window.sessionStorage.removeItem('flinokPendingPropertyIntent');
+    handleProjectSelect(project);
+  }, [activeProjects, handleProjectSelect]);
 
   const openFullProjectDetails = useCallback(() => {
     if (selectedProject) setPanelMode('project');
@@ -223,24 +388,132 @@ function BuyerApp({
   const closePanel = useCallback(() => {
     if (panelMode === 'project') setSelectedProject(null);
     setPanelMode(null);
-  }, [panelMode]);
+    setMapMarkerPreviewProjectId('');
+    onProjectRouteChange?.(null);
+  }, [onProjectRouteChange, panelMode]);
+
+  const shareProject = useCallback(async () => {
+    const url = getProjectPublicUrl(selectedProject);
+    if (!url) return alert('This project does not have a public link yet.');
+    const shareData = {
+      title: selectedProject?.name || 'Zinoo property',
+      text: `Explore ${selectedProject?.name || 'this property'} on Zinoo`,
+      url
+    };
+    try {
+      if (navigator.share) return await navigator.share(shareData);
+      await navigator.clipboard?.writeText(url);
+      alert('Project link copied.');
+    } catch (error) {
+      if (error?.name !== 'AbortError') alert('Unable to share this project right now.');
+    }
+  }, [selectedProject]);
 
   const navigateToScreen = useCallback((screen) => {
+    if (screen === 'map') {
+      enableInteractiveMap();
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('flinok-focus-location', {
+          detail: { location: CHAKAN_MAP_POSITION, useDefaultZoom: true }
+        }));
+      }, 0);
+    }
+    if (screen !== 'map') setMapDeveloperId('');
     setSelectedProject(null);
     setPanelMode(null);
     setActiveScreen(screen);
-  }, []);
+  }, [enableInteractiveMap]);
+
+  useEffect(() => {
+    const handleNotificationNavigation = (event) => {
+      const screen = event.detail?.screen;
+      if (['home', 'map', 'saved', 'cashback', 'nearby', 'support'].includes(screen)) {
+        navigateToScreen(screen);
+      }
+    };
+    window.addEventListener('druvio:notification-navigation', handleNotificationNavigation);
+    return () => window.removeEventListener('druvio:notification-navigation', handleNotificationNavigation);
+  }, [navigateToScreen]);
+
+  const {
+    homeSearchQuery,
+    setHomeSearchQuery,
+    placeSuggestions,
+    setPlaceSuggestions,
+    placeSearchError,
+    voiceSearchActive,
+    searchableProjects,
+    selectPlaceSuggestion,
+    startVoiceSearch,
+    searchEnteredLocation
+  } = useBuyerSearch({
+    filteredProjects,
+    onProjectSelect: handleProjectSelect,
+    onLocationSelected: () => {
+      enableInteractiveMap();
+      setActiveScreen('map');
+      setPanelMode(null);
+    },
+    onVoiceResult: () => {
+      setActiveScreen('home');
+      setPanelMode(null);
+    }
+  });
 
   const toggleSavedProject = (projectId) => {
+    if (!isAuthenticated) {
+      requireAuthentication({ type: 'save-project', projectId });
+      return;
+    }
     setSavedProjectIds((current) => {
       const next = new Set(current);
       if (next.has(projectId)) next.delete(projectId);
       else next.add(projectId);
+      writeStartupCache(savedCacheKey, [...next]);
       return next;
     });
   };
 
-  const handleBookVisit = (e) => {
+  useEffect(() => {
+    if (!isAuthenticated || !activeProjects.length) return;
+    const stored = window.sessionStorage.getItem('zinooPendingAuthenticatedAction');
+    if (!stored) return;
+    let intent;
+    try { intent = JSON.parse(stored); } catch { window.sessionStorage.removeItem('zinooPendingAuthenticatedAction'); return; }
+    window.sessionStorage.removeItem('zinooPendingAuthenticatedAction');
+    const project = activeProjects.find((item) => item.id === intent.projectId);
+    const contextProject = activeProjects.find((item) => item.id === intent.selectedProjectId);
+    if (intent.mapFilters) setMapFilters(intent.mapFilters);
+    if (intent.resumeScreen || intent.activeScreen) setActiveScreen(intent.resumeScreen || intent.activeScreen);
+    if (intent.mobileSheetSnap) setMobileSheetSnap(intent.mobileSheetSnap);
+    if (contextProject) {
+      setSelectedProject(contextProject);
+      setPanelMode(intent.panelMode || null);
+    }
+    if (project && intent.type === 'save-project') toggleSavedProject(project.id);
+    if (project && intent.type === 'book-visit') {
+      handleProjectSelect(project);
+      setShowBookingModal(true);
+    }
+    if (project && intent.type === 'contact-seller') {
+      handleProjectSelect(project);
+      if (intent.method === 'call') {
+        const number = getPropertyDisplayModel(project).actions.callNumber;
+        if (number) window.location.href = `tel:${String(number).replace(/[^\d+]/g, '')}`;
+      } else {
+        const url = buildWhatsAppUrl(project);
+        if (url) window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    }
+    if (intent.type === 'contact-support' && intent.phone) {
+      const digits = String(intent.phone).replace(/[^\d]/g, '');
+      if (digits) window.open(`https://wa.me/${digits}?text=${encodeURIComponent(intent.message || '')}`, '_blank', 'noopener,noreferrer');
+    }
+  // Run once when the authenticated project catalog has loaded.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, activeProjects.length]);
+
+  const handleBookVisit = async (e) => {
     e.preventDefault();
     if (!selectedProject || !bookingForm.name || !bookingForm.phone || !bookingForm.date) {
       alert('Please fill all details!');
@@ -258,28 +531,38 @@ function BuyerApp({
       status: 'Scheduled'
     };
 
-    addVisit(newVisit);
+    try {
+      await addVisit(newVisit);
 
-    const existingLead = leads.find((lead) => lead.phone === bookingForm.phone);
-    if (!existingLead) {
-      addLead({
-        name: bookingForm.name,
-        phone: bookingForm.phone,
-        budget: `₹${((selectedProject.priceFrom || selectedProject.startingPrice || 1000000) / 100000).toFixed(0)}L+`,
-        stage: 'Book Visit',
-        date: new Date().toISOString().split('T')[0],
-        project: selectedProject.name,
-        projectId: selectedProject.id,
-        projectOwnerId: selectedProject.ownerId || ''
+      const existingLead = leads.find((lead) => lead.phone === bookingForm.phone);
+      if (!existingLead) {
+        await addLead({
+          name: bookingForm.name,
+          phone: bookingForm.phone,
+          budget: `₹${((selectedProject.priceFrom || selectedProject.startingPrice || 1000000) / 100000).toFixed(0)}L+`,
+          stage: 'Book Visit',
+          date: new Date().toISOString().split('T')[0],
+          project: selectedProject.name,
+          projectId: selectedProject.id,
+          projectOwnerId: selectedProject.ownerId || ''
+        });
+      } else {
+        await updateLead({
+          ...existingLead,
+          stage: 'Book Visit',
+          project: selectedProject.name,
+          projectId: selectedProject.id,
+          projectOwnerId: selectedProject.ownerId || ''
+        });
+      }
+      trackLead({ project: selectedProject, leadType: 'site_visit' });
+    } catch (visitError) {
+      console.error('[Zinoo] Site visit enquiry could not be saved', {
+        code: visitError?.code,
+        message: visitError?.message
       });
-    } else {
-      updateLead({
-        ...existingLead,
-        stage: 'Book Visit',
-        project: selectedProject.name,
-        projectId: selectedProject.id,
-        projectOwnerId: selectedProject.ownerId || ''
-      });
+      alert('We could not submit your site visit request. Please try again.');
+      return;
     }
 
     setBookingSuccess(true);
@@ -387,138 +670,6 @@ function BuyerApp({
     }
   };
 
-  const searchableProjects = useMemo(() => {
-    const query = homeSearchQuery.trim().toLowerCase();
-    if (!query) return [];
-    return filteredProjects
-      .filter((project) => {
-        const haystack = [project.name, project.village, project.taluka, project.developer]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase();
-        return haystack.includes(query);
-      })
-      .slice(0, 8);
-  }, [filteredProjects, homeSearchQuery]);
-
-  useEffect(() => {
-    const queryText = homeSearchQuery.trim();
-    if (queryText.length < 2) {
-      setPlaceSuggestions([]);
-      setPlaceSearchError('');
-      return undefined;
-    }
-
-    let cancelled = false;
-    const timeout = window.setTimeout(async () => {
-      try {
-        await loadGoogleMaps();
-        const { AutocompleteSessionToken, AutocompleteSuggestion } = await window.google.maps.importLibrary('places');
-        if (!placesSessionTokenRef.current) placesSessionTokenRef.current = new AutocompleteSessionToken();
-        const response = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-          input: queryText,
-          includedRegionCodes: ['in'],
-          locationBias: { center: CHAKAN_MAP_POSITION, radius: 60000 },
-          sessionToken: placesSessionTokenRef.current
-        });
-        if (!cancelled) {
-          setPlaceSuggestions(response.suggestions.filter((suggestion) => suggestion.placePrediction).slice(0, 5));
-          setPlaceSearchError('');
-        }
-      } catch (error) {
-        const apiBlocked = String(error?.message || error).includes('blocked');
-        if (!apiBlocked) console.error('[Druvio Places] Autocomplete failed:', error);
-        if (!cancelled) {
-          setPlaceSuggestions([]);
-          setPlaceSearchError(apiBlocked
-            ? 'Location autocomplete needs Places API (New) enabled for Druvio.'
-            : 'Location suggestions are temporarily unavailable.');
-        }
-      }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeout);
-    };
-  }, [homeSearchQuery]);
-
-  const selectPlaceSuggestion = async (suggestion) => {
-    try {
-      const place = suggestion.placePrediction.toPlace();
-      await place.fetchFields({ fields: ['displayName', 'formattedAddress', 'location', 'viewport'] });
-      if (!place.location) return;
-      setHomeSearchQuery(place.displayName || place.formattedAddress || 'Selected location');
-      setPlaceSuggestions([]);
-      placesSessionTokenRef.current = null;
-      window.dispatchEvent(new CustomEvent('druvio-focus-location', {
-        detail: {
-          location: place.location.toJSON(),
-          viewport: place.viewport?.toJSON?.() || null
-        }
-      }));
-      setActiveScreen('map');
-      setPanelMode(null);
-    } catch (error) {
-      console.error('[Druvio Places] Place selection failed:', error);
-      setPlaceSearchError('Unable to open that location. Please try again.');
-    }
-  };
-
-  const startVoiceSearch = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setPlaceSearchError('Voice search is not supported by this browser.');
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-IN';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognition.onstart = () => setVoiceSearchActive(true);
-    recognition.onend = () => setVoiceSearchActive(false);
-    recognition.onerror = () => {
-      setVoiceSearchActive(false);
-      setPlaceSearchError('Voice search could not hear you. Please try again.');
-    };
-    recognition.onresult = (event) => {
-      setHomeSearchQuery(event.results[0][0].transcript);
-      setActiveScreen('home');
-      setPanelMode(null);
-    };
-    recognition.start();
-  };
-
-  const searchEnteredLocation = async (event) => {
-    if (event.key !== 'Enter' || !homeSearchQuery.trim()) return;
-    event.preventDefault();
-    if (searchableProjects.length > 0) {
-      handleProjectSelect(searchableProjects[0]);
-      setPlaceSuggestions([]);
-      return;
-    }
-    try {
-      await loadGoogleMaps();
-      const geocoder = new window.google.maps.Geocoder();
-      const response = await geocoder.geocode({ address: homeSearchQuery.trim(), region: 'IN' });
-      const result = response.results?.[0];
-      if (!result?.geometry?.location) throw new Error('No matching location found.');
-      window.dispatchEvent(new CustomEvent('druvio-focus-location', {
-        detail: {
-          location: result.geometry.location.toJSON(),
-          viewport: result.geometry.viewport?.toJSON?.() || null
-        }
-      }));
-      setActiveScreen('map');
-      setPanelMode(null);
-      setPlaceSuggestions([]);
-      setPlaceSearchError('');
-    } catch {
-      setPlaceSearchError('No matching project or location was found.');
-    }
-  };
-
   const cashbackProjects = useMemo(
     () => activeProjects.filter((project) => formatCashbackLabel(project)),
     [activeProjects]
@@ -536,7 +687,10 @@ function BuyerApp({
   const activeSidebarItem = activeScreen;
   const selectedDisplay = selectedProject ? getPropertyDisplayModel(selectedProject) : null;
   const selectedGallery = selectedDisplay
-    ? selectedDisplay.media.gallery.filter((image) => image.enabled !== false).map((image) => ({ ...image, downloadURL: image.url }))
+    ? [
+        ...selectedDisplay.media.gallery.filter((image) => image.enabled !== false).map((image) => ({ ...image, downloadURL: image.url, mediaType: 'image' })),
+        ...(Array.isArray(selectedProject?.videos) ? selectedProject.videos : []).map((video, index) => ({ id: video.id || `video-${index}`, downloadURL: video.downloadURL || video.url, mediaType: 'video' })).filter((video) => video.downloadURL)
+      ]
     : [];
   useEffect(() => {
     setGalleryIndex(0);
@@ -556,7 +710,7 @@ function BuyerApp({
   useEffect(() => {
     if (!import.meta.env.DEV || !selectedProject) return;
     const mappedDocuments = normalizeProjectDocuments(selectedProject);
-    console.info('[Druvio Documents] Buyer details mapping', {
+    console.info('[Zinoo Documents] Buyer details mapping', {
       propertyId: selectedProject.id,
       firestoreDocument: `projects/${selectedProject.id}`,
       documentsFound: Array.isArray(selectedProject.documents) ? selectedProject.documents.length : 0,
@@ -578,8 +732,123 @@ function BuyerApp({
   const panelKicker = 'Selected project';
   const activeFilterCount = mapFilters.landZones.length
     + mapFilters.naStatuses.length
+    + mapFilters.zones.length
     + Number(mapFilters.bankLoan)
-    + Number(mapFilters.budgetMax !== DEFAULT_FILTERS.budgetMax);
+    + Number(mapFilters.verified)
+    + Number(mapFilters.installmentMax > 0)
+    + Number(mapFilters.budgetMin !== DEFAULT_FILTERS.budgetMin || mapFilters.budgetMax !== DEFAULT_FILTERS.budgetMax);
+
+  const applyMobileSheetHeight = useCallback((height, animate = false) => {
+    const sheet = mobileSheetRef.current;
+    if (!sheet) return;
+    sheet.classList.toggle('is-sheet-dragging', !animate);
+    if (mobileSheetFrameRef.current) cancelAnimationFrame(mobileSheetFrameRef.current);
+    mobileSheetFrameRef.current = requestAnimationFrame(() => {
+      sheet.style.setProperty('--sheet-height-px', `${Math.round(height)}px`);
+    });
+  }, []);
+
+  const measureMobileSheet = useCallback(() => {
+    const sheet = mobileSheetRef.current;
+    if (!sheet || !isAndroidLayout || !panelOpen) return null;
+    const header = document.querySelector('.buyer-workspace-header');
+    const viewportHeight = window.visualViewport?.height || window.innerHeight;
+    // An open property sheet owns the entire mobile bottom edge. The primary
+    // navigation is unmounted by the parent layout while it is open, so no
+    // navigation inset should be reserved for any snap point.
+    const navTop = viewportHeight;
+    const navHeight = 0;
+    const headerBottom = header?.getBoundingClientRect().bottom || 0;
+    const compactContentHeight = mobileSheetCompactRef.current?.scrollHeight || 84;
+    const compact = Math.max(92, Math.min(compactContentHeight + 28, navTop - headerBottom - 16));
+    const intendedTopGap = Math.max(16, getSafeAreaInsetTop());
+    const full = Math.max(compact, navTop - intendedTopGap);
+    const expanded = Math.max(compact, Math.min(full, Math.round(viewportHeight * 0.5)));
+    const metrics = { collapsed: compact, expanded, full, min: compact, max: full, navHeight };
+    mobileSheetMetricsRef.current = metrics;
+    sheet.style.setProperty('--sheet-bottom-px', `${Math.round(navHeight)}px`);
+    return metrics;
+  }, [isAndroidLayout, panelOpen]);
+
+  useEffect(() => {
+    if (!pendingMapFocusProjectId || !selectedProject || activeScreen !== 'map' || !interactiveMapReady) return undefined;
+    let cancelled = false;
+    let completionTimer;
+    const requestFocus = () => {
+      if (cancelled) return;
+      const metrics = measureMobileSheet();
+      const sheetHeight = isAndroidLayout
+        ? (metrics?.[mobileSheetSnap] || mobileSheetRef.current?.getBoundingClientRect().height || 0)
+        : 0;
+      window.dispatchEvent(new CustomEvent('flinok-focus-project', {
+        detail: { project: selectedProject, layout: activeLayout, bottomInsetPx: sheetHeight, animated: true, requestId: pendingMapFocusProjectId }
+      }));
+      completionTimer = window.setTimeout(() => setPendingMapFocusProjectId(''), 1800);
+    };
+    const frame = requestAnimationFrame(() => requestAnimationFrame(requestFocus));
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+      clearTimeout(completionTimer);
+    };
+  }, [activeLayout, activeScreen, interactiveMapReady, isAndroidLayout, measureMobileSheet, mobileSheetSnap, pendingMapFocusProjectId, selectedProject]);
+
+  useEffect(() => {
+    const finishFocus = (event) => {
+      if (!pendingMapFocusProjectId || event.detail?.requestId !== pendingMapFocusProjectId) return;
+      setPendingMapFocusProjectId('');
+    };
+    window.addEventListener('flinok-project-focus-complete', finishFocus);
+    return () => window.removeEventListener('flinok-project-focus-complete', finishFocus);
+  }, [pendingMapFocusProjectId]);
+
+  useEffect(() => {
+    if (!isAndroidLayout || !panelOpen) return undefined;
+    const update = () => {
+      const metrics = measureMobileSheet();
+      if (metrics) applyMobileSheetHeight(metrics[mobileSheetSnap], true);
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.visualViewport?.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.visualViewport?.removeEventListener('resize', update);
+      if (mobileSheetFrameRef.current) cancelAnimationFrame(mobileSheetFrameRef.current);
+    };
+  }, [applyMobileSheetHeight, isAndroidLayout, measureMobileSheet, mobileSheetSnap, panelOpen]);
+
+  const finishMobileSheetDrag = useCallback((event) => {
+    const drag = mobileSheetDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const metrics = mobileSheetMetricsRef.current || measureMobileSheet();
+    mobileSheetDragRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (!metrics) return;
+    const velocity = drag.velocity || 0;
+    const currentHeight = Math.max(metrics.min, Math.min(metrics.max, drag.startHeight + drag.startY - event.clientY));
+    const ordered = ['collapsed', 'expanded', 'full'];
+    const projectedHeight = Math.max(metrics.min, Math.min(metrics.max,
+      currentHeight - (Math.abs(velocity) > 0.45 ? velocity * 180 : 0)));
+    const nextSnap = ordered.reduce((closest, snap) => (
+      Math.abs(metrics[snap] - projectedHeight) < Math.abs(metrics[closest] - projectedHeight) ? snap : closest
+    ));
+    mobileSheetRef.current?.classList.remove('is-sheet-dragging');
+    setMobileSheetSnap(nextSnap);
+    applyMobileSheetHeight(metrics[nextSnap], true);
+  }, [applyMobileSheetHeight, measureMobileSheet]);
+
+  const handleProjectPanelScroll = useCallback((event) => {
+    const scrollTop = event.currentTarget.scrollTop;
+    setProjectScrollTop(Math.min(scrollTop, 180));
+
+    // On mobile, the first upward content scroll should promote the half-height
+    // preview into the full details sheet instead of trapping the user inside
+    // the smaller scroll area.
+    if (isAndroidLayout && mobileSheetSnap === 'expanded' && scrollTop > 2) {
+      setMobileSheetSnap('full');
+    }
+  }, [isAndroidLayout, mobileSheetSnap]);
 
   const toggleFilterOption = (key, value) => {
     setMapFilters((current) => ({
@@ -589,440 +858,6 @@ function BuyerApp({
         : [...current[key], value]
     }));
   };
-
-  const uploadProjectManagerFile = async (file, kind, documentType = projectUploadType) => {
-    if (!file || !selectedProject?.id || !user?.uid) return;
-    const isDocument = kind === 'document';
-    const allowedTypes = isDocument
-      ? ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
-      : ['image/jpeg', 'image/png', 'image/webp'];
-    const maximumSize = 10 * 1024 * 1024;
-    setProjectUploadError('');
-    if (!allowedTypes.includes(file.type) || file.size > maximumSize) {
-      setProjectUploadError(isDocument ? 'Upload a PDF, JPG, PNG, or WebP file up to 10 MB.' : 'Upload a JPG, PNG, or WebP image up to 10 MB.');
-      return;
-    }
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const assetId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const root = isDocument ? 'project-documents' : 'project-media';
-    const assetRef = ref(storage, `${root}/${user.uid}/${selectedProject.id}/${assetId}-${safeName}`);
-    setProjectUploadBusy(kind);
-    try {
-      const snapshot = await uploadBytes(assetRef, file, {
-        contentType: file.type,
-        customMetadata: { ownerId: selectedProject.ownerId || '', projectId: selectedProject.id, uploadedBy: user.uid }
-      });
-      const url = await getDownloadURL(snapshot.ref);
-      if (isDocument) {
-        setEditForm((current) => ({
-          ...current,
-          documents: [...current.documents, {
-            id: assetId,
-            type: documentType,
-            url,
-            path: snapshot.ref.fullPath,
-            fileName: file.name,
-            contentType: file.type,
-            size: file.size,
-            status: 'pending',
-            uploadedAt: new Date().toISOString(),
-            uploadedBy: user.uid
-          }]
-        }));
-      } else {
-        setEditForm((current) => ({
-          ...current,
-          thumbnail: url,
-          thumbnailPath: snapshot.ref.fullPath,
-          thumbnailMetadata: { fileName: file.name, contentType: file.type, size: file.size, uploadedAt: new Date().toISOString(), uploadedBy: user.uid }
-        }));
-      }
-    } catch (error) {
-      console.error('Project manager upload failed:', error);
-      setProjectUploadError('Unable to upload this file. Please try again.');
-    } finally {
-      setProjectUploadBusy('');
-    }
-  };
-
-  const renderProjectManagerContent = () => {
-    if (!selectedProject) return null;
-    const completeness = getProjectCompleteness({ ...selectedProject, ...editForm });
-    const missingRequiredKeys = new Set([
-      ...completeness.missingRequired.map((item) => item.key),
-      ...completeness.invalidFields.map((item) => item.key)
-    ]);
-
-    if (projectManagerTab === 'layouts') {
-      return (
-        <div className="project-manager-panel">
-          <div className="project-manager-card">
-            <div className="project-manager-card-head">
-              <div>
-                <span className="project-manager-kicker">Project layouts</span>
-                <h4>Manage layout polygons</h4>
-              </div>
-              <span className="project-manager-note">Unlimited layouts per project</span>
-            </div>
-            <p className="project-manager-copy">Workflow: Add Layout, enter a layout name, draw polygon on the map, finish, edit, and save.</p>
-            <div className="layout-add-row">
-              <input
-                type="text"
-                className="project-manager-input"
-                placeholder="Layout name"
-                value={layoutDraftName}
-                onChange={(event) => setLayoutDraftName(event.target.value)}
-              />
-              <button type="button" className="btn-primary compact-action-btn" onClick={handleStartAddLayout}>
-                <Plus size={14} /> Add Layout
-              </button>
-            </div>
-          </div>
-
-          <div className="project-manager-card">
-            <div className="project-manager-card-head">
-              <div>
-                <span className="project-manager-kicker">Saved layers</span>
-                <h4>{projectLayouts.length === 0 ? 'No layouts yet' : `${projectLayouts.length} layouts available`}</h4>
-              </div>
-            </div>
-
-            {loadingLayouts ? (
-              <p className="no-layouts-tag">Loading layouts...</p>
-            ) : projectLayouts.length === 0 ? (
-              <p className="no-layouts-tag">No layouts yet</p>
-            ) : (
-              <div className="project-layout-list">
-                {projectLayouts.map((layout) => {
-                  const isSelected = activeLayout?.id === layout.id;
-                  return (
-                    <div key={layout.id} className={`project-layout-card ${isSelected ? 'selected' : ''}`}>
-                      <div className="project-layout-info">
-                        <div className="layout-row-info">
-                          <span className="color-dot" style={{ backgroundColor: layout.color }} />
-                          <strong>{layout.name}</strong>
-                        </div>
-                        <span className="project-layout-subtitle">{isSelected ? 'Visible on map' : 'Tap edit to update polygon'}</span>
-                      </div>
-                      <div className="project-layout-actions">
-                        <button type="button" className="icon-btn" title="Edit Layout" onClick={() => handleEditLayout(layout)}>
-                          <LayoutGrid size={13} />
-                        </button>
-                        <button type="button" className="icon-btn" title="Duplicate Layout" onClick={() => handleDuplicateLayout(layout.id)}>
-                          <Copy size={13} />
-                        </button>
-                        <button type="button" className="icon-btn danger-hover" title="Delete Layout" onClick={() => handleDeleteLayout(layout.id)}>
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    if (projectManagerTab === 'documents') {
-      return (
-        <div className="project-manager-panel">
-          <div className="project-manager-card">
-            <div className="project-manager-card-head">
-              <div>
-                <span className="project-manager-kicker">Due diligence</span>
-                <h4>Project documents</h4>
-              </div>
-            </div>
-            <p className="project-manager-copy">Upload files for review. Verification decisions remain in the Admin Property Review workspace.</p>
-            <div className="project-document-upload-grid">
-              {[{ type: 'approved_layout', title: 'Layout Plan', copy: 'Upload the approved layout or blueprint.' }, { type: 'seven_twelve_extract', title: '7/12 Zone Certificate', copy: 'Upload the latest 7/12 extract or zone certificate.' }].map(({ type, title, copy }) => (
-                <label key={type} className="project-document-upload-card"><FileText size={22} /><strong>{title}</strong><span>{copy}</span><small>PDF, JPG, PNG or WebP · 10 MB max</small><b><Upload size={15} /> {projectUploadBusy === 'document' ? 'Uploading…' : 'Choose file'}</b><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" disabled={Boolean(projectUploadBusy)} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'document', type)} /></label>
-              ))}
-              <label className="project-document-upload-card"><FileCheck size={22} /><strong>Additional Documents</strong><span>Add a brochure or another project document.</span><small>PDF, JPG, PNG or WebP · 10 MB max</small><b><Upload size={15} /> Choose file</b><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" disabled={Boolean(projectUploadBusy)} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'document', 'other')} /></label>
-            </div>
-            {projectUploadBusy === 'document' && <p className="project-manager-copy">Uploading document…</p>}
-            {projectUploadError && <p className="seller-document-error" role="alert">{projectUploadError}</p>}
-            {editForm.documents.length === 0 ? (
-              <p className="no-layouts-tag">No documents have been uploaded yet.</p>
-            ) : (
-              <div className="project-document-editor-list">
-                {editForm.documents.map((document, index) => (
-                  <div key={`${document.type}-${index}`} className="project-document-editor">
-                    <span><strong>{getProjectDocumentLabel(document.type)}</strong><small>{document.fileName || 'Uploaded document'}</small></span>
-                    <span className={`document-review-status ${document.status || 'pending'}`}>{document.status || 'pending'}</span>
-                    <button type="button" className="project-document-link" onClick={() => setDocumentViewer(document)}>Preview</button>
-                    <button type="button" className="icon-btn danger-hover" title={`Remove ${getProjectDocumentLabel(document.type)}`} onClick={() => setEditForm({ ...editForm, documents: editForm.documents.filter((_, itemIndex) => itemIndex !== index) })}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    const field = (key, label, type = 'text', required = false, placeholder = '', completenessKey = key) => {
-      const invalid = projectValidationAttempted && (missingRequiredKeys.has(completenessKey) || (required && !hasValue(editForm[key])));
-      return (
-        <label className={`project-manager-field${invalid ? ' is-invalid' : ''}`}>
-          <span>{label}{required && <em aria-hidden="true"> *</em>}</span>
-          <input
-            type={type}
-            className={`project-manager-input${invalid ? ' is-invalid' : ''}`}
-            placeholder={placeholder}
-            value={editForm[key]}
-            min={key === 'cashbackAmount' ? '0' : undefined}
-            step={key === 'cashbackAmount' ? '1' : undefined}
-            aria-invalid={invalid}
-            onChange={(event) => setEditForm({ ...editForm, [key]: event.target.value })}
-          />
-        </label>
-      );
-    };
-    const selectField = (key, label, options) => {
-      const invalid = projectValidationAttempted && missingRequiredKeys.has(key);
-      return (
-        <label className={`project-manager-field${invalid ? ' is-invalid' : ''}`}>
-          <span>{label}<em aria-hidden="true"> *</em></span>
-          <select className={`project-manager-input${invalid ? ' is-invalid' : ''}`} value={editForm[key]} aria-invalid={invalid} onChange={(event) => setEditForm({ ...editForm, [key]: event.target.value })}>
-            <option value="">Select {label.toLowerCase()}</option>
-            {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>
-      );
-    };
-
-    return (
-      <form onSubmit={handleSaveProjectDetails} className="project-manager-form">
-        <section className={`project-completeness-panel ${completeness.isComplete ? 'complete' : ''}`} onClick={() => document.getElementById('project-basic-information')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-          <div><span><i aria-hidden="true">i</i> Project completeness</span><strong>{completeness.score}%</strong></div>
-          <div className="project-completeness-summary"><b>✓ {Math.max(0, 7 - completeness.missingRequired.length - completeness.invalidFields.length)} Completed</b><b>⚠ {completeness.missingRequired.length + completeness.invalidFields.length} Remaining</b></div>
-          {!completeness.isComplete && (
-            <details>
-              <summary>Review missing information</summary>
-              {completeness.missingRequired.concat(completeness.invalidFields, completeness.missingRecommended).map((item) => <span key={`${item.key}-${item.label}`}>{item.section}: {item.label}</span>)}
-            </details>
-          )}
-        </section>
-        {projectManagerError && <p className="seller-document-error" role="alert">{projectManagerError}</p>}
-        {projectManagerTab === 'general' && (
-          <div className="project-manager-panel">
-            <div className="project-manager-card" id="project-basic-information">
-              <div className="project-manager-card-head">
-                <div>
-                  <span className="project-manager-kicker">01</span>
-                  <h4>Basic Information</h4>
-                </div>
-              </div>
-              <div className="project-manager-grid">
-                {field('name', 'Project Name', 'text', true, 'Project name')}
-                {field('developer', 'Developer', 'text', true, 'Company or project owner')}
-                {field('village', 'Location', 'text', true, 'Village or locality')}
-                {field('priceFrom', 'Price From', 'number', true, 'Starting price in ₹', 'startingPrice')}
-                {field('totalPlots', 'Total Plots', 'number', true, 'Total plots')}
-                {field('remainingPlots', 'Remaining Plots', 'number')}
-              </div>
-            </div>
-
-            <div className="project-manager-card">
-              <div className="project-manager-card-head">
-                <div>
-                  <span className="project-manager-kicker">02</span>
-                  <h4>Project Information</h4>
-                </div>
-              </div>
-              <div className="project-manager-grid">
-                {selectField('landZone', 'Land Zone', LAND_ZONE_OPTIONS)}
-                {selectField('naStatus', 'NA Status', NA_STATUS_OPTIONS)}
-                <div className="project-manager-field"><span>Verification Status</span><div className="project-manager-readonly">{getVerifiedDocumentCount(selectedProject)} verified document{getVerifiedDocumentCount(selectedProject) === 1 ? '' : 's'}</div></div>
-                <label className="project-manager-field"><span>Project Status</span><select className="project-manager-input" value={editForm.status} disabled title="Use Admin review and listing actions to change status.">{PROPERTY_STATUSES.map((status) => <option key={status} value={status}>{status.replace(/_/g, ' ')}</option>)}</select></label>
-                {field('cashbackAmount', 'Cashback Available', 'number', true, 'Fixed amount in ₹', 'cashbackPerGuntha')}
-              </div>
-            </div>
-
-            <div className="project-manager-card">
-              <div className="project-manager-card-head"><div><span className="project-manager-kicker">03</span><h4>Contact Information</h4></div></div>
-              <div className="project-manager-grid">
-                {field('salesContact', 'Sales Contact')}
-                {field('whatsappNumber', 'WhatsApp Number', 'text', true, 'Buyer contact number', 'contact')}
-                {field('siteVisitContact', 'Site Visit Number (Optional)')}
-              </div>
-            </div>
-
-            <div className="project-manager-card">
-              <div className="project-manager-card-head"><div><span className="project-manager-kicker">Additional</span><h4>Listing Notes</h4></div></div>
-              <div className="project-manager-grid">
-                {field('taluka', 'Taluka')}
-                {field('area', 'Nearby Landmark')}
-                {field('reraNumber', 'RERA Number')}
-                <label className="project-manager-field project-manager-field-wide">
-                  <span>Amenities</span>
-                  <input
-                    type="text"
-                    className="project-manager-input"
-                    placeholder="Roads, Electricity, Water"
-                    value={editForm.amenities}
-                    onChange={(event) => setEditForm({ ...editForm, amenities: event.target.value })}
-                  />
-                </label>
-                <label className="project-manager-field project-manager-field-wide">
-                  <span>Description</span>
-                  <textarea
-                    className="project-manager-textarea"
-                    placeholder="Short project summary"
-                    value={editForm.description}
-                    onChange={(event) => setEditForm({ ...editForm, description: event.target.value })}
-                  />
-                </label>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {projectManagerTab === 'media' && (
-          <div className="project-manager-panel">
-            <div className="project-manager-card">
-              <div className="project-manager-card-head">
-                <div>
-                  <span className="project-manager-kicker">Project image</span>
-                  <h4>Thumbnail and preview</h4>
-                </div>
-              </div>
-              {projectUploadError && <p className="seller-document-error" role="alert">{projectUploadError}</p>}
-              <div className={`project-media-preview${projectValidationAttempted && missingRequiredKeys.has('mainImage') ? ' is-invalid' : ''}`}>
-                {hasValue(editForm.thumbnail) ? (
-                  <><img src={editForm.thumbnail} alt={`${editForm.name || 'Project'} preview`} /><label className="project-media-replace" title="Replace image" aria-label="Replace cover image"><Upload size={17} /><input type="file" accept="image/jpeg,image/png,image/webp" disabled={projectUploadBusy === 'thumbnail'} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'thumbnail')} /></label></>
-                ) : (
-                  <label className="project-media-placeholder">
-                    <ImageIcon size={22} />
-                    <strong>Add cover image</strong><span>JPG, PNG or WebP · 10 MB max</span><b><Upload size={15} /> {projectUploadBusy === 'thumbnail' ? 'Uploading…' : 'Choose image'}</b>
-                    <input type="file" accept="image/jpeg,image/png,image/webp" disabled={projectUploadBusy === 'thumbnail'} onChange={(event) => uploadProjectManagerFile(event.target.files?.[0], 'thumbnail')} />
-                  </label>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="form-actions-row project-manager-actions">
-          <button type="submit" className="btn-save">Save Changes</button>
-          <button type="button" className="btn-cancel" onClick={() => setProjectManagerOpen(false)}>Close</button>
-        </div>
-      </form>
-    );
-  };
-
-  const renderHomePanel = () => (
-    <div className="buyer-side-panel-content">
-      <div className="buyer-panel-search-row">
-        <div className="buyer-filter-chips" aria-label="Property filters">
-          <button type="button" className={`buyer-filter-chip buyer-filter-trigger ${filtersOpen ? 'active' : ''}`} onClick={() => setFiltersOpen((prev) => !prev)} aria-haspopup="dialog" aria-expanded={filtersOpen}>
-            <SlidersHorizontal size={18} />
-            <span>Filters</span>
-            {activeFilterCount > 0 && <span className="buyer-filter-count">{activeFilterCount}</span>}
-          </button>
-          <span className="buyer-filter-summary">{filteredProjects.length} Project{filteredProjects.length === 1 ? '' : 's'}</span>
-        </div>
-      </div>
-
-      {filtersOpen && (
-        <div className="buyer-filter-layer">
-          <button type="button" className="buyer-filter-backdrop" onClick={() => setFiltersOpen(false)} aria-label="Close filters" />
-          <div className="buyer-filter-card" role="dialog" aria-modal="true" aria-labelledby="buyer-filter-title">
-            <div className="buyer-filter-header">
-              <div><span>Project discovery</span><h3 id="buyer-filter-title">Filters</h3></div>
-              <button type="button" onClick={() => setFiltersOpen(false)} aria-label="Close filters"><X size={18} /></button>
-            </div>
-            <div className="buyer-filter-scroll">
-              <label className="buyer-filter-range">
-                <span>Maximum budget</span><strong>{formatINR(mapFilters.budgetMax)}</strong>
-                <input type="range" min="800000" max="5000000" step="100000" value={mapFilters.budgetMax} onChange={(event) => setMapFilters({ ...mapFilters, budgetMax: Number(event.target.value) })} />
-              </label>
-              <fieldset className="buyer-filter-group">
-                <legend>Land Zone</legend>
-                <p>Choose one or more statutory land classifications.</p>
-                <div className="buyer-filter-option-grid">
-                  {LAND_ZONE_OPTIONS.map((option) => <label key={option.value}><input type="checkbox" checked={mapFilters.landZones.includes(option.value)} onChange={() => toggleFilterOption('landZones', option.value)} /><span>{option.label}</span></label>)}
-                </div>
-              </fieldset>
-              <fieldset className="buyer-filter-group">
-                <legend>NA Status</legend>
-                <p>NA approval is independent from the land-zone classification.</p>
-                <div className="buyer-filter-option-grid">
-                  {NA_STATUS_OPTIONS.map((option) => <label key={option.value}><input type="checkbox" checked={mapFilters.naStatuses.includes(option.value)} onChange={() => toggleFilterOption('naStatuses', option.value)} /><span>{option.label}</span></label>)}
-                </div>
-              </fieldset>
-              <label className="buyer-filter-boolean"><input type="checkbox" checked={mapFilters.bankLoan} onChange={(event) => setMapFilters({ ...mapFilters, bankLoan: event.target.checked })} /><span><strong>Bank loan available</strong><small>Show projects marked as bank-loan ready.</small></span></label>
-            </div>
-            <div className="buyer-filter-actions">
-              <button type="button" className="btn-secondary" onClick={() => setMapFilters(DEFAULT_FILTERS)}>Reset</button>
-              <button type="button" className="btn-primary" onClick={() => setFiltersOpen(false)}>Show {filteredProjects.length} projects</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {homeSearchQuery && (
-        <div className="buyer-panel-section">
-          <div className="buyer-panel-section-head buyer-project-section-head">
-            <h4>Search Results</h4>
-            <span>{searchableProjects.length}</span>
-          </div>
-          {searchableProjects.length === 0 ? (
-            <p className="buyer-empty-copy">No matching projects found.</p>
-          ) : (
-            <div className="buyer-search-results">
-              {searchableProjects.map((project) => (
-                <button key={project.id} type="button" className="buyer-search-result" onClick={() => handleProjectSelect(project)}>
-                  <div>
-                    <strong>{project.name}</strong>
-                    <span>{getDisplayLocation(project) || project.village || 'Druvio project'}</span>
-                  </div>
-                  <span>{formatINR(project.priceFrom || project.startingPrice)}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="buyer-panel-section">
-        <div className="buyer-panel-section-head">
-          <h4>Featured Projects</h4>
-          <span>{filteredProjects.length}</span>
-        </div>
-        {filteredProjects.length === 0 ? (
-          <div className="feed-empty-state slim">
-            <Compass size={24} color="var(--text-muted)" />
-            <p>No active projects match these filters.</p>
-          </div>
-        ) : (
-          <div className="feed-listings-grid buyer-panel-list">
-            {filteredProjects.slice(0, 6).map((project) => {
-              const display = getPropertyDisplayModel(project);
-
-              return (
-                <PropertyCard
-                  key={project.id}
-                  project={project}
-                  display={display}
-                  formatPrice={formatINR}
-                  isFavourite={savedProjectIds.has(project.id)}
-                  onFavouriteToggle={toggleSavedProject}
-                  onShare={() => navigator.clipboard?.writeText(window.location.href)}
-                  onViewDetails={handleProjectSelect}
-                />
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
 
   const renderCashbackPanel = () => (
     <div className="buyer-side-panel-content cashback-panel-content">
@@ -1044,7 +879,7 @@ function BuyerApp({
             <select
               required
               value={cashbackForm.projectId}
-              onChange={(event) => setCashbackForm((cSurrent) => ({ ...current, projectId: event.target.value }))}
+              onChange={(event) => setCashbackForm((current) => ({ ...current, projectId: event.target.value }))}
             >
               <option value="">Select a project</option>
               {cashbackProjects.map((project) => (
@@ -1097,7 +932,7 @@ function BuyerApp({
 
         {cashbackError && <div className="cashback-error-alert" role="alert">{cashbackError}</div>}
         {cashbackSuccess ? (
-          <div className="cashback-success-alert">Claim submitted successfully. Druvio will verify your purchase proof.</div>
+          <div className="cashback-success-alert">Claim submitted successfully. Zinoo will verify your purchase proof.</div>
         ) : (
           <button type="submit" className="btn-primary claim-submit-btn" disabled={cashbackSubmitting || cashbackProjects.length === 0}>
             {cashbackSubmitting ? <><Loader2 size={18} className="spin" /> Uploading proof…</> : 'Submit cashback claim'}
@@ -1119,30 +954,11 @@ function BuyerApp({
     }
 
     const plotArea = selectedProject.minimumPlotArea || selectedProject.maximumPlotArea || selectedProject.plotAreaSqFt;
-    const score = selectedDisplay.rating.enabled ? selectedDisplay.rating.value : null;
     const heroPrice = formatINR(selectedDisplay.pricing.startingPrice);
     const plotsLeftLabel = hasValue(selectedProject.remainingPlots)
       ? (Number(selectedProject.remainingPlots) > 0 ? selectedProject.remainingPlots : 'Sold out')
       : '—';
     const landZoneLabel = getLandZoneLabel(selectedProject);
-    const mapPreviewQuery = selectedDisplay.map.latitude && selectedDisplay.map.longitude
-      ? `${selectedDisplay.map.latitude},${selectedDisplay.map.longitude}`
-      : [selectedDisplay.basic.projectName, selectedDisplay.map.address].filter(Boolean).join(', ');
-    const mapPreviewUrl = hasValue(mapPreviewQuery)
-      ? `https://www.google.com/maps?q=${encodeURIComponent(mapPreviewQuery)}&z=15&output=embed`
-      : '';
-    const highwayDistance = [
-      ...selectedDisplay.featureChips.items,
-      ...selectedDisplay.quickStats.items
-    ].find((item) => item.enabled && /highway|distance/i.test(`${item.title || ''} ${item.value || ''}`));
-    const scoreSignals = [
-      hasValue(selectedProject.reraNumber) && 'RERA details provided',
-      hasValue(selectedProject.website) && 'Project website provided',
-      hasValue(selectedProject.googleMapsLink) && 'Map reference provided',
-    ].filter(Boolean);
-    const shareProject = () => {
-      navigator.clipboard?.writeText(window.location.href).then(() => alert('Project link copied.'));
-    };
     const openWhatsApp = () => {
       if (selectedWhatsAppUrl) {
         window.open(selectedWhatsAppUrl, '_blank', 'noopener,noreferrer');
@@ -1150,202 +966,81 @@ function BuyerApp({
       }
       alert('WhatsApp contact is not available for this project yet.');
     };
-    const openDirections = () => {
-      if (selectedNavigateUrl) {
-        window.open(selectedNavigateUrl, '_blank', 'noopener,noreferrer');
-        return;
-      }
-      alert('Map location is not available for this project yet.');
-    };
-    const openFullscreenLocation = () => {
-      if (selectedProject.layoutPolygon) {
-        window.dispatchEvent(new CustomEvent('druvio-view-project-layout', { detail: { projectId: selectedProject.id } }));
-        return;
-      }
-      if (selectedNavigateUrl) {
-        window.open(selectedNavigateUrl, '_blank', 'noopener,noreferrer');
-        return;
-      }
-      if (mapPreviewUrl) {
-        window.open(mapPreviewUrl.replace('&output=embed', ''), '_blank', 'noopener,noreferrer');
-      }
-    };
-    const viewLayout = () => {
-      window.dispatchEvent(new CustomEvent('druvio-view-project-layout', { detail: { projectId: selectedProject.id, preserveMap: true } }));
-      if (isAndroidLayout) setMobileSheetHeight(34);
-    };
-    const displayOrderOf = (key) => Math.max(0, selectedDisplay.visibility.displayOrder.indexOf(key));
-
     return (
-      <div
-        className="buyer-side-panel-content project-panel-content"
-        onScroll={(event) => setProjectScrollTop(Math.min(event.currentTarget.scrollTop, 180))}
-        style={{ '--project-scroll': Math.min(projectScrollTop / 120, 1) }}
-      >
-        <div className={`premium-project-details reference-property-details ${projectScrollTop > 28 ? 'project-header-scrolled' : ''}`} key={selectedProject.id}>
-            <header className="project-details-app-bar">
-              <button type="button" className="reference-hero-back" onClick={closePanel} aria-label="Back to properties"><ChevronLeft size={21} /></button>
-              <h2>{selectedDisplay.basic.projectName}</h2>
-              <div className="premium-project-hero-actions" aria-label="Project actions">
-                <button type="button" onClick={shareProject} aria-label="Share project"><Share2 size={18} /></button>
-                <button type="button" onClick={() => toggleSavedProject(selectedProject.id)} aria-label={savedProjectIds.has(selectedProject.id) ? 'Remove from saved projects' : 'Save project'}>
-                  <Heart size={18} fill={savedProjectIds.has(selectedProject.id) ? 'currentColor' : 'none'} />
-                </button>
-              </div>
-            </header>
-            <section className="premium-project-hero">
-              <img src={selectedDisplay.media.heroImage || selectedGallery[0]?.downloadURL || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1000&q=85'} alt={selectedDisplay.basic.projectName} />
-              <div className="premium-project-hero-scrim" />
-              {selectedDisplay.verified.enabled && selectedDisplay.verified.showOnDetails && <span className="reference-verified-badge"><Check size={13} /> {selectedDisplay.verified.label}</span>}
-              <div className="reference-gallery-count"><ImageIcon size={14} /> 1/{Math.max(selectedGallery.length, 1)}</div>
-            </section>
-
-            <div className="premium-project-body reference-project-body">
-              <section className="reference-property-intro" style={{ order: displayOrderOf('basic') }}>
-                <div className="reference-property-heading">
-                  <div>
-                    <h1>{selectedDisplay.basic.projectName}</h1>
-                    {selectedDisplay.basic.location && <p><MapPin size={15} /> {selectedDisplay.basic.location}</p>}
-                    <span>{selectedDisplay.pricing.pricePrefix}</span>
-                    <strong>{heroPrice}</strong>
-                    {selectedDisplay.cashback.enabled && selectedDisplay.cashback.showOnDetails && <CashbackBadge amount={selectedDisplay.cashback.amount} label={selectedDisplay.cashback.label} color={selectedDisplay.cashback.badgeColor} />}
-                  </div>
-                  {selectedDisplay.rating.enabled && selectedDisplay.rating.showOnDetails && <div className="reference-rating-card">
-                    <b>★ {selectedDisplay.rating.enabled ? selectedDisplay.rating.value : '—'}</b>
-                    <small>{selectedDisplay.rating.enabled ? `(${selectedDisplay.rating.reviewCount} Reviews)` : 'Rating disabled'}</small>
-                  </div>}
-                </div>
-
-                {selectedDisplay.featureChips.showOnDetails && <div className="reference-feature-chips" aria-label="Property features">
-                  {selectedDisplay.featureChips.items.filter((item) => item.enabled).map((item) => <div key={item.id}><Leaf size={20} /><span>{item.title}</span></div>)}
-                </div>}
-              </section>
-
-              {selectedDisplay.quickStats.showOnDetails && <section className="reference-section reference-quick-stats" style={{ order: displayOrderOf('quickStats') }}>
-                <div className="reference-section-title"><h3>Quick Stats</h3></div>
-                <div className="premium-project-stats" aria-label="Project highlights">
-                  {selectedDisplay.quickStats.items.filter((item) => item.enabled).map((item) => <div key={item.id}><Maximize2 size={20} /><span>{item.value}</span><strong>{item.title}</strong></div>)}
-                </div>
-              </section>}
-
-              <section className="reference-section premium-project-action-section" style={{ order: displayOrderOf('actions') }} aria-label="Primary actions">
-                <div className="premium-project-actions reference-primary-actions">
-                  {selectedDisplay.actions.showBookVisit && <button type="button" className="premium-book-visit" onClick={() => setShowBookingModal(true)}><CalendarDays size={18} /> {selectedDisplay.actions.bookVisitLabel}</button>}
-                  {selectedDisplay.actions.showViewLayout && <button type="button" onClick={viewLayout}><LayoutGrid size={18} /> {selectedDisplay.actions.viewLayoutLabel}</button>}
-                  {selectedDisplay.actions.showMap && selectedDisplay.map.showOnDetails && <button type="button" onClick={openDirections}><Navigation size={18} /> {selectedDisplay.actions.mapLabel}</button>}
-                </div>
-              </section>
-
-              <section className="reference-section premium-gallery-section" style={{ order: displayOrderOf('gallery') }}>
-                <div className="reference-section-title">
-                  <h3>Project Gallery</h3>
-                  {selectedGallery.length > 0 && <button type="button" onClick={() => setGalleryViewerIndex(0)}>View all ({selectedGallery.length})</button>}
-                </div>
-                {selectedGallery.length
-                  ? <div className="reference-gallery-strip">
-                      {selectedGallery.slice(0, 4).map((image, index) => (
-                        <button type="button" className={index === galleryIndex ? 'active' : ''} key={image.id} aria-label={`Open ${selectedDisplay.basic.projectName} gallery image ${index + 1}`} onClick={() => { setGalleryIndex(index); setGalleryViewerIndex(index); }}>
-                          <img src={image.downloadURL} alt={`${selectedProject.name} view ${index + 1}`} loading={index ? 'lazy' : 'eager'} />
-                        </button>
-                      ))}
-                    </div>
-                  : <p>Gallery images will appear here when the seller adds them.</p>}
-              </section>
-
-              {selectedDisplay.map.enabled && selectedDisplay.map.showOnDetails && <section className="reference-section premium-location-section" style={{ order: displayOrderOf('map') }}>
-                <div className="reference-section-title"><h3>Location</h3><button type="button" onClick={openDirections}>{selectedDisplay.actions.mapLabel}</button></div>
-                {mapPreviewUrl && (
-                  <button type="button" className="premium-location-preview" onClick={openFullscreenLocation} aria-label="Open property location">
-                    <iframe src={mapPreviewUrl} title={`${selectedProject.name} location preview`} loading="lazy" referrerPolicy="no-referrer-when-downgrade" tabIndex="-1" />
-                  </button>
-                )}
-                {(selectedDisplay.map.address || highwayDistance) && <div className="reference-location-meta">
-                  {selectedDisplay.map.address && <p className="reference-address"><MapPin size={17} /> <span>{selectedDisplay.map.address}</span></p>}
-                  {highwayDistance && <p className="reference-distance"><Route size={17} /><span>{[highwayDistance.value, highwayDistance.title].filter(Boolean).join(' ')}</span></p>}
-                </div>}
-              </section>}
-
-              {selectedDisplay.documents.showOnDetails && <section className="reference-section premium-documents-section" style={{ order: displayOrderOf('documents') }}>
-                <div className="reference-section-title"><h3>Documents</h3>{selectedDocuments.length > 0 && <button type="button" onClick={() => setDocumentViewer(selectedDocuments[0])}>View all</button>}</div>
-                {documentsLoading ? <p>Loading documents…</p> : selectedDocuments.length ? (
-                  <div className="buyer-document-list">
-                    {selectedDocuments.map((document) => (
-                      <article key={document.id || document.url}>
-                        <FileText size={22} />
-                        <div>
-                          <strong>{document.displayName || getProjectDocumentLabel(document.type)}</strong>
-                          <small><Check size={13} /> Verified</small>
-                        </div>
-                        <button type="button" onClick={() => setDocumentViewer(document)}>View</button>
-                      </article>
-                    ))}
-                  </div>
-                ) : <p>No verified documents are available.</p>}
-              </section>}
-
-              {selectedDisplay.amenities.showOnDetails && <section className="reference-section reference-amenities-section" style={{ order: displayOrderOf('amenities') }}>
-                <div>
-                  <h3>Amenities</h3>
-                  {selectedDisplay.amenities.items.filter((item) => item.enabled).length > 0
-                    ? <ul>{selectedDisplay.amenities.items.filter((item) => item.enabled).map((item) => <li key={item.id}><Check size={15} /> {item.title}</li>)}</ul>
-                    : <p>No amenities have been added yet.</p>}
-                </div>
-              </section>}
-
-              {selectedDisplay.overview.showOnDetails && <section className="reference-section reference-overview-score" style={{ order: displayOrderOf('overview') }}>
-                <div>
-                  <div className="reference-score-heading">
-                    <span aria-hidden="true">★</span>
-                    <div><h3>Druvio Score</h3><small>Investment Confidence</small></div>
-                    <strong>{score || '—'}<small>/5</small></strong>
-                  </div>
-                  <p>{selectedDisplay.overview.body || selectedDisplay.basic.shortDescription}</p>
-                </div>
-              </section>}
-
-              {selectedDisplay.trust.showOnDetails && <section className="reference-trust-strip" style={{ order: displayOrderOf('trust') }} aria-label="Project trust information">
-                {selectedDisplay.trust.items.filter((item) => item.enabled).map((item) => <div key={item.id}><ShieldCheck size={20} /><span><strong>{item.title}</strong><small>{item.value}</small></span></div>)}
-              </section>}
-
-            </div>
-          </div>
-        <section className="reference-bottom-cta" aria-label="Contact and booking actions">
-          {selectedDisplay.actions.showCall && selectedDisplay.actions.callNumber ? (
-            <a href={`tel:${String(selectedDisplay.actions.callNumber).replace(/[^\d+]/g, '')}`}><Phone size={19} /> {selectedDisplay.actions.callLabel}</a>
-          ) : (
-            selectedDisplay.actions.showCall && <button type="button" disabled><Phone size={19} /> {selectedDisplay.actions.callLabel}</button>
-          )}
-          {selectedDisplay.actions.showBookVisit && <button type="button" onClick={() => setShowBookingModal(true)}><CalendarDays size={19} /> {selectedDisplay.actions.bookVisitLabel}</button>}
-        </section>
-      </div>
+      <BuyerProjectDetails
+        selectedProject={selectedProject}
+        selectedDisplay={selectedDisplay}
+        selectedGallery={selectedGallery}
+        galleryIndex={galleryIndex}
+        onGalleryIndexChange={setGalleryIndex}
+        projectScrollTop={projectScrollTop}
+        heroPrice={heroPrice}
+        onScroll={handleProjectPanelScroll}
+        appBar={!isAndroidLayout ? (
+          <header className="project-details-app-bar">
+            <h2>{selectedDisplay.basic.projectName}{selectedDisplay.verified.showNameBadge && <BadgeCheck className="property-name-verified-badge" aria-label="Verified property" />}</h2>
+            <BuyerProjectActions
+              variant="header"
+              saved={savedProjectIds.has(selectedProject.id)}
+              onShare={shareProject}
+              onSave={() => toggleSavedProject(selectedProject.id)}
+              onClose={closePanel}
+            />
+          </header>
+        ) : null}
+        contactActions={(
+          <BuyerProjectActions
+            variant="contact"
+            actions={selectedDisplay.actions}
+            callHref={`tel:${String(selectedDisplay.actions.callNumber).replace(/[^\d+]/g, '')}`}
+            onWhatsApp={openWhatsApp}
+          />
+        )}
+        documentsSection={(
+          <BuyerProjectMedia
+            variant="documents"
+            selectedDisplay={selectedDisplay}
+            documents={selectedDocuments}
+            documentsLoading={documentsLoading}
+            onViewDocument={(document) => openDocumentPreview(document, setDocumentViewer)}
+          />
+        )}
+        bottomActions={null}
+      />
     );
   };
 
   return (
     <div className={`buyer-map-first-root buyer-screen-${activeScreen}`}>
-      <div className="buyer-map-canvas">
-        <MapScreen
-          projects={filteredProjects}
-          selectedProject={selectedProject}
-          onSelectProject={handleProjectSelect}
-          onViewProjectDetails={openFullProjectDetails}
-          showProjectPopup={panelMode !== 'project'}
-          activeLayout={activeLayout}
-          onActiveLayoutChange={setActiveLayout}
-          onVisibleProjectsChange={setVisibleProjects}
-          filters={mapFilters}
-          externalOverlayOpen={filtersOpen || panelOpen}
-          onLayersOpen={() => setFiltersOpen(false)}
-        />
-      </div>
-
+      {routeSlug && routeStatus !== 'ready' && (
+        <div className="project-panel-empty-state" role={routeStatus === 'error' || routeStatus === 'not-found' ? 'alert' : 'status'}>
+          <FileText size={24} aria-hidden="true" />
+          <h4>{routeStatus === 'loading' ? 'Loading project…' : routeStatus === 'not-found' ? 'Project not found' : 'Project unavailable'}</h4>
+          <p>{routeStatus === 'loading' ? 'Loading the requested project details.' : routeStatus === 'not-found' ? 'This project link is unavailable or incorrect.' : 'We could not load this project. Please try again.'}</p>
+        </div>
+      )}
       {activeScreen === 'map' && (
-        <>
-        </>
+        <div className={`buyer-map-canvas map-mode-${interactiveMapReady ? 'interactive' : 'static'}`}>
+          {interactiveMap && <Suspense fallback={null}><InteractiveMap
+            projects={mapProjects}
+            selectedProject={selectedProject}
+            onSelectProject={handleMapProjectSelect}
+            onViewProjectDetails={openFullProjectDetails}
+            showProjectPopup={panelMode !== 'project'}
+            activeLayout={activeLayout}
+            onActiveLayoutChange={setActiveLayout}
+            loadVisibleProjects={false}
+            filters={mapFilters}
+            externalOverlayOpen={filtersOpen || panelOpen}
+            onLayersOpen={() => setFiltersOpen(false)}
+            onMapReady={handleInteractiveMapReady}
+          /></Suspense>}
+          {!interactiveMapReady && <div className="interactive-map-loader" aria-hidden="true"><i /><i /><i /><i /></div>}
+        </div>
       )}
 
-      {activeScreen === 'home' && panelMode !== 'project' && (
-        <BuyerWorkspaceHeader
+      {(['home', 'map', 'saved', 'cashback', 'nearby', 'support', 'developer'].includes(activeScreen)) && (!isAndroidLayout || panelMode !== 'project' || mobileSheetSnap === 'collapsed') && (
+        <DesktopHeader
           homeSearchQuery={homeSearchQuery}
           voiceSearchActive={voiceSearchActive}
           searchableProjects={searchableProjects}
@@ -1357,6 +1052,7 @@ function BuyerApp({
             if (panelMode) setPanelMode(null);
           }}
           onSearchKeyDown={searchEnteredLocation}
+          onActivateMap={enableInteractiveMap}
           onClearSearch={() => setHomeSearchQuery('')}
           onStartVoiceSearch={startVoiceSearch}
           onProjectSelect={(project) => {
@@ -1364,6 +1060,12 @@ function BuyerApp({
             setPlaceSuggestions([]);
           }}
           onPlaceSelect={selectPlaceSuggestion}
+          showFilters={activeScreen === 'home'}
+          filtersOpen={filtersOpen}
+          activeFilterCount={activeFilterCount}
+          onToggleFilters={() => setFiltersOpen((prev) => !prev)}
+          mapFilters={mapFilters}
+          onMapFiltersChange={setMapFilters}
           notifications={notifications}
           user={user}
           isAdmin={isAdmin}
@@ -1372,8 +1074,11 @@ function BuyerApp({
           permissions={permissions}
           currentView={currentView}
           onViewChange={onViewChange}
+          onCustomerSupport={() => navigateToScreen('support')}
+          onRequireAuth={requireAuthentication}
           onBackToAdmin={onBackToAdmin}
           selectedSeller={selectedSeller}
+          onAccountDeleted={onAccountDeleted}
         />
       )}
 
@@ -1381,17 +1086,64 @@ function BuyerApp({
         <BuyerDesktopNavigation
           items={SIDEBAR_ITEMS}
           activeItem={activeSidebarItem}
-          onNavigate={navigateToScreen}
+          onNavigate={(screen) => (!isAuthenticated && ['saved', 'cashback'].includes(screen))
+            ? requireAuthentication({ type: `open-${screen}`, resumeScreen: screen })
+            : navigateToScreen(screen)}
         />
       )}
 
       {activeScreen === 'home' && (
-        <main className="buyer-primary-screen buyer-home-screen" aria-label="Buyer home">
-          <div className="buyer-primary-screen-inner">
-            <FeedBannerCarousel />
-            {renderHomePanel()}
-          </div>
-        </main>
+        <BuyerHomeScreen>
+          <BuyerHomePanel
+            filtersOpen={filtersOpen}
+            activeFilterCount={activeFilterCount}
+            filteredProjects={filteredProjects}
+            mapFilters={mapFilters}
+            landZoneOptions={LAND_ZONE_OPTIONS}
+            naStatusOptions={NA_STATUS_OPTIONS}
+            homeSearchQuery={homeSearchQuery}
+            searchableProjects={searchableProjects}
+            savedProjectIds={savedProjectIds}
+            onToggleFilters={() => setFiltersOpen((prev) => !prev)}
+            onCloseFilters={() => setFiltersOpen(false)}
+            onBudgetChange={(event) => setMapFilters({ ...mapFilters, budgetMax: Number(event.target.value) })}
+            onLandZoneToggle={(value) => toggleFilterOption('landZones', value)}
+            onNaStatusToggle={(value) => toggleFilterOption('naStatuses', value)}
+            onBankLoanChange={(event) => setMapFilters({ ...mapFilters, bankLoan: event.target.checked })}
+            onInstallmentToggle={() => setMapFilters({ ...mapFilters, installmentMax: mapFilters.installmentMax ? 0 : 20000 })}
+            onResetFilters={() => setMapFilters(DEFAULT_FILTERS)}
+            onProjectSelect={handleHomeProjectSelect}
+            onDeveloperSelect={handleDeveloperSelect}
+            onFavouriteToggle={toggleSavedProject}
+            onShare={shareProject}
+            projectsLoading={projectsLoading}
+          />
+        </BuyerHomeScreen>
+      )}
+
+      {activeScreen === 'developer' && (
+        <BuyerDeveloperProfile
+          profile={developerProfile}
+          projects={developerProjects}
+          loading={developerProfileLoading}
+          error={developerProfileError}
+          fallbackName={selectedDeveloper?.developerName}
+          onBack={() => navigateToScreen('home')}
+          onProjectSelect={handleProjectSelect}
+          onDeveloperSelect={handleDeveloperSelect}
+          onViewProjectsOnMap={() => { setMapDeveloperId(selectedDeveloper?.sellerId || ''); enableInteractiveMap(); setActiveScreen('map'); setPanelMode(null); }}
+        />
+      )}
+
+      {activeScreen === 'saved' && (
+        <BuyerSavedScreen
+          projects={savedProjects}
+          savedCount={savedProjectIds.size}
+          unavailableCount={unavailableSavedProjectCount}
+          loading={projectsLoading}
+          onProjectSelect={handleProjectSelect}
+          onDeveloperSelect={handleDeveloperSelect}
+        />
       )}
 
       {activeScreen === 'cashback' && (
@@ -1400,32 +1152,45 @@ function BuyerApp({
         </main>
       )}
 
+      {activeScreen === 'support' && <BuyerSupportScreen />}
+
       <section
-        className={`buyer-slide-panel ${panelOpen ? 'open' : ''} ${isAndroidLayout && panelMode === 'project' ? 'map-property-bottom-sheet' : 'map-property-side-panel'}`}
-        style={isAndroidLayout ? { '--sheet-height': `${mobileSheetHeight}dvh` } : undefined}
+        ref={mobileSheetRef}
+        className={`buyer-slide-panel ${panelOpen ? 'open' : ''} ${pendingMapFocusProjectId ? 'map-focus-pending' : ''} ${isAndroidLayout && panelMode === 'project' ? `map-property-bottom-sheet sheet-${mobileSheetSnap}` : 'map-property-side-panel'}`}
+        data-sheet-state={isAndroidLayout && panelMode === 'project' ? mobileSheetSnap : undefined}
+        style={isAndroidLayout && panelOpen ? { '--sheet-bottom-px': '0px' } : undefined}
       >
         <div className="buyer-slide-panel-shell">
           {isAndroidLayout && panelMode === 'project' && <button
             type="button"
             className="property-sheet-drag-handle"
-            aria-label={`Resize property details. Current height ${Math.round(mobileSheetHeight)} percent`}
+            aria-label={`Resize property details. Current state ${mobileSheetSnap}`}
             onPointerDown={(event) => {
-              mobileSheetDragRef.current = { pointerId: event.pointerId };
+              const metrics = measureMobileSheet();
+              if (!metrics) return;
+              mobileSheetDragRef.current = {
+                pointerId: event.pointerId,
+                startY: event.clientY,
+                lastY: event.clientY,
+                lastTime: performance.now(),
+                startHeight: metrics[mobileSheetSnap]
+              };
+              mobileSheetRef.current?.classList.add('is-sheet-dragging');
               event.currentTarget.setPointerCapture(event.pointerId);
             }}
             onPointerMove={(event) => {
-              if (mobileSheetDragRef.current?.pointerId !== event.pointerId) return;
-              const next = Math.max(30, Math.min(95, ((window.innerHeight - event.clientY) / window.innerHeight) * 100));
-              setMobileSheetHeight(next);
+              const drag = mobileSheetDragRef.current;
+              const metrics = mobileSheetMetricsRef.current;
+              if (!drag || drag.pointerId !== event.pointerId || !metrics) return;
+              const now = performance.now();
+              drag.velocity = (event.clientY - drag.lastY) / Math.max(now - drag.lastTime, 1);
+              const next = Math.max(metrics.min, Math.min(metrics.max, drag.startHeight + drag.startY - event.clientY));
+              drag.lastY = event.clientY;
+              drag.lastTime = now;
+              applyMobileSheetHeight(next);
             }}
-            onPointerUp={(event) => {
-              if (mobileSheetDragRef.current?.pointerId !== event.pointerId) return;
-              mobileSheetDragRef.current = null;
-              const snapPoints = [34, 60, 95];
-              setMobileSheetHeight(current => snapPoints.reduce((closest, point) => Math.abs(point - current) < Math.abs(closest - current) ? point : closest));
-              event.currentTarget.releasePointerCapture(event.pointerId);
-            }}
-            onClick={() => setMobileSheetHeight(current => current < 47 ? 60 : current < 78 ? 95 : 34)}
+            onPointerUp={finishMobileSheetDrag}
+            onPointerCancel={finishMobileSheetDrag}
           ><span /></button>}
           {panelMode !== 'project' && <div className="buyer-slide-panel-head">
             <div>
@@ -1439,14 +1204,33 @@ function BuyerApp({
             </div>
           </div>}
 
+          {isAndroidLayout && panelMode === 'project' && selectedProject && <div className="property-sheet-unified-actions">
+            <button type="button" onClick={shareProject} aria-label="Share project"><Share2 size={19} /></button>
+            <button type="button" onClick={() => toggleSavedProject(selectedProject.id)} aria-label={savedProjectIds.has(selectedProject.id) ? 'Remove from saved projects' : 'Save project'}><Heart size={19} fill={savedProjectIds.has(selectedProject.id) ? 'currentColor' : 'none'} /></button>
+            <button type="button" onClick={closePanel} aria-label="Close project preview"><X size={21} /></button>
+          </div>}
+          {panelMode === 'project' && selectedProject && <div ref={mobileSheetCompactRef} className="property-sheet-compact-preview" aria-hidden={mobileSheetSnap !== 'collapsed'}>
+            <img src={selectedDisplay?.media.heroImage || selectedGallery[0]?.downloadURL || '/zinoo-home-hero.webp'} alt="" />
+            <div className="property-sheet-compact-copy">
+              <strong>{selectedDisplay?.basic.projectName || selectedProject.name}{selectedDisplay?.verified.showNameBadge && <BadgeCheck className="property-name-verified-badge" aria-label="Verified property" />}</strong>
+              <div className="property-sheet-compact-pricing">
+                <span>{selectedDisplay ? formatINR(selectedDisplay.pricing.startingPrice) : 'Price on request'}</span>
+                {selectedDisplay?.cashback.enabled && <i aria-hidden="true">•</i>}
+                {selectedDisplay?.cashback.enabled && <small>{formatExactINR(selectedDisplay.cashback.amount)} Cashback</small>}
+              </div>
+            </div>
+            <button type="button" className="property-sheet-expand-indicator" onClick={() => setMobileSheetSnap('expanded')} aria-label="Expand property details"><ChevronUp size={17} /></button>
+          </div>}
           {panelMode === 'project' && renderProjectPanel()}
         </div>
       </section>
 
-      {isAndroidLayout && (
+      {isAndroidLayout && !panelOpen && (
         <BuyerMobileNavigation
           activeScreen={activeScreen}
-          onNavigate={navigateToScreen}
+          onNavigate={(screen) => (!isAuthenticated && ['saved', 'cashback'].includes(screen))
+            ? requireAuthentication({ type: `open-${screen}`, resumeScreen: screen })
+            : navigateToScreen(screen)}
         />
       )}
 
@@ -1506,10 +1290,19 @@ function BuyerApp({
         </div>
       )}
 
-      <InAppDocumentViewer document={documentViewer} onClose={() => setDocumentViewer(null)} />
-      {galleryViewerIndex !== null && (
-        <ImageLightbox images={selectedGallery} initialIndex={galleryViewerIndex} onClose={() => setGalleryViewerIndex(null)} />
-      )}
+      <BuyerProjectMedia
+        variant="viewers"
+        documentViewer={documentViewer}
+        galleryViewerIndex={galleryViewerIndex}
+        selectedProject={selectedProject}
+        selectedDisplay={selectedDisplay}
+        selectedGallery={selectedGallery}
+        saved={selectedProject ? savedProjectIds.has(selectedProject.id) : false}
+        onSave={() => selectedProject && toggleSavedProject(selectedProject.id)}
+        onShare={shareProject}
+        onCloseDocumentViewer={() => setDocumentViewer(null)}
+        onCloseGalleryViewer={() => setGalleryViewerIndex(null)}
+      />
 
     </div>
   );
