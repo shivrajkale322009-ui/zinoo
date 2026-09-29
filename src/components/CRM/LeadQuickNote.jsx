@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
+import React, { useEffect, useId, useRef, useState } from 'react';
+import { Plus, X } from 'lucide-react';
 import { createActivityRecord } from '../../utils/crmLeadModel';
 
 export default function LeadQuickNote({ lead, currentUser, onUpdateLead }) {
@@ -9,6 +9,12 @@ export default function LeadQuickNote({ lead, currentUser, onUpdateLead }) {
   const [error, setError] = useState('');
   const inFlight = useRef(false);
   const trigger = useRef(null);
+  const dialog = useRef(null);
+  const titleId = useId();
+  useEffect(() => {
+    if (editing && !dialog.current.open) dialog.current.showModal();
+    if (!editing && dialog.current.open) dialog.current.close();
+  }, [editing]);
   const notes = Array.isArray(lead.notes) ? lead.notes : [];
   const close = () => { setEditing(false); setText(''); setError(''); trigger.current?.focus(); };
 
@@ -31,11 +37,14 @@ export default function LeadQuickNote({ lead, currentUser, onUpdateLead }) {
 
   return <div className="crm-quick-note">
     {notes[0]?.text && <p className="crm-quick-note-preview" title={notes[0].text}>{notes[0].text}</p>}
-    <button ref={trigger} type="button" className="crm-btn crm-btn-secondary" aria-expanded={editing} disabled={saving || !onUpdateLead} onClick={() => setEditing(true)}><Plus size={14} /> Add note</button>
-    {editing && <form onSubmit={save} className="crm-quick-note-form">
-      <textarea autoFocus aria-label={`New note for ${lead.name || lead.phone || 'unnamed lead'}`} placeholder="Write a note…" value={text} disabled={saving} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && !saving) { event.stopPropagation(); close(); } }} />
+    <button ref={trigger} type="button" className="crm-btn crm-btn-secondary" aria-haspopup="dialog" disabled={saving || !onUpdateLead} onClick={() => setEditing(true)}><Plus size={14} /> Add note</button>
+    <dialog ref={dialog} className="crm-note-dialog" aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); if (!saving) close(); }}>
+      <header className="crm-note-dialog-header"><div><h3 id={titleId}>Add note</h3><p>{lead.name || lead.phone || 'Unnamed lead'}</p></div><button type="button" className="crm-btn crm-btn-secondary" aria-label="Close note editor" disabled={saving} onClick={close}><X size={18} /></button></header>
+      {editing && <form onSubmit={save} className="crm-quick-note-form">
+      <textarea autoFocus aria-label={`New note for ${lead.name || lead.phone || 'unnamed lead'}`} placeholder="Write a note…" value={text} disabled={saving} onChange={(event) => setText(event.target.value)} />
       <div><button type="submit" className="crm-btn crm-btn-primary" disabled={saving || !text.trim()}>{saving ? 'Saving…' : 'Save'}</button><button type="button" className="crm-btn crm-btn-secondary" disabled={saving} onClick={close}>Cancel</button></div>
       {error && <small role="alert">{error}</small>}
-    </form>}
+      </form>}
+    </dialog>
   </div>;
 }

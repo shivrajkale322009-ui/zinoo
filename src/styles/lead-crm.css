@@ -1238,3 +1238,22 @@
 .crm-quick-note-form textarea { width: 100%; min-height: 90px; resize: vertical; }
 .crm-quick-note-form > div { display: flex; gap: 6px; }
 .crm-quick-note-form [role="alert"] { color: #b91c1c; }
+.crm-note-dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 22px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 20px 60px #0f172a30;
+  white-space: normal;
+  text-align: left;
+}
+.crm-note-dialog::backdrop { background: #0f172a66; }
+.crm-note-dialog-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.crm-note-dialog-header h3 { margin: 0; font-size: 18px; }
+.crm-note-dialog-header p { margin: 6px 0 12px; color: #64748b; font-size: 13px; overflow-wrap: anywhere; }
+.crm-note-dialog .crm-quick-note-form textarea { min-height: 150px; }
+.crm-note-dialog .crm-quick-note-form > div { justify-content: flex-end; }
