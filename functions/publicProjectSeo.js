@@ -1,4 +1,5 @@
 const { ACTIVE_STATUS, sanitizePublicProject, slugify, validSlug } = require('./publicProjectProjection');
+const { contentBySlug, publishedContent } = require('./publicContent');
 
 const SITE_ORIGIN = 'https://zinoo.in';
 const META_PIXEL_ID = '2252404462242027';
@@ -19,19 +20,27 @@ const formatPlotSize = (project) => {
     ? `–${new Intl.NumberFormat('en-IN').format(project.plotAreaMaxSqFt)}` : '';
   return `${min}${max} sq.ft.`;
 };
-const projectDescription = (project) => text(project.description, 155)
-  || `View verified plot project details for ${project.projectName}${project.location ? ` in ${project.location}` : ' near Chakan'}, including price and plot sizes where available.`;
+const projectDescription = (project) => {
+  const details = [
+    project.startingPrice !== null ? `Starting at ${formatPrice(project.startingPrice)}` : '',
+    project.completeAddress || project.location ? `Address: ${project.completeAddress || project.location}` : ''
+  ].filter(Boolean).join('. ');
+  const overview = text(project.description, 155);
+  return [details, overview].filter(Boolean).join('. ').slice(0, 300)
+    || `View verified plot project details for ${project.projectName} near Chakan.`;
+};
 
 function pageShell({ title, description, canonical, robots = 'index,follow,max-image-preview:large', image, structuredData, body, metaEvent }) {
   const socialImage = image || `${SITE_ORIGIN}/zinoo-home-hero.webp`;
   const eventCall = metaEvent ? `fbq('track','${metaEvent.name}',${jsonLd(metaEvent.parameters)});` : '';
-  return `<!doctype html><html lang="en-IN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><meta name="robots" content="${escapeHtml(robots)}"><link rel="canonical" href="${escapeHtml(canonical)}"><meta property="og:site_name" content="Zinoo"><meta property="og:type" content="website"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonical)}"><meta property="og:image" content="${escapeHtml(socialImage)}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(socialImage)}"><link rel="icon" type="image/x-icon" href="/favicon.ico"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"><script type="application/ld+json">${jsonLd(structuredData)}</script><script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${META_PIXEL_ID}');fbq('track','PageView');${eventCall}</script><style>:root{font-family:Manrope,system-ui,sans-serif;color:#172033;background:#f6f8fc}*{box-sizing:border-box}body{margin:0}a{color:#0b57d0}header,main,footer{width:min(1100px,calc(100% - 32px));margin:auto}header{display:flex;align-items:center;justify-content:space-between;padding:22px 0}header img{width:120px;height:auto}header nav{display:flex;gap:18px;flex-wrap:wrap}main{background:#fff;border:1px solid #e5eaf2;border-radius:22px;padding:clamp(22px,5vw,52px);box-shadow:0 18px 55px rgba(28,53,91,.08)}h1{font-size:clamp(2rem,5vw,3.8rem);line-height:1.08;margin:.2em 0}h2{margin-top:1.8em}.lede{font-size:1.1rem;line-height:1.7;color:#536176}.breadcrumbs{font-size:.9rem;color:#66758a}.project-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px;margin-top:30px}.project-card{display:block;color:inherit;text-decoration:none;border:1px solid #dfe6f0;border-radius:16px;overflow:hidden;background:#fff}.project-card img{width:100%;height:190px;object-fit:cover}.project-card div{padding:18px}.project-card h2{font-size:1.2rem;margin:0 0 8px}.project-card p{margin:6px 0;color:#536176}.project-hero{width:100%;max-height:520px;object-fit:cover;border-radius:18px;margin:24px 0}.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.facts div{padding:15px;border-radius:12px;background:#f2f6fc}.facts span{display:block;color:#66758a;font-size:.82rem}.facts strong{display:block;margin-top:5px}.facts div:first-child strong{font-family:"DM Serif Display",serif;font-weight:400}.amenities{display:flex;flex-wrap:wrap;gap:9px;padding:0;list-style:none}.amenities li{background:#edf4ff;border-radius:999px;padding:8px 12px}footer{padding:28px 0;color:#66758a}@media(max-width:640px){header{align-items:flex-start;gap:12px}header nav{justify-content:flex-end}main{width:100%;border-radius:0;border-left:0;border-right:0}}</style></head><body><noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=${META_PIXEL_ID}&amp;ev=PageView&amp;noscript=1" alt=""></noscript><header><a href="/" aria-label="Zinoo home"><img src="/brand/zinoo-wordmark-blue.svg" alt="Zinoo"></a><nav aria-label="Public navigation"><a href="/">Home</a><a href="/projects">Projects</a><a href="/plots">Locations</a></nav></header>${body}<footer>© ${new Date().getUTCFullYear()} Zinoo. Buyer-first, plot-focused discovery.</footer></body></html>`;
+  return `<!doctype html><html lang="en-IN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><meta name="robots" content="${escapeHtml(robots)}"><link rel="canonical" href="${escapeHtml(canonical)}"><meta property="og:site_name" content="Zinoo"><meta property="og:type" content="website"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonical)}"><meta property="og:image" content="${escapeHtml(socialImage)}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(socialImage)}"><link rel="icon" type="image/x-icon" href="/favicon.ico"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"><script type="application/ld+json">${jsonLd(structuredData)}</script><script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${META_PIXEL_ID}');fbq('track','PageView');${eventCall}</script><style>:root{font-family:Manrope,system-ui,sans-serif;color:#172033;background:#f6f8fc}*{box-sizing:border-box}body{margin:0}a{color:#0b57d0}header,main,footer{width:min(1100px,calc(100% - 32px));margin:auto}header{display:flex;align-items:center;justify-content:space-between;padding:22px 0}header img{width:120px;height:auto}header nav{display:flex;gap:18px;flex-wrap:wrap}main{background:#fff;border:1px solid #e5eaf2;border-radius:22px;padding:clamp(22px,5vw,52px);box-shadow:0 18px 55px rgba(28,53,91,.08)}h1{font-size:clamp(2rem,5vw,3.8rem);line-height:1.08;margin:.2em 0}h2{margin-top:1.8em}.lede{font-size:1.1rem;line-height:1.7;color:#536176}.breadcrumbs{font-size:.9rem;color:#66758a}.project-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px;margin-top:30px}.project-card{display:block;color:inherit;text-decoration:none;border:1px solid #dfe6f0;border-radius:16px;overflow:hidden;background:#fff}.project-card img{width:100%;height:190px;object-fit:cover}.project-card div{padding:18px}.project-card h2{font-size:1.2rem;margin:0 0 8px}.project-card p{margin:6px 0;color:#536176}.project-hero{width:100%;max-height:520px;object-fit:cover;border-radius:18px;margin:24px 0}.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.facts div{padding:15px;border-radius:12px;background:#f2f6fc}.facts span{display:block;color:#66758a;font-size:.82rem}.facts strong{display:block;margin-top:5px}.facts div:first-child strong{font-family:"DM Serif Display",serif;font-weight:400}.amenities{display:flex;flex-wrap:wrap;gap:9px;padding:0;list-style:none}.amenities li{background:#edf4ff;border-radius:999px;padding:8px 12px}footer{padding:28px 0;color:#66758a}@media(max-width:640px){header{align-items:flex-start;gap:12px}header nav{justify-content:flex-end}main{width:100%;border-radius:0;border-left:0;border-right:0}}</style></head><body><noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=${META_PIXEL_ID}&amp;ev=PageView&amp;noscript=1" alt=""></noscript><header><a href="/" aria-label="Zinoo home"><img src="/brand/zinoo-wordmark-blue.svg" alt="Zinoo"></a><nav aria-label="Public navigation"><a href="/">Home</a><a href="/projects">Projects</a><a href="/plots">Locations</a><a href="/blog">Guides</a><a href="/market-studies">Market studies</a></nav></header>${body}<footer>© ${new Date().getUTCFullYear()} Zinoo. Buyer-first, plot-focused discovery.</footer></body></html>`;
 }
 
 function renderProjectPage(project) {
   const canonical = `${SITE_ORIGIN}/projects/${project.slug}`;
   const locationLabel = project.location || project.locality || project.village || 'Chakan';
-  const title = `${project.projectName} | Verified Plot Project in ${locationLabel} | Zinoo`;
+  const priceLabel = project.startingPrice !== null ? `Starting at ${formatPrice(project.startingPrice)}` : '';
+  const title = [project.projectName, priceLabel, locationLabel, 'Zinoo'].filter(Boolean).join(' | ');
   const description = projectDescription(project);
   const facts = [
     project.startingPrice !== null && ['Starting price', formatPrice(project.startingPrice)],
@@ -43,6 +52,7 @@ function renderProjectPage(project) {
     project.developerName && ['Developer', project.developerName]
   ].filter(Boolean);
   const place = { '@type': 'Place', name: project.projectName, description, url: canonical };
+  if (project.completeAddress || project.location) place.address = project.completeAddress || project.location;
   if (project.primaryImage) place.image = [project.primaryImage, ...project.galleryImages];
   if (project.latitude !== null && project.longitude !== null) place.geo = { '@type': 'GeoCoordinates', latitude: project.latitude, longitude: project.longitude };
   const structuredData = {
@@ -123,6 +133,52 @@ function renderLocationPage(location, projects) {
   return pageShell({ title, description, canonical, structuredData, body: `<main><p class="breadcrumbs"><a href="/">Home</a> / <a href="/plots">Plots</a> / ${escapeHtml(location.name)}</p><h1>Plots in ${escapeHtml(location.name)}</h1><p class="lede">${escapeHtml(description)}</p>${projects.length ? `<section class="project-grid">${cards}</section>` : '<p>No active projects are currently available in this location.</p>'}</main>` });
 }
 
+const contentPath = (item) => item.type === 'blog' ? `/blog/${item.slug}` : `/market-studies/${item.slug}`;
+const contentLabel = (type) => type === 'blog' ? 'Buyer Guides' : 'Market Studies';
+
+function renderContentIndex(type) {
+  const items = publishedContent(type);
+  const path = type === 'blog' ? '/blog' : '/market-studies';
+  const title = `${contentLabel(type)} | Zinoo`;
+  const description = type === 'blog'
+    ? 'Practical guides for buyers researching plots and plotted projects around Chakan.'
+    : 'Dated, source-led research about plot localities and buyer considerations around Chakan.';
+  const cards = items.map((item) => `<a class="project-card" href="${contentPath(item)}"><div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.excerpt || item.description)}</p>${item.publishedAt ? `<p><small>Published ${escapeHtml(item.publishedAt)}</small></p>` : ''}</div></a>`).join('');
+  return pageShell({
+    title,
+    description,
+    canonical: `${SITE_ORIGIN}${path}`,
+    robots: items.length ? undefined : 'noindex,follow',
+    structuredData: { '@context': 'https://schema.org', '@type': 'CollectionPage', name: title, url: `${SITE_ORIGIN}${path}`, description },
+    body: `<main><p class="breadcrumbs"><a href="/">Home</a> / ${contentLabel(type)}</p><h1>${contentLabel(type)}</h1><p class="lede">${escapeHtml(description)}</p>${items.length ? `<section class="project-grid">${cards}</section>` : '<p>New research is being prepared. Check back soon.</p>'}</main>`
+  });
+}
+
+function renderContentPage(item) {
+  const path = contentPath(item);
+  const canonical = `${SITE_ORIGIN}${path}`;
+  const typeName = item.type === 'blog' ? 'Article' : 'Report';
+  const sections = (item.sections || []).map((section) => `<section><h2>${escapeHtml(section.heading)}</h2>${(section.paragraphs || []).map((paragraph) => `<p class="lede">${escapeHtml(paragraph)}</p>`).join('')}</section>`).join('');
+  const methodology = item.type === 'market-study' && item.methodology?.length ? `<section><h2>Methodology</h2><ul>${item.methodology.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul></section>` : '';
+  const sources = item.type === 'market-study' && item.sources?.length ? `<section><h2>Sources</h2><ul>${item.sources.map((source) => `<li>${escapeHtml(source)}</li>`).join('')}</ul></section>` : '';
+  const faqs = item.faqs?.length ? `<section><h2>Frequently asked questions</h2>${item.faqs.map((faq) => `<h3>${escapeHtml(faq.question)}</h3><p>${escapeHtml(faq.answer)}</p>`).join('')}</section>` : '';
+  const structuredData = {
+    '@context': 'https://schema.org',
+    '@type': item.type === 'blog' ? 'Article' : 'Report',
+    headline: item.title,
+    description: item.description,
+    url: canonical,
+    author: { '@type': 'Organization', name: item.author || 'Zinoo' },
+    publisher: { '@type': 'Organization', name: 'Zinoo', url: SITE_ORIGIN },
+    datePublished: item.publishedAt,
+    dateModified: item.updatedAt || item.publishedAt
+  };
+  return pageShell({
+    title: `${item.title} | Zinoo`, description: item.description, canonical, structuredData,
+    body: `<main><p class="breadcrumbs"><a href="/">Home</a> / <a href="${item.type === 'blog' ? '/blog' : '/market-studies'}">${contentLabel(item.type)}</a> / ${escapeHtml(item.title)}</p><h1>${escapeHtml(item.title)}</h1><p class="lede">${escapeHtml(item.description)}</p><p><small>${typeName} · ${escapeHtml(item.author || 'Zinoo')} · Published ${escapeHtml(item.publishedAt)}</small></p>${sections}${methodology}${sources}${faqs}<p><a href="/projects">Explore verified projects →</a></p></main>`
+  });
+}
+
 function renderNotFoundPage() {
   return pageShell({
     title: 'Project Not Found | Zinoo',
@@ -140,6 +196,9 @@ function renderSitemap(projects, locations = []) {
     { loc: `${SITE_ORIGIN}/projects` },
     { loc: `${SITE_ORIGIN}/plots` },
     { loc: `${SITE_ORIGIN}/privacy-policy` },
+    ...(publishedContent('blog').length ? [{ loc: `${SITE_ORIGIN}/blog` }] : []),
+    ...(publishedContent('market-study').length ? [{ loc: `${SITE_ORIGIN}/market-studies` }] : []),
+    ...publishedContent().map((item) => ({ loc: `${SITE_ORIGIN}${contentPath(item)}`, lastmod: item.updatedAt || item.publishedAt })),
     ...locations.map((location) => ({ loc: `${SITE_ORIGIN}/plots/${location.slug}`, lastmod: location.updatedAt?.toDate?.()?.toISOString?.().slice(0, 10) })),
     ...projects.map((project) => ({
       loc: `${SITE_ORIGIN}/projects/${project.slug}`,
@@ -156,13 +215,25 @@ function createPublicProjectSeoHandler(db) {
       const path = requestUrl.pathname.replace(/\/+$/, '') || '/';
       response.set('Cache-Control', 'public, max-age=300, s-maxage=900');
       if (path === '/plots-in-chakan') return response.redirect(308, '/plots/chakan');
+      if (path === '/blog') return response.type('html').status(200).send(renderContentIndex('blog'));
+      if (path === '/market-studies') return response.type('html').status(200).send(renderContentIndex('market-study'));
+      const blogMatch = path.match(/^\/blog\/([a-z0-9-]+)$/);
+      if (blogMatch) {
+        const item = contentBySlug('blog', blogMatch[1]);
+        return response.type('html').status(item ? 200 : 404).send(item ? renderContentPage(item) : renderNotFoundPage());
+      }
+      const studyMatch = path.match(/^\/market-studies\/([a-z0-9-]+)$/);
+      if (studyMatch) {
+        const item = contentBySlug('market-study', studyMatch[1]);
+        return response.type('html').status(item ? 200 : 404).send(item ? renderContentPage(item) : renderNotFoundPage());
+      }
       if (path === '/api/public-projects') {
         const snapshot = await db.collection('publicProjects').where('status', '==', ACTIVE_STATUS).orderBy('slug').limit(12).get();
         return response.type('application/json').status(200).send({ projects: snapshot.docs.map((doc) => doc.data()) });
       }
       if (path === '/sitemap.xml') {
         const [projectSnapshot, locationSnapshot] = await Promise.all([
-          db.collection('publicProjects').get(), db.collection('publicLocations').get()
+          db.collection('publicProjects').where('status', '==', ACTIVE_STATUS).get(), db.collection('publicLocations').get()
         ]);
         const projects = projectSnapshot.docs.map((doc) => doc.data());
         const usedLocations = new Set(projects.map((project) => project.locationSlug).filter(Boolean));
@@ -173,7 +244,7 @@ function createPublicProjectSeoHandler(db) {
       }
       if (path === '/projects') {
         const after = text(requestUrl.searchParams.get('after'), 90);
-        let query = db.collection('publicProjects').orderBy('slug').limit(PROJECT_PAGE_SIZE + 1);
+        let query = db.collection('publicProjects').where('status', '==', ACTIVE_STATUS).orderBy('slug').limit(PROJECT_PAGE_SIZE + 1);
         if (validSlug(after)) query = query.startAfter(after);
         const snapshot = await query.get();
         const records = snapshot.docs.map((doc) => doc.data());
@@ -212,6 +283,10 @@ function createPublicProjectSeoHandler(db) {
         const projectSnapshot = await db.collection('publicProjects').doc(registryData.projectId).get();
         if (!projectSnapshot.exists) return response.type('html').status(404).send(renderNotFoundPage());
         const project = projectSnapshot.data();
+        // An unavailable listing is intentionally removed from discovery and the
+        // sitemap. Return a real terminal HTTP response so crawlers do not
+        // mistake the unavailable-project screen for a thin, indexable page.
+        if (project.status !== ACTIVE_STATUS) return response.type('html').status(410).send(renderNotFoundPage());
         const nearbySnapshot = project.locationSlug
           ? await db.collection('publicProjects')
             .where('locationSlug', '==', project.locationSlug)
@@ -241,6 +316,8 @@ module.exports = {
   ACTIVE_STATUS,
   createPublicProjectSeoHandler,
   renderLocationPage,
+  renderContentIndex,
+  renderContentPage,
   renderNotFoundPage,
   renderPlotsPage,
   renderProjectPage,

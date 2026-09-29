@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { GripVertical, ImagePlus, Save, Trash2 } from 'lucide-react';
 import { auth, db, firebaseProjectId, functions, storage } from '../firebaseConfig';
@@ -16,6 +16,7 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
   const [saved, setSaved] = useState([]);
   const [drafts, setDrafts] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [feedEnabled, setFeedEnabled] = useState(true);
   const [dragIndex, setDragIndex] = useState(null);
   const cropTriggerRef = useRef(null);
   const replaceIndexRef = useRef(null);
@@ -29,6 +30,27 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
     }, () => onError('Unable to load feed banners.'));
     return unsubscribe;
   }, [onError]);
+
+  useEffect(() => onSnapshot(doc(db, 'feedSettings', 'home'),
+    (snapshot) => setFeedEnabled(snapshot.exists() ? snapshot.data().enabled !== false : true),
+    () => onError('Unable to load feed visibility.')
+  ), [onError]);
+
+  const toggleFeedVisibility = async () => {
+    const nextEnabled = !feedEnabled;
+    setBusy(true);
+    try {
+      await setDoc(doc(db, 'feedSettings', 'home'), {
+        enabled: nextEnabled,
+        updatedAt: serverTimestamp()
+      });
+      onSuccess(nextEnabled ? 'Buyer Home feed is now visible.' : 'Buyer Home feed is now hidden.');
+    } catch (error) {
+      onError('Unable to update feed visibility.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     draftsRef.current = drafts;
@@ -204,6 +226,11 @@ export default function FeedBannerManager({ user, onSuccess, onError }) {
     <div className="feed-manager">
       <section className="admin-panel-section feed-manager-head">
         <div><h3>Feed Banners</h3><p>Maximum: 5 banners</p></div>
+        <label className="feed-visibility-toggle">
+          <span><strong>Show feed on Buyer Home</strong><small>{feedEnabled ? 'Hero and banners are visible to buyers.' : 'Hero and banners are hidden from buyers.'}</small></span>
+          <input type="checkbox" checked={feedEnabled} disabled={busy} onChange={toggleFeedVisibility} />
+          <i aria-hidden="true" />
+        </label>
         <button type="button" className="btn-primary" disabled={busy || drafts.length >= MAX_BANNERS} onClick={() => { replaceIndexRef.current = null; cropTriggerRef.current?.(); }}>
           <ImagePlus size={17} /> Upload Banner
         </button>

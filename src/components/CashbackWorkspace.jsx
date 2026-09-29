@@ -149,7 +149,7 @@ export default function CashbackWorkspace({ role, cashbacks = [], onBack }) {
     ? [['Pending Seller', counts.pendingSeller], ['Pending Admin', counts.pendingAdmin], ['Paid', counts.paid], ['Total Pending', money(claims.filter(c => c.status !== CASHBACK_STATUS.PAID && c.status !== CASHBACK_STATUS.REJECTED).reduce((s, c) => s + Number(c.cashbackAmount || 0), 0))]]
     : [['Pending', counts.pendingSeller], ['Approved', counts.pendingAdmin + counts.approved], ['Rejected', counts.rejected], ['Paid', counts.paid]];
 
-  if (selected) return <section className="cashback-workspace cashback-details">
+  if (selected && claims.some((claim) => claim.id === selected.id)) return <section className="cashback-workspace cashback-details">
     {message && <div className="app-success">{message}</div>}{error && <div className="app-error">{error}</div>}
     <div className="cashback-detail-heading cashback-detail-title"><button type="button" className="cashback-detail-back" onClick={() => setSelected(null)} aria-label="Back to cashback requests"><ArrowLeft size={20} /></button><h2>{selected.project || selected.propertyName}</h2></div>
     <div className="cashback-detail-grid">

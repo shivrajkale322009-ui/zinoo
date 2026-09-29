@@ -50,7 +50,7 @@ export default function DesktopHeader({
 }) {
   const [desktopPanel, setDesktopPanel] = useState(null);
   const budgetMin = Number(mapFilters?.budgetMin ?? 400000);
-  const budgetMax = Number(mapFilters?.budgetMax ?? 3000000);
+  const budgetMax = Number(mapFilters?.budgetMax ?? 5000000);
   const installmentMax = Number(mapFilters?.installmentMax ?? 0);
   const selectedZones = Array.isArray(mapFilters?.zones) ? mapFilters.zones : [];
   const zoneOptions = ['Chakan', 'Talegaon', 'Moshi', 'Alandi'];
@@ -78,7 +78,7 @@ export default function DesktopHeader({
       {showFilters && <nav className="buyer-desktop-filter-toolbar" aria-label="Property filters">
         <div className="buyer-desktop-filter-control">
           <button type="button" className={`buyer-desktop-filter-chip budget ${desktopPanel === 'budget' ? 'active' : ''}`} onClick={() => choosePanel('budget')} aria-haspopup="dialog" aria-expanded={desktopPanel === 'budget'}><BadgeIndianRupee size={16} /><span>Budget</span><ChevronDown size={14} className="buyer-desktop-filter-chevron" /></button>
-          {desktopPanel === 'budget' && <section className="buyer-desktop-budget-panel" aria-label="Budget range"><header><span>1-guntha budget</span><strong>{money(budgetMin)} – {money(budgetMax)}</strong></header><div className="buyer-desktop-dual-range" style={{ '--range-start': `${((budgetMin - 400000) / 2600000) * 100}%`, '--range-end': `${((budgetMax - 400000) / 2600000) * 100}%` }}><input type="range" min="400000" max="3000000" step="100000" value={budgetMin} onChange={(event) => updateFilters({ budgetMin: Math.min(Number(event.target.value), budgetMax - 100000) })} aria-label="Minimum budget" /><input type="range" min="400000" max="3000000" step="100000" value={budgetMax} onChange={(event) => updateFilters({ budgetMax: Math.max(Number(event.target.value), budgetMin + 100000) })} aria-label="Maximum budget" /></div><footer><span>{money(budgetMin)}</span><span>{money(budgetMax)}</span></footer></section>}
+          {desktopPanel === 'budget' && <section className="buyer-desktop-budget-panel" aria-label="Budget range"><header><span>1-guntha budget</span><strong>{money(budgetMin)} – {money(budgetMax)}</strong></header><div className="buyer-desktop-dual-range" style={{ '--range-start': `${((budgetMin - 400000) / 4600000) * 100}%`, '--range-end': `${((budgetMax - 400000) / 4600000) * 100}%` }}><input type="range" min="400000" max="5000000" step="100000" value={budgetMin} onChange={(event) => updateFilters({ budgetMin: Math.min(Number(event.target.value), budgetMax - 100000) })} aria-label="Minimum budget" /><input type="range" min="400000" max="5000000" step="100000" value={budgetMax} onChange={(event) => updateFilters({ budgetMax: Math.max(Number(event.target.value), budgetMin + 100000) })} aria-label="Maximum budget" /></div><footer><span>{money(budgetMin)}</span><span>{money(budgetMax)}</span></footer></section>}
         </div>
         <div className="buyer-desktop-filter-control">
           <button type="button" className={`buyer-desktop-filter-chip zone ${desktopPanel === 'zone' || selectedZones.length ? 'active' : ''}`} onClick={() => choosePanel('zone')} aria-haspopup="listbox" aria-expanded={desktopPanel === 'zone'}><MapPin size={16} /><span>Zone</span><ChevronDown size={14} className="buyer-desktop-filter-chevron" /></button>

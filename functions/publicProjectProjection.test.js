@@ -22,6 +22,20 @@ test('projection keeps canonical public fields and excludes private project data
   for (const field of ['ownerId', 'sellerUid', 'whatsappNumber', 'reviewedBy', 'documents']) assert.equal(field in result, false);
 });
 
+test('public projects include only geographic boundary coordinates for guest maps', () => {
+  const points = [{ lat: 18, lng: 73, internalNote: 'private' }, { lat: 19, lng: 73 }, { lat: 19, lng: 74 }];
+  const result = sanitizePublicProject({ name: 'Map project', layoutPolygon: { type: 'Polygon', points, ownerId: 'private' } }, 'map-project');
+  assert.deepEqual(result.layoutPolygon, { type: 'Polygon', points: [{ lat: 18, lng: 73 }, { lat: 19, lng: 73 }, { lat: 19, lng: 74 }] });
+});
+
+test('public boundaries support GeoJSON and omit invalid or degenerate coordinates', () => {
+  assert.deepEqual(sanitizePublicProject({ layoutPolygon: { type: 'Polygon', coordinates: [[[73, 18], [73, 19], [74, 19]]] } }, 'map-project').layoutPolygon.points,
+    [{ lat: 18, lng: 73 }, { lat: 19, lng: 73 }, { lat: 19, lng: 74 }]);
+  for (const layoutPolygon of [undefined, [], [{ lat: 18, lng: 73 }], [{ lat: 18, lng: 73 }, { lat: 19, lng: 73 }, { lat: null, lng: 74 }]]) {
+    assert.equal(sanitizePublicProject({ layoutPolygon }, 'map-project').layoutPolygon, null);
+  }
+});
+
 test('public projection includes only project amenities and never display/master fallbacks', () => {
   const selected = sanitizePublicProject({
     name: 'Project A', amenities: ['Garden', 'CCTV'],

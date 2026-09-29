@@ -48,7 +48,8 @@ import {
   BarChart3,
   TrendingUp,
   Bot,
-  Copy
+  Copy,
+  MessageCircle
 } from 'lucide-react';
 import {
   collection,
@@ -87,6 +88,10 @@ import AdminSellerReview from './AdminSellerReview';
 import { deleteProperty } from '../services/propertyService';
 import { AccountDeletionService } from '../services/accountDeletionService';
 import AdminAIAssistant from './AdminAIAssistant';
+import WhatsAppLeadManager from './WhatsAppLeadManager';
+import WhatsAppInbox from './WhatsAppInbox';
+import LeadManagementWorkspace from './CRM/LeadManagementWorkspace';
+import { isToday } from '../utils/crmLeadModel';
 import { getPropertyGovernance } from '../utils/propertyGovernance';
 import { getSellerApplicationGovernance, isActionableSellerApplication } from '../utils/sellerGovernance.js';
 
@@ -102,6 +107,14 @@ const getDateValue = (value) => {
 const formatAdminDate = (value) => {
   const time = getDateValue(value);
   return time ? new Date(time).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'date unavailable';
+};
+const formatAdminDateTime = (value) => {
+  const time = getDateValue(value);
+  return time
+    ? new Date(time).toLocaleString('en-GB', {
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    })
+    : 'date unavailable';
 };
 
 const getProjectOwnerName = (project, sellers) => {
@@ -156,11 +169,22 @@ function AdminPanel({
   initialTab = 'home'
 }) {
   const isAndroidLayout = useMediaQuery('(max-width: 768px)');
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin/leads')) {
+      return 'crm_leads';
+    }
+    return initialTab;
+  });
+  const crmFollowUpsTodayCount = useMemo(() => {
+    return (leads || []).filter((lead) => lead.nextFollowUpAt && isToday(lead.nextFollowUpAt)).length;
+  }, [leads]);
+  const [selectedWhatsAppCampaignId, setSelectedWhatsAppCampaignId] = useState('');
+  const [whatsAppView, setWhatsAppView] = useState('overview');
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [sellerRequests, setSellerRequests] = useState([]);
   const [buyers, setBuyers] = useState([]);
   const [sellers, setSellers] = useState([]);
+  const [editorSellers, setEditorSellers] = useState([]);
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [workingKey, setWorkingKey] = useState('');
@@ -182,6 +206,8 @@ function AdminPanel({
   const [sellerPendingRejection, setSellerPendingRejection] = useState(null);
   const [sellerRejectionError, setSellerRejectionError] = useState('');
   const [sellerSearchQuery, setSellerSearchQuery] = useState('');
+  const [buyerSearchQuery, setBuyerSearchQuery] = useState('');
+  const [buyerSortOrder, setBuyerSortOrder] = useState('recent');
   const [editingProperty, setEditingProperty] = useState(null);
   const [isDirty, setIsDirty] = useState(false);
   useEffect(() => {
@@ -293,6 +319,10 @@ function AdminPanel({
         });
 
         setSellers(sellerList);
+        setEditorSellers(accounts.filter((account) => {
+          const permissions = normalizePermissions(account.permissions);
+          return permissions.seller && !permissions.admin;
+        }).map((account) => ({ ...account, assignmentUnavailable: !sellerList.some((seller) => seller.id === account.id) || account.deleted || account.disabled })));
         setBuyers(buyerList);
         onListenerDebug?.(path, { status: 'connected', path, filters, documentCount: snapshot.size, lastSnapshotTime });
       },
@@ -512,6 +542,7 @@ function AdminPanel({
         message: err?.message
       });
       setErrorMessage("Failed to save property changes: " + err.message);
+      return false;
     }
   };
 
@@ -598,10 +629,20 @@ function AdminPanel({
     () => sellerRequests.filter(isActionableSellerApplication).length,
     [sellerRequests]
   );
-  const sortedBuyers = useMemo(
-    () => [...buyers].sort((left, right) => getName(left).localeCompare(getName(right))),
-    [buyers]
-  );
+  const visibleBuyers = useMemo(() => {
+    const queryText = buyerSearchQuery.trim().toLowerCase();
+    const matchingBuyers = queryText
+      ? buyers.filter((buyer) => [buyer.id, buyer.displayName, buyer.name, buyer.userName, buyer.email, buyer.phoneNumber, buyer.phone]
+        .some((value) => String(value || '').toLowerCase().includes(queryText)))
+      : buyers;
+
+    return [...matchingBuyers].sort((left, right) => {
+      const timeDifference = getDateValue(right.lastSignedInAt) - getDateValue(left.lastSignedInAt);
+      if (buyerSortOrder === 'oldest') return -timeDifference || getBuyerName(left).localeCompare(getBuyerName(right));
+      if (buyerSortOrder === 'name') return getBuyerName(left).localeCompare(getBuyerName(right));
+      return timeDifference || getBuyerName(left).localeCompare(getBuyerName(right));
+    });
+  }, [buyerSearchQuery, buyerSortOrder, buyers]);
   const sortedSellers = useMemo(
     () => [...sellers].sort((left, right) => getName(left).localeCompare(getName(right))),
     [sellers]
@@ -919,7 +960,15 @@ function AdminPanel({
       label: 'Content Management',
       items: [
         { key: 'feed', label: 'Feed', icon: Images, count: null },
-        { key: 'developers', label: 'Featured Developers', icon: Building, count: null }
+        { key: 'developers', label: 'Featured Developers', icon: Building, count: null },
+        { key: 'whatsapp', label: 'WhatsApp Leads', icon: MessageCircle, count: null },
+        { key: 'whatsapp_inbox', label: 'WhatsApp Inbox', icon: MessageCircle, count: null }
+      ]
+    },
+    {
+      label: 'Lead Management',
+      items: [
+        { key: 'crm_leads', label: 'Lead CRM', icon: UserCheck, count: crmFollowUpsTodayCount > 0 ? crmFollowUpsTodayCount : null }
       ]
     },
     {
@@ -954,6 +1003,12 @@ function AdminPanel({
     if (key === 'logout') {
       handleLogout();
       return;
+    }
+
+    if (key === 'crm_leads') {
+      if (!window.location.pathname.startsWith('/admin/leads')) {
+        window.history.pushState({}, '', '/admin/leads');
+      }
     }
 
     setActiveTab(key);
@@ -1009,6 +1064,18 @@ function AdminPanel({
       title: 'Featured Developers',
       description: 'Curate the trusted developers shown on Buyer Home.'
     },
+    whatsapp: {
+      title: 'WhatsApp Leads',
+      description: 'Manage your private lifetime lead directory and outreach defaults.'
+    },
+    whatsapp_inbox: {
+      title: 'WhatsApp Inbox',
+      description: 'Read and reply to inbound WhatsApp customer conversations.'
+    },
+    crm_leads: {
+      title: 'Lead Management / CRM',
+      description: 'Central workspace to qualify buyers, schedule site visits, track follow-ups, and close deals.'
+    },
     profile: {
       title: 'Profile',
       description: 'Manage your administrator account details.'
@@ -1032,7 +1099,9 @@ function AdminPanel({
           <button type="button" className="m3-icon-button" onClick={() => setMobileDrawerOpen(true)} aria-label="Open admin navigation">
             <Menu size={24} />
           </button>
-          <div className="admin-mobile-brand"><img src="/brand/zinoo-logo.png" alt="Zinoo" /><span>Admin</span></div>
+          <div className="admin-mobile-context-title" title={editingProperty?.name || viewingProperty?.name || currentMeta.title}>
+            {editingProperty?.name || viewingProperty?.name || currentMeta.title}
+          </div>
           {activeTab === 'home' && (
             <button type="button" className="m3-icon-button admin-mobile-notification" onClick={() => setActiveTab('requests')} aria-label="Open pending notifications">
               <Bell size={20} />
@@ -1113,10 +1182,10 @@ function AdminPanel({
       </aside>}
 
       <section className={`admin-content ${editingProperty ? 'admin-content-property-editor' : ''}`}>
-        {activeTab !== 'home' && <div className={`admin-content-header ${editingProperty ? 'admin-content-header-editor' : ''}`}>
+        {activeTab !== 'home' && <div className={`admin-content-header admin-content-header-compact ${editingProperty ? 'admin-content-header-editor' : ''}`}>
           <div>
-            <h1>{currentMeta.title}</h1>
-            <p>{currentMeta.description}</p>
+            <h1>{activeTab === 'whatsapp' && whatsAppView === 'total-leads' ? 'WhatsApp Leads > Total leads' : currentMeta.title}</h1>
+            <p>{activeTab === 'whatsapp' && whatsAppView === 'total-leads' ? 'All WhatsApp leads' : currentMeta.description}</p>
           </div>
         </div>}
 
@@ -1126,6 +1195,9 @@ function AdminPanel({
         {activeTab === 'cashbacks' && <CashbackWorkspace role="admin" cashbacks={cashbacks} />}
         {activeTab === 'feed' && <FeedBannerManager user={user} onSuccess={setStatusMessage} onError={setErrorMessage} />}
         {activeTab === 'developers' && <FeaturedDeveloperManager onSuccess={setStatusMessage} onError={setErrorMessage} />}
+        {activeTab === 'whatsapp' && <WhatsAppLeadManager leads={leads} onSuccess={setStatusMessage} onError={setErrorMessage} onViewChange={setWhatsAppView} onOpenCampaign={(id) => { setSelectedWhatsAppCampaignId(id); setActiveTab('whatsapp_inbox'); }} />}
+        {activeTab === 'whatsapp_inbox' && <WhatsAppInbox initialCampaignId={selectedWhatsAppCampaignId} onSuccess={setStatusMessage} onError={setErrorMessage} />}
+        {activeTab === 'crm_leads' && <LeadManagementWorkspace leads={leads} projects={projects} user={user} onSuccess={setStatusMessage} onError={setErrorMessage} />}
         {activeTab === 'ai_assistant' && <AdminAIAssistant projects={projects} contextProjectId={aiProjectContext} onContextChange={setAiProjectContext} />}
 
         {activeTab === 'home' && (
@@ -1368,8 +1440,8 @@ function AdminPanel({
 
             {/* Edit Property Mode */}
             {editingProperty && (
-              <PropertyDisplayEditor mode="edit" role="admin" user={user} property={editingProperty} amenityOptions={amenityOptions}
-                onChange={(nextProperty) => { setEditingProperty(nextProperty); setIsDirty(true); }} onSubmit={(event) => { event.preventDefault(); handleSaveProperty(editingProperty); }} onCancel={discardPropertyChanges} onReset={() => setEditingProperty(projects.find((item) => item.id === editingProperty.id) || editingProperty)} autoDetectHighway isDirty={isDirty} onDirtyChange={setIsDirty} submitError={errorMessage} />
+              <PropertyDisplayEditor mode="edit" role="admin" sellers={editorSellers} user={user} property={editingProperty} amenityOptions={amenityOptions}
+                onChange={(nextProperty) => { setEditingProperty(nextProperty); setIsDirty(true); }} onSubmit={(event) => { event.preventDefault(); return handleSaveProperty(editingProperty); }} onCancel={discardPropertyChanges} onReset={() => setEditingProperty(projects.find((item) => item.id === editingProperty.id) || editingProperty)} autoDetectHighway isDirty={isDirty} onDirtyChange={setIsDirty} submitError={errorMessage} />
             )}
             {/* List Mode */}
             {!viewingProperty && !editingProperty && (
@@ -1607,14 +1679,26 @@ function AdminPanel({
                   </div>
                 </div>
               );
-            })() : isAndroidLayout ? (
+            })() : <>
+              <div className="admin-properties-toolbar admin-buyer-toolbar">
+                <SearchBar value={buyerSearchQuery} onChange={(event) => setBuyerSearchQuery(event.target.value)} placeholder="Search buyer, phone, email or ID" />
+                <label className="admin-buyer-sort">
+                  <span>Sort</span>
+                  <select value={buyerSortOrder} onChange={(event) => setBuyerSortOrder(event.target.value)} aria-label="Sort buyers">
+                    <option value="recent">Recently signed in</option>
+                    <option value="oldest">Oldest sign-in</option>
+                    <option value="name">Name A–Z</option>
+                  </select>
+                </label>
+              </div>
+            {isAndroidLayout ? (
               <div className="admin-mobile-buyer-list" role="list" aria-label="Buyer accounts">
-                {sortedBuyers.length === 0 ? <div className="admin-mobile-buyer-empty"><strong>No buyers found</strong><span>Buyer accounts will appear here.</span></div> : sortedBuyers.map((buyer) => (
+                {visibleBuyers.length === 0 ? <div className="admin-mobile-buyer-empty"><strong>No buyers found</strong><span>Try another search.</span></div> : visibleBuyers.map((buyer) => (
                   <button key={buyer.id} type="button" className="admin-mobile-buyer-row" role="listitem" onClick={() => setSelectedBuyerProfile(buyer)} aria-label={`Open ${getBuyerName(buyer)} details`}>
                     <span className="admin-mobile-buyer-avatar" aria-hidden="true">{getInitials(buyer)}</span>
                     <div className="admin-mobile-buyer-copy">
                       <strong>{getBuyerName(buyer)}</strong>
-                      <span>{buyer.phoneNumber || buyer.phone || 'N/A'}</span>
+                      <span>{buyer.phoneNumber || buyer.phone || 'N/A'} · {buyer.firstSignedInAt ? `First signed in ${formatAdminDateTime(buyer.firstSignedInAt)}` : 'No sign-in recorded'}</span>
                     </div>
                     <ChevronRight size={17} className="admin-mobile-buyer-chevron" aria-hidden="true" />
                   </button>
@@ -1626,26 +1710,30 @@ function AdminPanel({
                   <tr>
                     <th>Name</th>
                     <th>Phone</th>
+                    <th>First sign-in</th>
+                    <th>Last sign-in</th>
                     <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedBuyers.length === 0 ? (
+                  {visibleBuyers.length === 0 ? (
                     <tr>
-                      <td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No buyer accounts found.</td>
+                      <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No buyer accounts found.</td>
                     </tr>
                   ) : (
-                    sortedBuyers.map((buyer) => (
+                    visibleBuyers.map((buyer) => (
                       <tr key={buyer.id}>
                         <td><strong>{getBuyerName(buyer)}</strong></td>
                         <td>{buyer.phoneNumber || buyer.phone || 'N/A'}</td>
+                        <td>{buyer.firstSignedInAt ? formatAdminDateTime(buyer.firstSignedInAt) : 'Not recorded yet'}</td>
+                        <td>{buyer.lastSignedInAt ? formatAdminDateTime(buyer.lastSignedInAt) : 'Not recorded yet'}</td>
                         <td><button type="button" className="btn-secondary seller-inline-button" onClick={() => setSelectedBuyerProfile(buyer)}><Eye size={14} /> View Profile</button></td>
                       </tr>
                     ))
                   )}
                 </tbody>
               </table>
-            </div>}
+            </div>}</>}
           </div>
         )}
 
@@ -2033,3 +2121,5 @@ function AdminPanel({
 }
 
 export default AdminPanel;
+
+

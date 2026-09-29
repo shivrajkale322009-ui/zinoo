@@ -92,7 +92,7 @@ Callable CORS origins are `https://flinok.in`, `https://druvio.web.app`, `http:/
 |---|---|---|---|
 | `cashback-claims/{uid}/{file}` | matching user | JPEG, PNG, PDF | 10 MB |
 | `project-media/{uid}/...` | matching user | JPEG, PNG, WebP | 10 MB |
-| `project-documents/{uid}/...` | matching user | PDF, JPEG, PNG | 15 MB |
+| `project-documents/{uid}/...` | matching user | PDF, JPEG, PNG | 50 MB |
 | `feed-banners/{uuid}.{ext}` | callable function only | JPEG, PNG, WebP | 10 MB |
 
 ## Folder ownership

@@ -7,6 +7,19 @@ import {
   withPropertyStartingPrice
 } from './propertyDisplayModel.js';
 
+test('canonical price overrides stale legacy and display price copies', () => {
+  const project = { startingPrice: 700000, priceFrom: 600000, display: { pricing: { startingPrice: 600000, pricePrefix: 'From' } } };
+  assert.equal(getPropertyDisplayModel(project).pricing.startingPrice, 700000);
+  const saved = withPropertyDisplayModel(project);
+  assert.equal(saved.startingPrice, 700000);
+  assert.equal(saved.priceFrom, 700000);
+  assert.equal(saved.display.pricing.pricePrefix, 'From');
+});
+
+test('display-only legacy records still supply a price', () => {
+  assert.equal(getPropertyDisplayModel({ display: { pricing: { startingPrice: 2000000 } } }).pricing.startingPrice, 2000000);
+});
+
 test('creates a nested display model from legacy project fields', () => {
   const display = createPropertyDisplayModel({
     name: 'Meadows',
@@ -218,4 +231,26 @@ test('canonical documents survive stale display configuration during editor roun
   assert.equal(project.display.documents.items[0].id, 'new-document');
   assert.equal(project.display.documents.items[0].title, 'Renamed canonical document');
   assert.equal(project.documents[0].storagePath, 'project-documents/new.pdf');
+});
+
+test('canonical photos prevent stale display photos from reappearing in buyer carousel', () => {
+  const display = getPropertyDisplayModel({
+    media: [{ id: 'current', downloadURL: 'https://example.com/current.jpg' }],
+    display: { media: { heroImage: 'https://example.com/removed.jpg', gallery: [
+      { id: 'old', url: 'https://example.com/removed.jpg', enabled: true }
+    ] } }
+  });
+  assert.deepEqual(display.media.gallery.map((image) => image.url), ['https://example.com/current.jpg']);
+  assert.equal(display.media.heroImage, 'https://example.com/current.jpg');
+});
+
+test('deleting the final canonical photo leaves no stale carousel or hero', () => {
+  const display = getPropertyDisplayModel({
+    media: [], thumbnail: 'https://example.com/removed.jpg',
+    display: { media: { heroImage: 'https://example.com/removed.jpg', gallery: [
+      { url: 'https://example.com/removed.jpg' }
+    ] } }
+  });
+  assert.deepEqual(display.media.gallery, []);
+  assert.equal(display.media.heroImage, '');
 });

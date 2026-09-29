@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Search, X } from 'lucide-react';
 import SearchBar from '../../ui/SearchBar';
 import BuyerSearchSuggestions from './BuyerSearchSuggestions';
 import BuyerSearchDiscovery from './BuyerSearchDiscovery';
@@ -32,10 +32,20 @@ export default function BuyerSearchHeader({
 }) {
   const [searchFocused, setSearchFocused] = useState(false);
   const [recentSearches, setRecentSearches] = useState(readRecentSearches);
+  const searchShellRef = useRef(null);
 
   useEffect(() => {
     window.localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(recentSearches));
   }, [recentSearches]);
+
+  useEffect(() => {
+    const closeSearchOnOutsidePress = (event) => {
+      if (!searchShellRef.current?.contains(event.target)) setSearchFocused(false);
+    };
+
+    document.addEventListener('pointerdown', closeSearchOnOutsidePress, true);
+    return () => document.removeEventListener('pointerdown', closeSearchOnOutsidePress, true);
+  }, []);
 
   const rememberSearch = (query) => {
     const normalized = query.trim();
@@ -53,6 +63,7 @@ export default function BuyerSearchHeader({
 
   return (
     <div
+      ref={searchShellRef}
       className="buyer-workspace-search-shell"
       onFocusCapture={() => { setSearchFocused(true); onActivateMap?.(); }}
       onBlurCapture={(event) => {
@@ -62,13 +73,7 @@ export default function BuyerSearchHeader({
       <SearchBar
         className="buyer-workspace-search"
         leadingIcon={(
-          <img
-            src="/brand/zinoo-logo.png"
-            alt=""
-            width="24"
-            height="24"
-            style={{ display: 'block', width: 24, height: 24, maxWidth: 24, objectFit: 'contain' }}
-          />
+          <Search aria-hidden="true" />
         )}
         value={homeSearchQuery}
         onChange={onQueryChange}
@@ -91,7 +96,7 @@ export default function BuyerSearchHeader({
           onClearRecent={() => setRecentSearches([])}
         />
       )}
-      {showSearchOverlays && (homeSearchQuery.trim().length >= 2) && (
+      {showSearchOverlays && searchFocused && homeSearchQuery.trim().length >= 2 && (
         <BuyerSearchSuggestions
           searchableProjects={searchableProjects}
           placeSuggestions={placeSuggestions}

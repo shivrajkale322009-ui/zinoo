@@ -1,0 +1,4 @@
+{
+  "payload": "{\"schema\":1,\"enabled\":true,\"nativeBuild\":\"2026083006\",\"runtime\":\"ba0904a572e19e8884bc3301725387f9b33956db2087e0275cab401d6c0243b6\",\"rolloutPercent\":5,\"release\":{\"version\":\"1.0.6-live.1\",\"checksum\":\"47ea9b2059dd1c2f3a03645eebe471bba876d4a5b1e1a4e4946e808e40eff9b7\",\"url\":\"https://zinoo.in/app-updates/bundles/1.0.6-live.1-47ea9b2059dd1c2f.zip\"},\"revision\":1790188575190,\"expiresAt\":1797964575195}",
+  "signature": "Nq6PhFxSreAou4AUpTakUEgxOCUB7IPpR4pYPjJiKARgS4zEdOHy3tdVj9tOSCbKvhBSf8moVYF0T3buUfo0xpAmcO/92Kdq3WKbAyEmqF5O7I4paCe2kgh1406u06AlS1Pzspou9/Dpm/Xfy9s1xiZ7G1ypqQkDNsWP5TZiwkp7MnN/ydBnn8AvPaMapwhkqSp8dPD6KCQWsNS77S8HzuJDzEBBfAbsM0h048LZ9/HDVnUaIzrkILRi7J2D5ftdqAJIpSH6cZR36EA4vyV4UuoRyj4uHYMrHSZQe/1so/Al3NDnPb4EL32XcYy12FgkohRTHGm+0TOHsQID03wMblBMbuBJWWbOHBirPG5SemsCdZhl9TmMnVXOYlCHogl5dY34UKMjDmr80hnahHGXTRSWfiVMiYJ4U/LgBfGbZFWf75D4nu3rxGJZkDouvwkWEClbZrY4Aa4t6H7kKzy6LR1aRrT/Zywr1Rzw3S7xIqP1Le/bKxoMzkPIc9rMRRfW"
+}

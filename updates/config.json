@@ -1,0 +1,5 @@
+{
+  "manifestUrl": "https://zinoo.in/app-updates/android.json",
+  "bundleBaseUrl": "https://zinoo.in/app-updates/bundles/",
+  "defaultRolloutPercent": 5
+}

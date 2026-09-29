@@ -41,8 +41,8 @@ function SellerProfileHub({ profile, companyName, onBack, onDeveloperProfile, on
       <div className="seller-profile-hub-section seller-profile-destinations">
         <h2>Profile</h2>
         <div className="seller-profile-hub-card">
-          <button type="button" className="seller-profile-destination featured" onClick={onDeveloperProfile}><Building2 size={22} /><span><strong>Edit public profile</strong><small>Update the business details buyers can see</small></span><ChevronRight size={18} /></button>
-          <button type="button" className="seller-profile-destination" onClick={onEdit}><UserRound size={22} /><span><strong>Edit personal details</strong><small>Update your name and mobile number</small></span><ChevronRight size={18} /></button>
+          <button type="button" className="seller-profile-destination featured" onClick={onDeveloperProfile}><Building2 size={22} /><span><strong>Edit public profile</strong></span><ChevronRight size={18} /></button>
+          <button type="button" className="seller-profile-destination" onClick={onEdit}><UserRound size={22} /><span><strong>Edit personal details</strong></span><ChevronRight size={18} /></button>
         </div>
       </div>
 
@@ -162,3 +162,4 @@ export function SellerSettingsPage({ user, isDarkMode, onThemeToggle, onBack, on
 }
 
 export default SellerProfileHub;
+

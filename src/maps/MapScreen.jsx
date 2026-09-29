@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Undo2, Redo2, Check, X, ShieldAlert,
   MapPin, Eye, Share2, Trash2,
-  Layers, CheckSquare, Square, Maximize2, Minimize2,
-  Building2, Map as MapIcon, Satellite
+  Layers, CheckSquare, Square,
+  Building2, Map as MapIcon, Satellite, BadgeIndianRupee, CalendarDays, BadgeCheck
 } from 'lucide-react';
-import { loadGoogleMaps } from './googleMaps';
+import { loadGeometryLibrary, loadGoogleMaps } from './googleMaps';
 import { getGoogleMapsErrorMessage, googleMapsConfig, googleMapsMissingMessage } from './googleMapsConfig';
 import { getProjectCoordinates, isProjectPublishable } from '../utils/projectVisibility';
 import { matchesProjectFilters } from '../utils/projectLand';
@@ -21,11 +21,14 @@ import { calculateMarkerPriority, getProjectMarkerState, MAP_MARKER_ZOOM, MARKER
 import { createProjectPopupElement } from './projectPopupOverlay';
 import ZoomBadge from '../components/ZoomBadge';
 import './mapScreen.css';
+import { StickyLayouts } from './stickyLayouts';
+import { createStablePropertyClusters, stableProjectKey } from './markerCollision';
+import { reconcileMarkers } from './persistentMarkers';
 
 const DEFAULT_CENTER = CHAKAN_MAP_POSITION;
 const DEFAULT_ZOOM = 12;
 const PROJECT_FOCUS_DURATION = 600;
-const DEFAULT_FILTERS = Object.freeze({ budgetMax: 3000000, naPlot: false, bankLoan: false, minScore: 0 });
+const DEFAULT_FILTERS = Object.freeze({ budgetMax: 5000000, naPlot: false, bankLoan: false, minScore: 0 });
 const pointFor = (project) => getProjectCoordinates(project);
 
 const priceLabel = (value) => {
@@ -47,11 +50,11 @@ function markerContent(project, state) {
   if (state.mode === 'full-label') {
     const price = document.createElement('strong');
     price.className = 'zinoo-project-marker-price';
-    price.textContent = priceLabel(project.priceFrom || project.startingPrice);
+    price.textContent = priceLabel(project.startingPrice ?? project.priceFrom);
     marker.append(price);
   } else if (state.mode === 'price-only') {
     marker.classList.add('zinoo-project-marker-price-only');
-    marker.textContent = priceLabel(project.priceFrom || project.startingPrice);
+    marker.textContent = priceLabel(project.startingPrice ?? project.priceFrom);
   } else {
     marker.classList.add('zinoo-project-marker-pin');
     marker.innerHTML = `
@@ -61,7 +64,7 @@ function markerContent(project, state) {
   }
   marker.setAttribute('role', 'button');
   marker.setAttribute('tabindex', '0');
-  marker.setAttribute('aria-label', `${project.name || 'Project'}, starting at ${priceLabel(project.priceFrom || project.startingPrice)}`);
+  marker.setAttribute('aria-label', `${project.name || 'Project'}, starting at ${priceLabel(project.startingPrice ?? project.priceFrom)}`);
   const anchor = document.createElement('div');
   anchor.className = 'zinoo-project-marker-anchor';
   anchor.appendChild(marker);
@@ -107,15 +110,20 @@ export default function MapScreen({
   onLayersOpen = null,
   onMapReady = null,
   loadVisibleProjects = true,
-  filters = DEFAULT_FILTERS
+  filters = DEFAULT_FILTERS,
+  onOpenFilters = null,
+  onToggleInstallment = null,
+  showFilterCapsules = true
 }) {
   const mapElement = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
+  const markerRecordsRef = useRef(new Map());
   const selectedMarkerRef = useRef(null);
   const projectPopupRef = useRef(null);
   const polygonRef = useRef(null);
   const nearbyPolygonRefs = useRef([]);
+  const stickyLayoutsRef = useRef(null);
   const handleBoundsIdleRef = useRef(null);
   const onMapReadyRef = useRef(onMapReady);
   const projectCountRef = useRef(projects.length);
@@ -131,14 +139,15 @@ export default function MapScreen({
   // States
   const [mapError, setMapError] = useState('');
   const [mapStatus, setMapStatus] = useState(googleMapsConfig.isConfigured ? 'loading' : 'configuration-missing');
-  const [mapReady, setMapReady] = useState(false);
+  // Track the actual instance so overlays reattach when Fast Refresh recreates
+  // the map. A boolean stays true and cannot signal that replacement.
+  const [mapReady, setMapReady] = useState(null);
   const [mapType, setMapType] = useState('roadmap');
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
   const [zoomTier, setZoomTier] = useState(Math.floor(DEFAULT_ZOOM));
   const [popupProjectId, setPopupProjectId] = useState(null);
   // Layer toggles
   const [showLayers, setShowLayers] = useState(false);
-  const [isMapMaximized, setIsMapMaximized] = useState(false);
   const [layerVisibility, setLayerVisibility] = useState({
     markers: true,
     layouts: true,
@@ -391,7 +400,7 @@ export default function MapScreen({
       map,
       strokeColor: color,
       strokeOpacity: 0,
-      strokeWeight: 3,
+      strokeWeight: 2,
       fillColor: color,
       fillOpacity: 0,
       editable,
@@ -433,9 +442,15 @@ export default function MapScreen({
 
   // Load layout from prop activeLayout
   useEffect(() => {
-    const activePath = normalizeBoundaryPath(activeLayout?.polygonCoordinates);
+    const matchingLayout = !activeLayout?.projectId || activeLayout.projectId === selectedProject?.id;
+    const activePath = normalizeBoundaryPath(matchingLayout ? activeLayout?.polygonCoordinates : null);
     const projectPath = normalizeProjectPolygon(selectedProject?.layoutPolygon);
     const path = activePath.length >= 3 ? activePath : projectPath;
+    if (mapReady && window.google?.maps?.Polygon) {
+      stickyLayoutsRef.current ||= new StickyLayouts((options) => new window.google.maps.Polygon(options));
+      if (!editingLayout) stickyLayoutsRef.current.remember(selectedProject?.id, path);
+      stickyLayoutsRef.current.show(mapRef.current, layerVisibility.layouts, selectedProject?.id);
+    }
     if (path.length >= 3) {
       drawPolygon(path, editingLayout, editingLayout ? activeLayout?.color : '#2563eb');
     } else {
@@ -443,7 +458,7 @@ export default function MapScreen({
     }
   // The map instance is created asynchronously. Re-run once it is ready so a
   // layout already selected on first render is not skipped.
-  }, [activeLayout, editingLayout, drawPolygon, clearPolygon, selectedProject, mapReady]);
+  }, [activeLayout, editingLayout, drawPolygon, clearPolygon, selectedProject, mapReady, layerVisibility.layouts]);
 
   // Google Maps can detach overlays while it recomputes a camera transition.
   // Keep the selected layout attached across every zoom/idle cycle.
@@ -463,19 +478,22 @@ export default function MapScreen({
     nearbyPolygonRefs.current.forEach((polygon) => polygon.setMap(null));
     nearbyPolygonRefs.current = [];
     if (!map || !mapReady || !layerVisibility.layouts) return;
+    // Marker clustering is presentation-only; it must never determine whether
+    // a project's saved layout is attached to the map.
+    stickyLayoutsRef.current?.show(map, true, selectedProject?.id);
     nearbyPolygonRefs.current = projects
-      .filter((project) => project.id !== selectedProject?.id && isProjectPublishable(project))
+      .filter((project) => project.id !== selectedProject?.id && !stickyLayoutsRef.current?.has(project.id) && isProjectPublishable(project))
       .map((project) => {
         const path = normalizeProjectPolygon(project.layoutPolygon);
         if (path.length < 3) return null;
         return new window.google.maps.Polygon({
           paths: path,
           map,
-          strokeColor: '#3b82f6',
-          strokeOpacity: 0.48,
-          strokeWeight: 1.5,
-          fillColor: '#93c5fd',
-          fillOpacity: 0.07,
+          strokeColor: '#2563eb',
+          strokeOpacity: 1,
+          strokeWeight: 2,
+          fillColor: '#2563eb',
+          fillOpacity: 0.18,
           clickable: true,
           zIndex: 2
         });
@@ -598,7 +616,7 @@ export default function MapScreen({
         resizeObserver = new ResizeObserver(resizeMap);
         resizeObserver.observe(container);
 
-        setMapReady(true);
+        setMapReady(map);
         setMapStatus('ready');
         onMapReadyRef.current?.();
       } catch (error) {
@@ -631,9 +649,11 @@ export default function MapScreen({
       // MarkerClusterer instance in this component.
       markersRef.current.forEach((marker) => { marker.map = null; });
       markersRef.current = [];
+      markerRecordsRef.current.clear();
       selectedMarkerRef.current && (selectedMarkerRef.current.map = null);
       projectPopupRef.current?.setMap(null);
       polygonRef.current?.setMap(null);
+      stickyLayoutsRef.current?.clear();
       nearbyPolygonRefs.current.forEach((polygon) => polygon.setMap(null));
       nearbyPolygonRefs.current = [];
       villageBoundaryRefs.current.forEach((polygon) => polygon.setMap(null));
@@ -642,7 +662,7 @@ export default function MapScreen({
 
   useEffect(() => {
     const focusProject = (event) => {
-      const { project, layout, bottomInsetPx = 0, animated = false, requestId = '' } = event.detail || {};
+      const { project, layout, animated = false, requestId = '' } = event.detail || {};
       if (!project) return;
       const position = pointFor(project);
       const map = mapRef.current;
@@ -683,9 +703,7 @@ export default function MapScreen({
           const zoom = map.getZoom() || 16;
           if (zoom < 15) map.setZoom(15);
           else if (zoom > 17) map.setZoom(17);
-          const upwardOffset = Math.max(0, Math.round(Number(bottomInsetPx) / 2));
-          if (upwardOffset) map.panBy(0, upwardOffset);
-          else finish();
+          finish();
           return;
         }
         finish();
@@ -718,36 +736,60 @@ export default function MapScreen({
     return () => window.removeEventListener('flinok-view-project-layout', viewLayout);
   }, [activeLayout, selectedProject]);
 
-  // Render every marker at its saved coordinate. Markers must never be moved,
-  // fanned out, or replaced by a cluster whose position is an approximation.
+  const propertyClusters = useMemo(() => createStablePropertyClusters(
+    projects.filter((project) => isProjectPublishable(project) && pointFor(project))
+      .map((project) => ({ project, position: pointFor(project) })), zoomLevel
+  ), [projects, zoomLevel]);
+
+  // Group all supplied properties, not just the viewport. Selection does not
+  // change membership or anchors; its individual marker is rendered above.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !window.google?.maps || !mapReady) return;
 
-    markersRef.current.forEach((marker) => { marker.map = null; });
-
-    if (!layerVisibility.markers) return;
-
     const collisionBehavior = window.google.maps.CollisionBehavior?.REQUIRED;
-    const visibleProjects = projects.filter((project) => isProjectPublishable(project) && pointFor(project) && project.id !== selectedProject?.id);
-    markersRef.current = visibleProjects.map((project) => {
+    const descriptors = (layerVisibility.markers ? propertyClusters : []).flatMap((group) => {
+        if (group.kind === 'cluster') {
+          const content = document.createElement('div');
+          content.className = 'zinoo-property-cluster-marker';
+          content.textContent = String(group.entries.length);
+          const options = {
+            position: group.position,
+            title: `${group.entries.length} properties. Zoom in to explore`,
+            content, anchorLeft: '-50%', anchorTop: '-50%',
+            gmpClickable: true, zIndex: 1000,
+            ...(collisionBehavior ? { collisionBehavior } : {})
+          };
+          return [{
+            key: `cluster:${JSON.stringify(group.entries.map(({ project }) => stableProjectKey(project)).sort())}`,
+            options,
+            onClick: () => {
+              map.panTo(group.position);
+              map.setZoom(Math.min(20, (map.getZoom() ?? DEFAULT_ZOOM) + 2));
+            }
+          }];
+        }
+        const { project } = group.entries[0];
+        if (project.id === selectedProject?.id) return [];
         const position = pointFor(project);
         const state = markerStates.get(project.id) || getProjectMarkerState({ zoom: zoomLevel, project, selectedProjectId: selectedProject?.id });
-        const marker = new window.google.maps.marker.AdvancedMarkerElement({
+        const options = {
           position,
           title: project.name,
           content: markerContent(project, state),
+          anchorLeft: '-50%',
+          anchorTop: '-100%',
           gmpClickable: true,
           gmpDraggable: false,
           zIndex: state.zIndex,
           ...(collisionBehavior ? { collisionBehavior } : {})
-        });
-
-        marker.addEventListener('gmp-click', () => selectProjectFromMarker(project));
-        marker.map = map;
-        return marker;
+        };
+        return [{ key: `project:${stableProjectKey(project)}`, options, onClick: () => selectProjectFromMarker(project) }];
     });
-  }, [projects, mapReady, selectProjectFromMarker, layerVisibility.markers, zoomLevel, markerStates, selectedProject?.id]);
+    markerRecordsRef.current = reconcileMarkers(markerRecordsRef.current, descriptors, map,
+      (options) => new window.google.maps.marker.AdvancedMarkerElement(options));
+    markersRef.current = [...markerRecordsRef.current.values()].map(({ marker }) => marker);
+  }, [propertyClusters, mapReady, selectProjectFromMarker, layerVisibility.markers, zoomLevel, markerStates, selectedProject?.id]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -759,14 +801,15 @@ export default function MapScreen({
     const position = pointFor(selectedProject);
     if (!position) return undefined;
 
-    const selectedState = getProjectMarkerState({ zoom: zoomLevel, project: selectedProject, selectedProjectId: selectedProject.id });
+    const selectedState = getProjectMarkerState({ zoom: map.getZoom() ?? DEFAULT_ZOOM, project: selectedProject, selectedProjectId: selectedProject.id });
     const content = markerContent(selectedProject, selectedState);
-    const selectedUsesCircularAnchor = selectedState.mode === 'pin' || selectedState.mode === 'cluster';
     const marker = new window.google.maps.marker.AdvancedMarkerElement({
       map,
       position,
       title: selectedProject.name,
       content,
+      anchorLeft: '-50%',
+      anchorTop: '-100%',
       gmpClickable: true,
       zIndex: 9999
     });
@@ -833,7 +876,16 @@ export default function MapScreen({
     projectPopupRef.current = popup;
 
     return () => { marker.map = null; popup.setMap(null); };
-  }, [selectedProject, mapReady, onViewProjectDetails, onSelectProject, showProjectPopup, zoomLevel, popupProjectId]);
+  }, [selectedProject, mapReady, onViewProjectDetails, onSelectProject, showProjectPopup, popupProjectId]);
+
+  // Keep the selected marker and popup attached while the camera changes.
+  useEffect(() => {
+    const marker = selectedMarkerRef.current;
+    if (!marker || !selectedProject) return;
+    const state = getProjectMarkerState({ zoom: zoomLevel, project: selectedProject, selectedProjectId: selectedProject.id });
+    const content = markerContent(selectedProject, state);
+    if (marker.content?.outerHTML !== content.outerHTML) marker.content = content;
+  }, [zoomLevel, selectedProject, mapReady]);
 
   // Click listeners for placing projects or drawing polygons
   useEffect(() => {
@@ -876,7 +928,7 @@ export default function MapScreen({
         paths: draftPoints,
         strokeColor: '#facc15',
         strokeOpacity: 1,
-        strokeWeight: 3,
+        strokeWeight: 2,
         fillColor: '#facc15',
         fillOpacity: 0.22,
         clickable: false,
@@ -888,7 +940,7 @@ export default function MapScreen({
         path: draftPoints,
         strokeColor: '#facc15',
         strokeOpacity: 1,
-        strokeWeight: 3
+        strokeWeight: 2
       });
     }
   }, [draftPoints]);
@@ -916,7 +968,8 @@ export default function MapScreen({
     setSaving(true);
 
     try {
-      const geometry = buildProjectGeometry(coordinates, window.google.maps);
+      const maps = await loadGeometryLibrary();
+      const geometry = buildProjectGeometry(coordinates, maps);
       await updateProjectBoundary(selectedProject.id, geometry);
       if (activeLayout) {
         // Edit existing layout
@@ -957,23 +1010,6 @@ export default function MapScreen({
     clearPolygon();
   };
 
-  useEffect(() => {
-    const updateFullscreenState = () => setIsMapMaximized(Boolean(document.fullscreenElement));
-    document.addEventListener('fullscreenchange', updateFullscreenState);
-    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
-  }, []);
-
-  const toggleMapSize = async () => {
-    const container = mapElement.current?.parentElement;
-    if (!container) return;
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen?.();
-      else await container.requestFullscreen?.();
-    } catch (error) {
-      console.error('Unable to change map size:', error);
-    }
-  };
-
   const changeMapType = (nextMapType) => {
     const map = mapRef.current;
     if (!map || nextMapType === mapType) return;
@@ -999,27 +1035,77 @@ export default function MapScreen({
       {/* FLOATING GLASSMORPHISM CONTROLS */}
       <div className="map-floating-overlay-container">
 
-        <div className="map-type-switcher" role="group" aria-label="Map view">
-          <button type="button" className={mapType === 'roadmap' ? 'active' : ''} onClick={() => changeMapType('roadmap')} aria-pressed={mapType === 'roadmap'} aria-label="Normal map view" title="Normal map view"><MapIcon size={19} /></button>
-          <button type="button" className={mapType === 'satellite' ? 'active' : ''} onClick={() => changeMapType('satellite')} aria-pressed={mapType === 'satellite'} aria-label="Satellite map view" title="Satellite map view"><Satellite size={19} /></button>
-        </div>
-
-        <div className="map-top-right-controls">
-          <button className={`floating-circle-btn ${showLayers ? 'active' : ''}`} onClick={() => { const nextOpen = !showLayers; setShowLayers(nextOpen); if (nextOpen) onLayersOpen?.(); }} title="Map layers" aria-label="Map layers"><Layers size={19} /></button>
-          <button type="button" className="floating-circle-btn" onClick={toggleMapSize} title={isMapMaximized ? 'Minimize map' : 'Maximize map'} aria-label={isMapMaximized ? 'Minimize map' : 'Maximize map'}>
-            {isMapMaximized ? <Minimize2 size={19} /> : <Maximize2 size={19} />}
+        {showFilterCapsules && <div className="map-mobile-filter-control">
+          <button
+            type="button"
+            className={`map-mobile-filter-capsule ${filters.budgetMin !== DEFAULT_FILTERS.budgetMin || filters.budgetMax !== DEFAULT_FILTERS.budgetMax ? 'active' : ''}`}
+            onClick={onOpenFilters}
+            aria-haspopup="dialog"
+            aria-label="Filter by budget"
+          >
+            <BadgeIndianRupee size={16} />
+            <span>Budget</span>
           </button>
-        </div>
+          <button
+            type="button"
+            className={`map-mobile-filter-capsule ${filters.landZones?.length || filters.zones?.length ? 'active' : ''}`}
+            onClick={onOpenFilters}
+            aria-haspopup="dialog"
+            aria-label="Filter by zone"
+          >
+            <MapPin size={16} />
+            <span>Zone</span>
+          </button>
+          <button
+            type="button"
+            className={`map-mobile-filter-capsule ${filters.naStatuses?.length ? 'active' : ''}`}
+            onClick={onOpenFilters}
+            aria-haspopup="dialog"
+            aria-label="Filter by NA status"
+          >
+            <BadgeCheck size={16} />
+            <span>NA Status</span>
+          </button>
+          <button
+            type="button"
+            className={`map-mobile-filter-capsule ${filters.installmentMax ? 'active' : ''}`}
+            onClick={onToggleInstallment}
+            aria-pressed={Boolean(filters.installmentMax)}
+          >
+            <CalendarDays size={16} />
+            <span>Installment</span>
+          </button>
+        </div>}
+
+        {!externalOverlayOpen && <div className="map-top-right-controls">
+          <button className={`floating-circle-btn map-layers-control ${showLayers ? 'active' : ''}`} onClick={() => { const nextOpen = !showLayers; setShowLayers(nextOpen); if (nextOpen) onLayersOpen?.(); }} title="Map layers" aria-label="Map layers"><Layers size={19} /><span className="map-layers-glow" aria-hidden="true" /></button>
+          <button
+            type="button"
+            className={`map-satellite-preview ${mapType === 'satellite' ? 'active' : ''}`}
+            onClick={() => changeMapType(mapType === 'satellite' ? 'roadmap' : 'satellite')}
+            disabled={!mapReady}
+            title={mapType === 'satellite' ? 'Switch to normal map' : 'Switch to satellite map'}
+            aria-label={mapType === 'satellite' ? 'Switch to normal map' : 'Switch to satellite map'}
+          >
+            <img src={mapType === 'satellite' ? '/maps/normal-preview.svg' : '/maps/chakan-map.webp'} alt="" draggable="false" />
+            <span>{mapType === 'satellite' ? 'Normal' : 'Satellite'}</span>
+          </button>
+        </div>}
 
         {/* FLOATING LAYERS POPDOWN */}
         {showLayers && (
           <div className="floating-layers-popdown">
             <div className="layers-header">
-              <div><span>Map display</span><h4>Layers</h4><p>Control project and location overlays.</p></div>
+              <div><h4>Layers</h4></div>
               <button onClick={() => setShowLayers(false)} className="close-panel-btn" aria-label="Close layers"><X size={16} /></button>
             </div>
 
             <div className="layers-body">
+              <span className="layers-section-title">Map style</span>
+              <div className="map-style-options" role="group" aria-label="Map style">
+                <button type="button" className={mapType === 'satellite' ? 'active' : ''} onClick={() => changeMapType('satellite')} aria-pressed={mapType === 'satellite'}><Satellite size={17} /><span>Satellite</span></button>
+                <button type="button" className={mapType === 'roadmap' ? 'active' : ''} onClick={() => changeMapType('roadmap')} aria-pressed={mapType === 'roadmap'}><MapIcon size={17} /><span>Normal</span></button>
+              </div>
               <span className="layers-section-title">Project overlays</span>
               <div className="gis-toggles">
                 {[

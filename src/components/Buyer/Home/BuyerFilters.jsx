@@ -1,7 +1,9 @@
-import { BadgeIndianRupee, CalendarDays, Landmark, MapPin, X } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { BadgeCheck, BadgeIndianRupee, CalendarDays, MapPin, X } from 'lucide-react';
 import { formatINR } from '../buyerPresentation';
 
 export default function BuyerFilters({
+  hideShortcuts = false,
   filtersOpen,
   activeFilterCount,
   filteredProjectCount,
@@ -13,35 +15,63 @@ export default function BuyerFilters({
   onBudgetChange,
   onLandZoneToggle,
   onNaStatusToggle,
-  onBankLoanChange,
   onInstallmentToggle,
   onResetFilters
 }) {
+  const dragStartY = useRef(null);
+  const [dragOffset, setDragOffset] = useState(0);
+
+  const finishDrag = (event) => {
+    const distance = dragStartY.current === null ? 0 : Math.max(0, event.clientY - dragStartY.current);
+    dragStartY.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (distance >= 72) onCloseFilters();
+    setDragOffset(0);
+  };
+
   return (
     <>
-      <div className="buyer-panel-search-row">
-        <div className="buyer-filter-chips" aria-label="Property filters">
-          <button type="button" className="buyer-filter-shortcut" onClick={onToggleFilters}>
-            <BadgeIndianRupee /><span><strong>Budget</strong><small>₹4L – ₹30L</small></span>
+      {!hideShortcuts && <div className="buyer-panel-search-row">
+        <div className="buyer-filter-chips buyer-home-filter-capsules" aria-label="Property filters">
+          <button type="button" className="buyer-filter-shortcut map-mobile-filter-capsule" onClick={onToggleFilters}>
+            <BadgeIndianRupee /><span><strong>Budget</strong><small>₹4L – ₹50L</small></span>
           </button>
-          <button type="button" className="buyer-filter-shortcut" onClick={onToggleFilters}>
+          <button type="button" className="buyer-filter-shortcut map-mobile-filter-capsule" onClick={onToggleFilters}>
             <MapPin /><span><strong>Zone</strong><small>Explore area</small></span>
           </button>
-          <button type="button" className={`buyer-filter-shortcut ${mapFilters.bankLoan ? 'active' : ''}`} onClick={() => onBankLoanChange({ target: { checked: !mapFilters.bankLoan } })} aria-pressed={mapFilters.bankLoan}>
-            <Landmark /><span><strong>Loan</strong><small>Available</small></span>
+          <button type="button" className={`buyer-filter-shortcut map-mobile-filter-capsule ${mapFilters.naStatuses?.length ? 'active' : ''}`} onClick={onToggleFilters} aria-haspopup="dialog">
+            <BadgeCheck /><span><strong>NA Status</strong><small>Approval status</small></span>
           </button>
-          <button type="button" className={`buyer-filter-shortcut ${mapFilters.installmentMax ? 'active' : ''}`} onClick={onInstallmentToggle} aria-pressed={Boolean(mapFilters.installmentMax)}>
+          <button type="button" className={`buyer-filter-shortcut map-mobile-filter-capsule ${mapFilters.installmentMax ? 'active' : ''}`} onClick={onInstallmentToggle} aria-pressed={Boolean(mapFilters.installmentMax)}>
             <CalendarDays /><span><strong>Installment</strong><small>Easy EMI</small></span>
           </button>
         </div>
-      </div>
+      </div>}
 
       {filtersOpen && (
         <div className="buyer-filter-layer">
           <button type="button" className="buyer-filter-backdrop" onClick={onCloseFilters} aria-label="Close filters" />
-          <div className="buyer-filter-card" role="dialog" aria-modal="true" aria-labelledby="buyer-filter-title">
+          <div className={`buyer-filter-card ${dragOffset ? 'is-dragging' : ''}`} style={{ '--filter-drag-offset': `${dragOffset}px` }} role="dialog" aria-modal="true" aria-labelledby="buyer-filter-title">
+            <button
+              type="button"
+              className="buyer-filter-drag-handle"
+              aria-label="Drag down to close filters"
+              onPointerDown={(event) => {
+                dragStartY.current = event.clientY;
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                if (dragStartY.current !== null) setDragOffset(Math.min(180, Math.max(0, event.clientY - dragStartY.current)));
+              }}
+              onPointerUp={finishDrag}
+              onPointerCancel={(event) => {
+                dragStartY.current = null;
+                event.currentTarget.releasePointerCapture?.(event.pointerId);
+                setDragOffset(0);
+              }}
+            ><i /></button>
             <div className="buyer-filter-header">
-              <div><span>Project discovery</span><h3 id="buyer-filter-title">Filters</h3></div>
+              <h3 id="buyer-filter-title">Filters</h3>
               <button type="button" onClick={onCloseFilters} aria-label="Close filters"><X size={18} /></button>
             </div>
             <div className="buyer-filter-scroll">
@@ -51,19 +81,16 @@ export default function BuyerFilters({
               </label>
               <fieldset className="buyer-filter-group">
                 <legend>Land Zone</legend>
-                <p>Choose one or more statutory land classifications.</p>
                 <div className="buyer-filter-option-grid">
-                  {landZoneOptions.map((option) => <label key={option.value}><input type="checkbox" checked={mapFilters.landZones.includes(option.value)} onChange={() => onLandZoneToggle(option.value)} /><span>{option.label}</span></label>)}
+                  {landZoneOptions.map((option) => <label key={option.value} className={option.upcoming ? 'is-upcoming' : ''}><input type="checkbox" checked={mapFilters.landZones.includes(option.value)} onChange={() => onLandZoneToggle(option.value)} disabled={option.upcoming} /><span>{option.label}{option.upcoming && <small>Upcoming</small>}</span></label>)}
                 </div>
               </fieldset>
               <fieldset className="buyer-filter-group">
                 <legend>NA Status</legend>
-                <p>NA approval is independent from the land-zone classification.</p>
                 <div className="buyer-filter-option-grid">
                   {naStatusOptions.map((option) => <label key={option.value}><input type="checkbox" checked={mapFilters.naStatuses.includes(option.value)} onChange={() => onNaStatusToggle(option.value)} /><span>{option.label}</span></label>)}
                 </div>
               </fieldset>
-              <label className="buyer-filter-boolean"><input type="checkbox" checked={mapFilters.bankLoan} onChange={onBankLoanChange} /><span><strong>Bank loan available</strong><small>Show projects marked as bank-loan ready.</small></span></label>
             </div>
             <div className="buyer-filter-actions">
               <button type="button" className="btn-secondary" onClick={onResetFilters}>Reset</button>

@@ -1,9 +1,16 @@
 {
-  "firestore": {
-    "database": "default",
-    "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
-  },
+  "firestore": [
+    {
+      "database": "default",
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
+    },
+    {
+      "database": "(default)",
+      "indexes": "firestore.marketing.indexes.json",
+      "rules": "firestore.marketing.rules"
+    }
+  ],
   "functions": {
     "source": "functions",
     "predeploy": [
@@ -23,6 +30,7 @@
   },
   "hosting": {
     "public": "dist",
+    "predeploy": ["node scripts/live-updates.mjs stage-hosting"],
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -105,6 +113,20 @@
       }
     ],
     "headers": [
+      {
+        "source": "/app-updates/android.json",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-store" },
+          { "key": "Access-Control-Allow-Origin", "value": "*" }
+        ]
+      },
+      {
+        "source": "/app-updates/bundles/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" },
+          { "key": "Access-Control-Allow-Origin", "value": "*" }
+        ]
+      },
       {
         "source": "/",
         "headers": [

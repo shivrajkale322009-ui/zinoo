@@ -4,9 +4,6 @@ import NotificationCenter from './NotificationCenter';
 
 export default function SellerHeader({ notifications, user, showAdminControl = false, onBackToAdmin, onOpenBuyer }) {
   return <header className="m3-mobile-top-app-bar seller-mobile-top-app-bar" aria-label="Seller navigation header">
-    <div className="seller-mobile-brand" aria-label="Zinoo">
-      <img src="/brand/zinoo-logo.png" alt="Zinoo" />
-    </div>
     {showAdminControl && (
       <div className="seller-header-view-controls">
         <button type="button" className="seller-header-admin-control" onClick={onBackToAdmin} aria-label="Exit seller mode and return to admin" title="Return to admin">

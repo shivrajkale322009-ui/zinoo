@@ -4,6 +4,8 @@ const {
   createPublicProjectSeoHandler,
   renderNotFoundPage,
   renderLocationPage,
+  renderContentIndex,
+  renderContentPage,
   renderProjectPage,
   renderProjectsPage,
   renderSitemap,
@@ -37,19 +39,51 @@ test('project HTML has unique canonical metadata and valid JSON-LD', () => {
     thumbnail: 'https://example.com/project.webp', latitude: 18.7, longitude: 73.8
   }, 'real-project');
   const html = renderProjectPage(project);
-  assert.match(html, /<title>Real Project \| Verified Plot Project in Kuruli \| Zinoo<\/title>/);
+  assert.match(html, /<title>Real Project \| Kuruli \| Zinoo<\/title>/);
   assert.match(html, /rel="canonical" href="https:\/\/zinoo\.in\/projects\/real-project"/);
   const json = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)[1];
   assert.doesNotThrow(() => JSON.parse(json));
   assert.match(html, /data-zinoo-project-handoff/);
 });
 
-test('dynamic sitemap contains only supplied public projects', () => {
+test('project share metadata contains the project name, starting price, and address', () => {
+  const project = sanitizePublicProject({
+    name: 'Gatha Park', startingPrice: 1250000, completeAddress: 'Kuruli, Khed, Pune'
+  }, 'gatha-park');
+  const html = renderProjectPage(project);
+  assert.match(html, /<title>Gatha Park \| Starting at ₹12,50,000 \| Chakan \| Zinoo<\/title>/);
+  assert.match(html, /Starting at ₹12,50,000\. Address: Kuruli, Khed, Pune/);
+  assert.match(html, /"address":"Kuruli, Khed, Pune"/);
+});
+
+test('dynamic sitemap rendering contains only supplied public projects', () => {
   const xml = renderSitemap([{ slug: 'real-project', updatedAt: null }]);
   assert.match(xml, /https:\/\/zinoo\.in\/projects/);
   assert.match(xml, /https:\/\/zinoo\.in\/plots/);
   assert.match(xml, /https:\/\/zinoo\.in\/projects\/real-project/);
   assert.doesNotMatch(xml, /private-project/);
+});
+
+test('editorial drafts are excluded from public indexes, pages, and sitemap', async () => {
+  const index = renderContentIndex('blog');
+  assert.match(index, /name="robots" content="noindex,follow"/);
+  assert.doesNotMatch(index, /Buying a Plot in Chakan/);
+  const xml = renderSitemap([]);
+  assert.doesNotMatch(xml, /\/blog|\/market-studies/);
+  const result = responseRecorder();
+  await createPublicProjectSeoHandler(handlerDb())({ originalUrl: '/blog/buying-a-plot-in-chakan-checklist' }, result.response);
+  assert.equal(result.record.statusCode, 404);
+});
+
+test('published editorial content emits Article schema and a canonical URL', () => {
+  const item = {
+    type: 'blog', slug: 'test-guide', title: 'Test Guide', description: 'A useful guide.',
+    author: 'Zinoo Editorial Team', publishedAt: '2026-09-17', sections: [{ heading: 'First step', paragraphs: ['Start here.'] }]
+  };
+  const html = renderContentPage(item);
+  assert.match(html, /rel="canonical" href="https:\/\/zinoo\.in\/blog\/test-guide"/);
+  assert.match(html, /"@type":"Article"/);
+  assert.match(html, /First step/);
 });
 
 test('sold and inactive projects retain public status pages and canonical links', () => {
@@ -134,6 +168,28 @@ test('direct project lookup returns 200, old slug redirects, and invalid slug re
   const missing = responseRecorder();
   await handler({ originalUrl: '/projects/missing-project' }, missing.response);
   assert.equal(missing.record.statusCode, 404);
+});
+
+test('unavailable project URLs return 410 and are not treated as indexable project pages', async () => {
+  const project = sanitizePublicProject({ name: 'Unavailable Project', status: 'inactive' }, 'unavailable-project');
+  const db = handlerDb({ registry: {
+    'unavailable-project': { projectId: 'p1', canonicalSlug: 'unavailable-project', redirect: false }
+  }, projects: { p1: project } });
+  const result = responseRecorder();
+  await createPublicProjectSeoHandler(db)({ originalUrl: '/projects/unavailable-project' }, result.response);
+  assert.equal(result.record.statusCode, 410);
+  assert.match(result.record.body, /name="robots" content="noindex,nofollow"/);
+});
+
+test('sitemap query requests only active projects', async () => {
+  const active = sanitizePublicProject({ name: 'Active Project', status: 'active' }, 'active-project');
+  const inactive = sanitizePublicProject({ name: 'Inactive Project', status: 'inactive' }, 'inactive-project');
+  const db = handlerDb({ projects: { active, inactive } });
+  const result = responseRecorder();
+  await createPublicProjectSeoHandler(db)({ originalUrl: '/sitemap.xml' }, result.response);
+  assert.equal(result.record.statusCode, 200);
+  assert.match(result.record.body, /projects\/active-project/);
+  assert.doesNotMatch(result.record.body, /projects\/inactive-project/);
 });
 
 test('nearby query returns active projects even when sold and inactive projects share the location', async () => {

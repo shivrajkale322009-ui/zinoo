@@ -72,6 +72,20 @@
         { "fieldPath": "isActive", "order": "ASCENDING" },
         { "fieldPath": "sortIndex", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "whatsapp_campaigns",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipients",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "whatsappMessageId", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

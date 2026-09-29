@@ -450,8 +450,8 @@
 
 @media (max-width: 768px) {
   .buyer-map-first-root .buyer-workspace-header.desktop-header.buyer-unified-search-header {
-    right: 16px;
-    left: 16px;
+    right: 8px;
+    left: 8px;
   }
 }
 
@@ -1089,15 +1089,15 @@ svg { flex: 0 0 auto; }
   /* Compact Android discovery filters: one non-wrapping, touch-scrollable rail. */
   .buyer-map-first-root.buyer-screen-home .buyer-filter-chips {
     display: flex;
-    width: calc(100% + 32px);
+    width: 100%;
     grid-template-columns: none;
     align-items: center;
     justify-content: flex-start;
     gap: 10px;
     overflow-x: auto;
     overflow-y: hidden;
-    margin-inline: -16px;
-    padding: 0 16px 2px;
+    margin-inline: 0;
+    padding: 0 4% 2px;
     scroll-behavior: smooth;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;

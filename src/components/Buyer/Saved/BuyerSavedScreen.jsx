@@ -9,7 +9,9 @@ export default function BuyerSavedScreen({
   loading = false,
   error = '',
   onProjectSelect,
-  onDeveloperSelect
+  onDeveloperSelect,
+  authRequired = false,
+  onLogin
 }) {
   return (
     <main className="buyer-primary-screen buyer-saved-screen" aria-labelledby="buyer-saved-title">
@@ -61,6 +63,11 @@ export default function BuyerSavedScreen({
           </>
         )}
       </div>
+      {authRequired && (
+        <div className="buyer-auth-mask" role="region" aria-label="Login required to view saved properties">
+          <button type="button" className="buyer-auth-mask-login" onClick={onLogin}>Log in</button>
+        </div>
+      )}
     </main>
   );
 }

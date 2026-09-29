@@ -20,13 +20,13 @@ export default function BuyerHomePanel({
   onBudgetChange,
   onLandZoneToggle,
   onNaStatusToggle,
-  onBankLoanChange,
   onInstallmentToggle,
   onResetFilters,
   onProjectSelect,
   onDeveloperSelect,
   onFavouriteToggle,
   onShare,
+  onOpenCashback,
   projectsLoading = false
 }) {
   return (
@@ -43,7 +43,6 @@ export default function BuyerHomePanel({
         onBudgetChange={onBudgetChange}
         onLandZoneToggle={onLandZoneToggle}
         onNaStatusToggle={onNaStatusToggle}
-        onBankLoanChange={onBankLoanChange}
         onInstallmentToggle={onInstallmentToggle}
         onResetFilters={onResetFilters}
       />
@@ -67,10 +66,9 @@ export default function BuyerHomePanel({
       )}
 
       <div className="buyer-panel-section buyer-featured-projects-section">
-        <div className="buyer-panel-section-head">
-          <h4>Featured Projects</h4>
-          <button type="button" className="buyer-view-all">View all <ChevronRight /></button>
-        </div>
+        <button type="button" className="buyer-home-cashback-banner" onClick={onOpenCashback} aria-label="Open Cashback — Book through Zinoo and get rewarded">
+          <img src="/home-cashback-banner.png" alt="Cashback on Your Plot — Book through Zinoo and get rewarded. Explore Plots" width="2225" height="707" />
+        </button>
         {projectsLoading ? (
           <div className="buyer-project-skeleton-grid" aria-hidden="true">
             {[0, 1, 2, 3].map((item) => <article key={item}><div /><span /><span /><b /></article>)}
@@ -112,3 +110,4 @@ export default function BuyerHomePanel({
     </div>
   );
 }
+

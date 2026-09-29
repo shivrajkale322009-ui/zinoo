@@ -38,7 +38,6 @@ export function getPropertyGovernance(property = {}, options = {}) {
 
   const basicMissing = [
     !present(property.name) && 'property name',
-    !present(property.description) && 'description',
     !present(contact) && 'contact number'
   ].filter(Boolean);
   if (basicMissing.length) issues.push(issue('basic', 'basic_missing', `Add ${basicMissing.join(', ')}.`));

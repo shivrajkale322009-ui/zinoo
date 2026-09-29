@@ -1,11 +1,13 @@
 const { onCall, onRequest, HttpsError } = require('firebase-functions/v2/https');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
-const { defineSecret } = require('firebase-functions/params');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { defineSecret, defineString } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const { FieldValue, getFirestore } = require('firebase-admin/firestore');
 const { getStorage } = require('firebase-admin/storage');
 const { randomUUID } = require('node:crypto');
+const { createHmac, timingSafeEqual } = require('node:crypto');
 const { PROPERTY_STATUS } = require('./propertyStatus');
 const { deletePropertyResources } = require('./propertyDeletion');
 const { TEMPLATE_ID, ASSISTANT_TEMPLATE_ID, invokeProjectAnalysisTemplate, invokeProjectAssistantTemplate, projectFingerprint } = require('./aiService');
@@ -13,9 +15,13 @@ const { detectNearestHighway } = require('./highwayDetection');
 const { validateDeveloperProfileUpdate } = require('./developerProfile');
 const { createPublicProjectSeoHandler } = require('./publicProjectSeo');
 const { createPublicProjectProjectionHandler } = require('./publicProjectProjection');
+const { sendTemplate, sendText, toE164, normalizeE164, buildTemplateComponents, uploadTemplateImage } = require('./whatsappService');
 
 const app = initializeApp();
+// Enterprise stores the marketplace and lead directory. Standard isolates
+// WhatsApp templates and delivery records.
 const db = getFirestore(app, 'default');
+const marketingDb = getFirestore(app, '(default)');
 const storage = getStorage(app);
 const ALLOWED_ORIGINS = Object.freeze([
   'https://zinoo.in',
@@ -38,6 +44,11 @@ exports.projectPublicProjection = onDocumentWritten({
   memory: '256MiB'
 }, createPublicProjectProjectionHandler(db));
 const googleMapsServerApiKey = defineSecret('GOOGLE_MAPS_SERVER_API_KEY');
+const whatsappAccessToken = defineSecret('WHATSAPP_ACCESS_TOKEN');
+const whatsappPhoneNumberId = defineSecret('WHATSAPP_PHONE_NUMBER_ID');
+const whatsappBusinessAccountId = defineString('WHATSAPP_BUSINESS_ACCOUNT_ID', { default: '2012034352785770' });
+const whatsappVerifyToken = defineSecret('WHATSAPP_VERIFY_TOKEN');
+const metaAppSecret = defineSecret('META_APP_SECRET');
 const REVIEW_FIELDS = new Set(['status', 'reviewedAt', 'reviewedBy', 'approvedAt', 'approvedBy', 'activatedAt', 'activatedBy', 'rejectedAt', 'rejectedBy', 'rejectionReason']);
 
 // The AI module is authored in TypeScript and compiled to lib/ before deploy.
@@ -158,6 +169,222 @@ const assertAdmin = async (uid) => {
     throw new HttpsError('permission-denied', 'Only Admin users may perform this action.');
   }
 };
+
+const CAMPAIGN_STATUSES = new Set(['DRAFT', 'QUEUED', 'SENDING', 'COMPLETED', 'FAILED', 'CANCELLED']);
+const RECIPIENT_STATUSES = new Set(['PENDING', 'SENT', 'DELIVERED', 'FAILED']);
+const safeCampaignName = (value) => typeof value === 'string' ? value.trim().slice(0, 120) : '';
+
+// Standard database rules cannot read Enterprise user profiles. This callable
+// verifies the Enterprise role, then grants the signed-in admin read access to
+// Standard WhatsApp records without copying account details or lead data.
+exports.ensureWhatsAppMarketingAccess = onCall({ ...callableOptions }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  await marketingDb.collection('whatsapp_admins').doc(request.auth.uid).set({
+    grantedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  }, { merge: true });
+  return { granted: true };
+});
+
+exports.getWhatsAppTemplatePreview = onCall({ ...callableOptions, secrets: [whatsappAccessToken], timeoutSeconds: 30 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  const templateId = request.data?.templateId;
+  if (typeof templateId !== 'string' || !templateId || templateId.includes('/')) throw new HttpsError('invalid-argument', 'Choose a template.');
+  const saved = await marketingDb.collection('whatsapp_templates').doc(templateId).get();
+  if (!saved.exists) throw new HttpsError('not-found', 'Template not found.');
+  const template = saved.data();
+  const url = new URL(`https://graph.facebook.com/v25.0/${encodeURIComponent(whatsappBusinessAccountId.value())}/message_templates`);
+  url.searchParams.set('name', template.metaTemplateName);
+  url.searchParams.set('fields', 'name,language,status,components');
+  url.searchParams.set('limit', '100');
+  let payload;
+  try {
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${whatsappAccessToken.value()}` }, signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('Meta request failed');
+    payload = await response.json();
+  } catch {
+    throw new HttpsError('unavailable', 'Unable to load the message preview from Meta. Please retry.');
+  }
+  const match = payload.data?.find((item) => item.name === template.metaTemplateName && item.language === template.language);
+  if (!match) throw new HttpsError('not-found', 'This template language was not found in Meta.');
+  return { name: match.name, language: match.language, status: match.status, components: match.components || [] };
+});
+
+exports.syncWhatsAppTemplates = onCall({ ...callableOptions, secrets: [whatsappAccessToken], timeoutSeconds: 30 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  const url = new URL(`https://graph.facebook.com/v25.0/${encodeURIComponent(whatsappBusinessAccountId.value())}/message_templates`);
+  url.searchParams.set('fields', 'name,language,status,category,components');
+  url.searchParams.set('limit', '100');
+  let payload;
+  try {
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${whatsappAccessToken.value()}` }, signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('Meta request failed');
+    payload = await response.json();
+  } catch { throw new HttpsError('unavailable', 'Unable to refresh templates from Meta.'); }
+  const templates = payload.data || [];
+  const batch = marketingDb.batch();
+  templates.forEach((item) => {
+    const ref = marketingDb.collection('whatsapp_templates').doc(`${item.name}__${item.language}`.replace(/[^a-zA-Z0-9_-]/g, '_'));
+    batch.set(ref, { name: item.name, metaTemplateName: item.name, language: item.language, status: item.status, category: item.category || null, components: item.components || [], syncedFromMetaAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  });
+  if (templates.length) await batch.commit();
+  return { count: templates.length };
+});
+
+exports.createWhatsAppCampaign = onCall({ ...callableOptions, timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  const data = request.data || {};
+  const name = safeCampaignName(data.name);
+  const templateId = typeof data.templateId === 'string' ? data.templateId : '';
+  const audience = data.audience || {};
+  if (!name || !templateId) throw new HttpsError('invalid-argument', 'Campaign name and an approved template are required.');
+  const templateRef = marketingDb.collection('whatsapp_templates').doc(templateId);
+  const templateSnapshot = await templateRef.get();
+  if (!templateSnapshot.exists || templateSnapshot.data().status !== 'APPROVED') throw new HttpsError('failed-precondition', 'Choose an approved WhatsApp template.');
+  const headerMediaUrl = typeof data.headerMediaUrl === 'string' ? data.headerMediaUrl.trim() : '';
+  try { buildTemplateComponents(templateSnapshot.data(), 'Customer', headerMediaUrl); }
+  catch (error) { throw new HttpsError('invalid-argument', error.message); }
+  let leadQuery = db.collection('leads');
+  if (audience.type === 'project' && typeof audience.projectId === 'string') leadQuery = leadQuery.where('projectId', '==', audience.projectId);
+  if (audience.type === 'stage' && typeof audience.stage === 'string') leadQuery = leadQuery.where('stage', '==', audience.stage);
+  const leadSnapshot = audience.type === 'custom'
+    ? await Promise.all((Array.isArray(audience.leadIds) ? audience.leadIds.slice(0, 2000) : []).map((id) => db.collection('leads').doc(id).get()))
+    : (await leadQuery.get()).docs;
+  const eligible = leadSnapshot
+    .map((lead) => ({ id: lead.id, ...lead.data(), phoneNumber: toE164(lead.data().phone) }))
+    .filter((lead) => lead.phoneNumber && lead.whatsappOptIn === true);
+  if (!eligible.length) throw new HttpsError('failed-precondition', 'This audience has no opted-in leads with a valid phone number.');
+  if (eligible.length > 2000) throw new HttpsError('resource-exhausted', 'V1 campaigns are limited to 2,000 recipients.');
+  const campaignRef = marketingDb.collection('whatsapp_campaigns').doc();
+  await campaignRef.set({ name, templateId, headerMediaUrl, templateName: templateSnapshot.data().name, audience: { type: audience.type || 'all', projectId: audience.projectId || null, stage: audience.stage || null }, status: 'QUEUED', totalRecipients: eligible.length, sentCount: 0, deliveredCount: 0, failedCount: 0, createdBy: request.auth.uid, createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  for (let offset = 0; offset < eligible.length; offset += 400) {
+    const batch = marketingDb.batch();
+    eligible.slice(offset, offset + 400).forEach((lead) => batch.set(campaignRef.collection('recipients').doc(), { leadId: lead.id, leadName: String(lead.name || '').slice(0, 100), phoneNumber: lead.phoneNumber, status: 'PENDING', whatsappMessageId: null, errorMessage: null, sentAt: null, deliveredAt: null, createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }));
+    await batch.commit();
+  }
+  return { campaignId: campaignRef.id, recipientCount: eligible.length };
+});
+
+exports.replyToWhatsAppConversation = onCall({ ...callableOptions, secrets: [whatsappAccessToken, whatsappPhoneNumberId] }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  const conversationId = typeof request.data?.conversationId === 'string' ? request.data.conversationId : '';
+  const body = typeof request.data?.body === 'string' ? request.data.body.trim().slice(0, 4096) : '';
+  if (!conversationId || !body) throw new HttpsError('invalid-argument', 'A conversation and reply are required.');
+  const conversationRef = marketingDb.collection('whatsapp_conversations').doc(conversationId);
+  const conversation = await conversationRef.get();
+  const phoneNumber = normalizeE164(conversation.data()?.phoneNumber);
+  if (!conversation.exists || !phoneNumber) throw new HttpsError('not-found', 'The WhatsApp conversation no longer exists.');
+  try {
+    const messageId = await sendText({ accessToken: whatsappAccessToken.value(), phoneNumberId: whatsappPhoneNumberId.value(), recipient: phoneNumber, body });
+    await conversationRef.collection('messages').doc(messageId || undefined).set({ direction: 'outbound', body, messageType: 'text', whatsappMessageId: messageId, sentBy: request.auth.uid, createdAt: FieldValue.serverTimestamp() });
+    await conversationRef.set({ lastMessage: body, lastMessageDirection: 'outbound', lastMessageAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { messageId };
+  } catch (error) {
+    throw new HttpsError('failed-precondition', String(error.message || 'Meta did not accept this reply. The 24-hour customer service window may have expired.'));
+  }
+});
+
+exports.markWhatsAppConversationRead = onCall({ ...callableOptions }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');
+  await assertAdmin(request.auth.uid);
+  const conversationId = typeof request.data?.conversationId === 'string' ? request.data.conversationId : '';
+  if (!conversationId) throw new HttpsError('invalid-argument', 'A conversation is required.');
+  await marketingDb.collection('whatsapp_conversations').doc(conversationId).set({ unreadCount: 0, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  return { markedRead: true };
+});
+
+const processCampaign = async (campaignSnapshot) => {
+  const campaign = campaignSnapshot.data();
+  if (!['QUEUED', 'SENDING'].includes(campaign.status)) return;
+  const templateSnapshot = await marketingDb.collection('whatsapp_templates').doc(campaign.templateId).get();
+  if (!templateSnapshot.exists || templateSnapshot.data().status !== 'APPROVED') { await campaignSnapshot.ref.update({ status: 'FAILED', updatedAt: FieldValue.serverTimestamp() }); return; }
+  const pending = await campaignSnapshot.ref.collection('recipients').where('status', '==', 'PENDING').limit(25).get();
+  if (pending.empty) { await campaignSnapshot.ref.update({ status: 'COMPLETED', updatedAt: FieldValue.serverTimestamp() }); return; }
+  if (!campaign.headerMediaId && templateSnapshot.data().components?.some(part => part.type === 'HEADER' && part.format === 'IMAGE')) {
+    try {
+      campaign.headerMediaId = await uploadTemplateImage({ accessToken: whatsappAccessToken.value(), phoneNumberId: whatsappPhoneNumberId.value(), url: campaign.headerMediaUrl });
+      await campaignSnapshot.ref.update({ headerMediaId: campaign.headerMediaId, updatedAt: FieldValue.serverTimestamp() });
+    } catch (error) {
+      await campaignSnapshot.ref.update({ status: 'FAILED', errorMessage: String(error.message || 'Unable to prepare header image.').slice(0, 500), updatedAt: FieldValue.serverTimestamp() });
+      return;
+    }
+  }
+  await campaignSnapshot.ref.update({ status: 'SENDING', updatedAt: FieldValue.serverTimestamp() });
+  for (const recipientSnapshot of pending.docs) {
+    const recipient = recipientSnapshot.data();
+    try {
+      const messageId = await sendTemplate({ accessToken: whatsappAccessToken.value(), phoneNumberId: whatsappPhoneNumberId.value(), recipient: recipient.phoneNumber, leadName: recipient.leadName, template: templateSnapshot.data(), headerMediaUrl: campaign.headerMediaUrl, headerMediaId: campaign.headerMediaId });
+      await recipientSnapshot.ref.update({ status: 'SENT', whatsappMessageId: messageId, sentAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+      await campaignSnapshot.ref.update({ sentCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
+    } catch (error) {
+      await recipientSnapshot.ref.update({ status: 'FAILED', errorMessage: String(error.message || 'Unable to send message.').slice(0, 500), updatedAt: FieldValue.serverTimestamp() });
+      await campaignSnapshot.ref.update({ failedCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
+    }
+  }
+};
+
+// Bounded background worker: never sends an entire campaign in one HTTP call.
+exports.processWhatsAppCampaigns = onSchedule({ schedule: 'every 1 minutes', region: 'us-central1', secrets: [whatsappAccessToken, whatsappPhoneNumberId], timeoutSeconds: 540, memory: '512MiB' }, async () => {
+  const campaigns = await marketingDb.collection('whatsapp_campaigns').where('status', 'in', ['QUEUED', 'SENDING']).limit(4).get();
+  for (const campaign of campaigns.docs) await processCampaign(campaign);
+});
+
+exports.whatsappWebhook = onRequest({ region: 'us-central1', secrets: [whatsappVerifyToken, metaAppSecret], timeoutSeconds: 30 }, async (request, response) => {
+  if (request.method === 'GET') {
+    if (request.query['hub.mode'] === 'subscribe' && request.query['hub.verify_token'] === whatsappVerifyToken.value()) return response.status(200).send(request.query['hub.challenge']);
+    return response.sendStatus(403);
+  }
+  const signature = request.get('x-hub-signature-256');
+  const expected = `sha256=${createHmac('sha256', metaAppSecret.value()).update(request.rawBody).digest('hex')}`;
+  if (!signature || signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    console.warn('WhatsApp webhook signature rejected');
+    return response.sendStatus(401);
+  }
+  const statuses = request.body?.entry?.flatMap((entry) => entry.changes || []).flatMap((change) => change.value?.statuses || []) || [];
+  for (const status of statuses) {
+    const messageId = status.id;
+    const nextStatus = status.status === 'delivered' ? 'DELIVERED' : status.status === 'failed' ? 'FAILED' : status.status === 'sent' ? 'SENT' : null;
+    if (!messageId || !nextStatus) continue;
+    const matches = await marketingDb.collectionGroup('recipients').where('whatsappMessageId', '==', messageId).limit(1).get();
+    if (matches.empty) continue;
+    const recipientRef = matches.docs[0].ref;
+    const campaignRef = recipientRef.parent.parent;
+    await marketingDb.runTransaction(async (transaction) => {
+      const current = await transaction.get(recipientRef); const currentStatus = current.data()?.status;
+      if (!current.exists || currentStatus === 'DELIVERED' || currentStatus === nextStatus) return;
+      const update = { status: nextStatus, updatedAt: FieldValue.serverTimestamp() };
+      if (nextStatus === 'DELIVERED') update.deliveredAt = FieldValue.serverTimestamp();
+      if (nextStatus === 'FAILED') {
+        const failure = status.errors?.[0];
+        update.errorMessage = [failure?.code && `Meta ${failure.code}`, failure?.title || 'Meta delivery failed.', failure?.error_data?.details].filter(Boolean).join(' · ').slice(0, 500);
+      }
+      transaction.update(recipientRef, update);
+      transaction.update(campaignRef, { ...(nextStatus === 'DELIVERED' ? { deliveredCount: FieldValue.increment(1) } : nextStatus === 'FAILED' && currentStatus !== 'FAILED' ? { failedCount: FieldValue.increment(1) } : {}), updatedAt: FieldValue.serverTimestamp() });
+    });
+  }
+  const values = request.body?.entry?.flatMap((entry) => entry.changes || []).map((change) => change.value || {}) || [];
+  let inboundStored = 0;
+  for (const value of values) {
+    const contacts = new Map((value.contacts || []).map((contact) => [contact.wa_id, contact]));
+    for (const message of value.messages || []) {
+      const phoneNumber = normalizeE164(message.from);
+      if (!phoneNumber || !message.id) continue;
+      const contact = contacts.get(message.from);
+      const body = String(message.text?.body || message.button?.text || message.interactive?.button_reply?.title || `[${message.type || 'message'}]`).slice(0, 4096);
+      const conversationRef = marketingDb.collection('whatsapp_conversations').doc(phoneNumber.replace(/^\+/, ''));
+      await conversationRef.collection('messages').doc(message.id).set({ direction: 'inbound', body, messageType: String(message.type || 'unknown').slice(0, 50), whatsappMessageId: message.id, createdAt: FieldValue.serverTimestamp() }, { merge: true });
+      await conversationRef.set({ phoneNumber, displayName: String(contact?.profile?.name || phoneNumber).slice(0, 120), lastMessage: body, lastMessageDirection: 'inbound', lastMessageAt: FieldValue.serverTimestamp(), unreadCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      inboundStored += 1;
+    }
+  }
+  console.log('WhatsApp webhook processed', { statusUpdates: statuses.length, inboundStored });
+  return response.sendStatus(200);
+});
 
 exports.analyzeProject = onCall({ ...callableOptions, timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'You must be signed in.');

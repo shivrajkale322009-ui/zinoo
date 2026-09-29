@@ -1,4 +1,3 @@
-import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import { ThemeProvider } from './components/ThemeProvider.jsx';
@@ -9,12 +8,17 @@ import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { App as CapacitorApp } from '@capacitor/app';
 import { initializeNotificationTapHandling } from './services/pushNotifications';
+import { prepareLiveUpdate } from './updates/liveUpdates';
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
+performance.mark('zinoo:react-mounted');
+
+// Activate previously downloaded assets before any login, map or form mounts.
+// No network request is made during this step; resuming the app never runs it.
+prepareLiveUpdate().then((reloading) => {
+  if (!reloading) ReactDOM.createRoot(document.getElementById('root')).render(
     <ThemeProvider><App /></ThemeProvider>
-  </React.StrictMode>
-);
+  );
+});
 
 // Initialize Native Capacitor Features
 if (Capacitor.isNativePlatform()) {
@@ -26,6 +30,9 @@ if (Capacitor.isNativePlatform()) {
   StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
 
   CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+    const buyerBack = new CustomEvent('zinoo:buyer-back', { cancelable: true });
+    window.dispatchEvent(buyerBack);
+    if (buyerBack.defaultPrevented) return;
     if (!canGoBack || window.location.pathname === '/') {
       CapacitorApp.minimizeApp();
     } else {
@@ -35,9 +42,9 @@ if (Capacitor.isNativePlatform()) {
 }
 
 // Register Custom PWA Service Worker
-// The Android app ships its web build inside the AAB. A service worker adds a
-// second, unnecessary app-shell cache there and can keep an older release UI
-// alive after an upgrade. Browser/PWA installs still retain offline support.
+// Android starts from bundled assets or a verified live-update bundle. A service
+// worker would add another app-shell cache and could mask updates or rollback.
+// Browser/PWA installs still retain offline support.
 if (!Capacitor.isNativePlatform() && 'serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })

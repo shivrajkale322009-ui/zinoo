@@ -1,4 +1,8 @@
-export const CLUSTER_RADIUS_PX = 64;
+// A cluster represents markers that visually overlap.  Keep this aligned with
+// the minimum marker footprint rather than using a loose "nearby" radius.
+export const CLUSTER_RADIUS_PX = 35;
+export const CLUSTER_HEIGHT_PX = 32;
+export const MIN_MARKER_OVERLAP = 0.25;
 export const MIN_CLUSTER_SIZE = 2;
 
 export const stableProjectKey = (project = {}) => String(
@@ -10,43 +14,19 @@ export const stableProjectKey = (project = {}) => String(
 // of a fixed real-world distance.
 export function buildScreenSpaceClusters(entries, radius = CLUSTER_RADIUS_PX) {
   const ordered = [...entries].sort((left, right) => stableProjectKey(left.project).localeCompare(stableProjectKey(right.project)));
-  const parents = ordered.map((_, index) => index);
-  const buckets = new Map();
-  const cellSize = radius;
-  const root = (index) => {
-    while (parents[index] !== index) {
-      parents[index] = parents[parents[index]];
-      index = parents[index];
-    }
-    return index;
-  };
-  const join = (left, right) => {
-    const leftRoot = root(left);
-    const rightRoot = root(right);
-    if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
-  };
-
-  ordered.forEach((entry, index) => {
-    const cellX = Math.floor(entry.x / cellSize);
-    const cellY = Math.floor(entry.y / cellSize);
-    for (let x = cellX - 1; x <= cellX + 1; x += 1) {
-      for (let y = cellY - 1; y <= cellY + 1; y += 1) {
-        for (const otherIndex of buckets.get(`${x}:${y}`) || []) {
-          const other = ordered[otherIndex];
-          if (Math.hypot(entry.x - other.x, entry.y - other.y) <= radius) join(index, otherIndex);
-        }
-      }
-    }
-    const bucketKey = `${cellX}:${cellY}`;
-    buckets.set(bucketKey, [...(buckets.get(bucketKey) || []), index]);
-  });
-
-  return [...ordered.reduce((groups, entry, index) => {
-    const groupId = root(index);
-    if (!groups.has(groupId)) groups.set(groupId, []);
-    groups.get(groupId).push(entry);
-    return groups;
-  }, new Map()).values()];
+  const groups = [];
+  for (const entry of ordered) {
+    // Require more than 25% shared footprint area with every member, avoiding
+    // both edge contact and transitive chains of otherwise separate markers.
+    const group = groups.find((candidate) => candidate.every((other) => {
+      const overlapWidth = Math.max(0, radius - Math.abs(entry.x - other.x));
+      const overlapHeight = Math.max(0, CLUSTER_HEIGHT_PX - Math.abs(entry.y - other.y));
+      return overlapWidth * overlapHeight > radius * CLUSTER_HEIGHT_PX * MIN_MARKER_OVERLAP;
+    }));
+    if (group) group.push(entry);
+    else groups.push([entry]);
+  }
+  return groups;
 }
 
 export function createClusterRepresentations(entries, radius = CLUSTER_RADIUS_PX) {
@@ -54,4 +34,21 @@ export function createClusterRepresentations(entries, radius = CLUSTER_RADIUS_PX
     kind: group.length >= MIN_CLUSTER_SIZE ? 'cluster' : 'single',
     entries: group
   }));
+}
+
+// World pixels depend only on coordinates and zoom, never the camera center.
+export function createStablePropertyClusters(entries, zoom) {
+  const scale = 256 * 2 ** zoom;
+  const projected = entries.map((entry) => {
+    const sin = Math.sin(Math.max(-85.05112878, Math.min(85.05112878, entry.position.lat)) * Math.PI / 180);
+    return { ...entry, x: (entry.position.lng + 180) / 360 * scale,
+      y: (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale };
+  });
+  const groups = zoom >= 20
+    ? projected.map((entry) => ({ kind: 'single', entries: [entry] }))
+    : createClusterRepresentations(projected);
+  return groups.map((group) => ({ ...group, position: {
+    lat: group.entries.reduce((sum, entry) => sum + entry.position.lat, 0) / group.entries.length,
+    lng: group.entries.reduce((sum, entry) => sum + entry.position.lng, 0) / group.entries.length
+  } }));
 }

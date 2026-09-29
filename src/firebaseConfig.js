@@ -8,7 +8,7 @@ import {
   getAuth,
   initializeAuth
 } from "firebase/auth";
-import { connectFirestoreEmulator, disableNetwork, enableNetwork, getFirestore, initializeFirestore } from "firebase/firestore";
+import { connectFirestoreEmulator, getFirestore, initializeFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 import { connectStorageEmulator, getStorage } from "firebase/storage";
 import { authTrace, sanitizeAuthDiagnosticMessage } from "./utils/authDiagnostics.js";
@@ -75,36 +75,39 @@ if (typeof window === 'undefined') {
 // Keep account authorization server-backed. Persistent Firestore caching can
 // retain an old "missing" users/{uid} result across permission changes and
 // incorrectly downgrade an Admin/Seller account to Buyer mode.
+const firestoreSettings = {
+  // Let the SDK choose the compatible fallback transport when a network
+  // cannot sustain Firestore's normal streaming listener.
+  experimentalAutoDetectLongPolling: true
+};
 let firestoreInstance;
 try {
-  firestoreInstance = initializeFirestore(app, {
-    // Let the SDK choose the compatible fallback transport when a network
-    // cannot sustain Firestore's normal streaming listener.
-    experimentalAutoDetectLongPolling: true
-  }, "default");
+  firestoreInstance = initializeFirestore(app, firestoreSettings, "default");
 } catch (_) {
   firestoreInstance = getFirestore(app, "default");
+}
+let marketingFirestoreInstance;
+try {
+  marketingFirestoreInstance = initializeFirestore(app, firestoreSettings, "(default)");
+} catch (_) {
+  marketingFirestoreInstance = getFirestore(app, "(default)");
 }
 
 // Export individual Firebase services
 export const auth = authInstance;
+// Enterprise database: marketplace, accounts, leads, and all primary data.
 export const db = firestoreInstance;
+// Standard database: approved WhatsApp templates, campaigns, and recipients.
+export const marketingDb = marketingFirestoreInstance;
 export const functions = getFunctions(app, "us-central1");
 export const storage = getStorage(app);
-// Avoid repeated failing listen requests while the device is offline. The SDK
-// reconnects when connectivity returns, so current in-memory data remains
-// usable without flooding DevTools with ERR_INTERNET_DISCONNECTED messages.
-if (typeof window !== 'undefined') {
-  const pauseFirestoreWhileOffline = () => { disableNetwork(db).catch(() => {}); };
-  const resumeFirestoreWhenOnline = () => { enableNetwork(db).catch(() => {}); };
-  if (!navigator.onLine) pauseFirestoreWhileOffline();
-  window.addEventListener('offline', pauseFirestoreWhileOffline);
-  window.addEventListener('online', resumeFirestoreWhenOnline);
-}
+const viteEnv = import.meta.env || {};
 // Opt-in only: local verification must never redirect ordinary development or
 // production traffic away from the configured Firebase project.
-const viteEnv = import.meta.env || {};
 const useEmulators = viteEnv.DEV && viteEnv.VITE_USE_FIREBASE_EMULATORS === 'true';
+// Preserve this export for login modules retained during Vite hot reload.
+// Localhost alone never enables emulation.
+export const usesFirebaseEmulators = useEmulators;
 if (useEmulators) {
   const emulatorHost = viteEnv.VITE_FIREBASE_EMULATOR_HOST || '127.0.0.1';
   connectAuthEmulator(auth, `http://${emulatorHost}:9099`, { disableWarnings: true });

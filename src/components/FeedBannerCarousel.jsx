@@ -1,18 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
-import { BadgeIndianRupee, Handshake, ShieldCheck } from 'lucide-react';
+import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+
 import { auth, db } from '../firebaseConfig';
 import { readStartupCache, scheduleIdleWork, writeStartupCache } from '../utils/startupCache';
 
-const HOME_HERO = {
-  id: 'zinoo-home-hero',
-  imageUrl: '/zinoo-home-hero.webp',
-  isZinooHero: true
-};
-
 export default function FeedBannerCarousel() {
-  const [banners, setBanners] = useState(() => [HOME_HERO, ...readStartupCache('feed-banners', [])]);
+  const [banners, setBanners] = useState(() => readStartupCache('feed-banners', []));
   const [activeIndex, setActiveIndex] = useState(0);
+  const [feedEnabled, setFeedEnabled] = useState(true);
   const [dragStart, setDragStart] = useState(null);
   const [dragOffset, setDragOffset] = useState(0);
   const viewportRef = useRef(null);
@@ -30,7 +25,7 @@ export default function FeedBannerCarousel() {
         fromCache: snapshot.metadata.fromCache
       });
           const remoteBanners = snapshot.docs.map((item) => ({ id: item.id, ...item.data() })).filter((item) => item.imageUrl);
-          setBanners([HOME_HERO, ...remoteBanners]);
+          setBanners(remoteBanners);
           writeStartupCache('feed-banners', remoteBanners);
         },
         (error) => {
@@ -47,6 +42,11 @@ export default function FeedBannerCarousel() {
     }, 1400);
     return () => { cancelIdle(); unsubscribe?.(); };
   }, []);
+
+  useEffect(() => onSnapshot(doc(db, 'feedSettings', 'home'),
+    (snapshot) => setFeedEnabled(snapshot.exists() ? snapshot.data().enabled !== false : true),
+    () => setFeedEnabled(true)
+  ), []);
 
   useEffect(() => {
     if (banners.length < 2 || dragStart !== null) return undefined;
@@ -69,6 +69,8 @@ export default function FeedBannerCarousel() {
     setBanners((current) => current.filter((banner) => banner.id !== id));
     setActiveIndex(0);
   };
+
+  if (!feedEnabled || banners.length === 0) return null;
 
   return (
     <section className="feed-banner-carousel" aria-label="Featured banners">
@@ -96,21 +98,11 @@ export default function FeedBannerCarousel() {
                   src={banner.imageUrl}
                   alt=""
                   loading={index === 0 ? 'eager' : 'lazy'}
+                  fetchPriority={index === 0 ? 'high' : 'auto'}
                   decoding="async"
                   draggable="false"
                   onError={() => skipBrokenImage(banner.id)}
                 />
-                {banner.isZinooHero && (
-                  <div className="zinoo-hero-copy">
-                    <h1 className="marathi-editorial">तुमच्या स्वप्नातील <strong>प्लॉट.</strong><br />आता सहज.</h1>
-                    <div className="zinoo-hero-trust">
-                      <span><ShieldCheck /> योग्य जागा.</span>
-                      <span><BadgeIndianRupee /> योग्य किंमत.</span>
-                      <span><Handshake /> पारदर्शक व्यवहार.</span>
-                    </div>
-                    <p>शोधा · पहा · निवडा<br />तुमच्या विश्वासाचा प्लॉट.</p>
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -132,3 +124,4 @@ export default function FeedBannerCarousel() {
     </section>
   );
 }
+

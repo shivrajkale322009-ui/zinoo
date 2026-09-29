@@ -1,0 +1,43 @@
+// Rules for the Standard `(default)` database, which only stores WhatsApp
+// templates and campaign delivery data. Enterprise account records cannot be
+// read from this database, so access is granted through a server-provisioned
+// marker after the callable verifies the Enterprise admin role.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function marketingAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/whatsapp_admins/$(request.auth.uid));
+    }
+
+    match /whatsapp_admins/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if false;
+    }
+
+    match /whatsapp_templates/{templateId} {
+      allow read: if marketingAdmin();
+      allow write: if false;
+    }
+
+    match /whatsapp_campaigns/{campaignId} {
+      allow read: if marketingAdmin();
+      allow write: if false;
+      match /recipients/{recipientId} {
+        allow read: if marketingAdmin();
+        allow write: if false;
+      }
+    }
+
+    // Inbound/outbound WhatsApp messages. Only the backend writes these; the
+    // server-issued marketing-admin marker controls access to customer PII.
+    match /whatsapp_conversations/{conversationId} {
+      allow read: if marketingAdmin();
+      allow write: if false;
+      match /messages/{messageId} {
+        allow read: if marketingAdmin();
+        allow write: if false;
+      }
+    }
+  }
+}

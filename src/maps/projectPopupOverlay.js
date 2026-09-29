@@ -1,5 +1,6 @@
 import { formatIndianCurrency, formatPlotArea } from '../utils/formatIndian.js';
 import { getProjectPublicPath, getProjectPublicUrl } from '../utils/projectPublicUrl.js';
+import { getProjectShareData } from '../utils/projectShare.js';
 
 const fallbackImage = 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80';
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
@@ -135,7 +136,13 @@ export function createProjectPopupElement(project = {}, { onViewDetails, onClose
   content.appendChild(heading);
 
   if (location) content.appendChild(createElement('p', 'zinoo-map-project-location', location));
-  content.appendChild(createElement('strong', 'zinoo-map-project-price', formatIndianCurrency(project.priceFrom ?? project.startingPrice)));
+  const pricing = createElement('div', 'zinoo-map-project-pricing');
+  pricing.appendChild(createElement('strong', 'zinoo-map-project-price', formatIndianCurrency(project.startingPrice ?? project.priceFrom)));
+  const cashback = Number(project.cashbackPerGuntha ?? project.cashbackAmount);
+  if (Number.isFinite(cashback) && cashback > 0) {
+    pricing.appendChild(createElement('small', 'zinoo-map-project-cashback', `${formatIndianCurrency(cashback)} Cashback`));
+  }
+  content.appendChild(pricing);
   if (area) content.appendChild(createElement('small', 'zinoo-map-project-area', area));
 
   const actions = createElement('div', 'zinoo-map-popup-actions');
@@ -169,10 +176,10 @@ export function createProjectPopupElement(project = {}, { onViewDetails, onClose
   shareButton.addEventListener('click', async () => {
     const canonicalUrl = normalizePopupUrl(getProjectPublicUrl(project));
     if (!canonicalUrl) return;
-    const shareData = { title: projectName, text: `Explore ${projectName} on Zinoo`, url: canonicalUrl };
+    const shareData = getProjectShareData(project, canonicalUrl);
     try {
       if (navigator.share) await navigator.share(shareData);
-      else await navigator.clipboard?.writeText(shareData.url);
+      else await navigator.clipboard?.writeText(shareData.text);
     } catch {}
   });
   actions.appendChild(shareButton);

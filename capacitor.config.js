@@ -22,6 +22,21 @@ const config = {
   appName: 'Zinoo',
   webDir: 'dist',
   plugins: {
+    CapacitorUpdater: {
+      // Zinoo stages downloads itself. Never reload on background/resume.
+      autoUpdate: false,
+      directUpdate: false,
+      appReadyTimeout: 60000,
+      autoDeleteFailed: false,
+      autoDeletePrevious: false,
+      resetWhenUpdate: true,
+      statsUrl: '',
+      updateUrl: '',
+      channelUrl: '',
+      shakeMenu: false,
+      allowModifyUrl: false,
+      allowManualBundleError: false
+    },
     StatusBar: {
       style: 'DARK',
       overlaysWebView: true

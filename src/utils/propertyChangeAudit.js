@@ -6,7 +6,7 @@ const fileLabel = (item, fallback) => item?.displayName || item?.fileName || ite
 export const formatAuditValue = (value) => { if (value === '' || value === null || value === undefined) return 'Not set'; if (typeof value === 'boolean') return value ? 'Yes' : 'No'; if (typeof value === 'number') return new Intl.NumberFormat('en-IN').format(value); return String(value); };
 export function getPropertyChangeAudit(original = {}, draft = {}) {
   const changed = [];
-  const scalarFields = [['Project Name', ['name']], ['Village', ['village']], ['Location', ['locality', 'area']], ['Price', ['startingPrice', 'priceFrom']], ['Cashback Offered', ['cashbackPerGuntha', 'cashbackAmount']], ['Contact number', ['contactNumber', 'siteVisitContact']], ['WhatsApp number', ['whatsappNumber']], ['Developer', ['developer', 'developerName']], ['Land zone', ['landZone']], ['NA status', ['naStatus']], ['Installment purchase', ['installmentPurchaseAvailable']], ['Bank loan', ['bankLoan']], ['About Project', ['description']], ['Address', ['completeAddress']], ['Exact map marker confirmed', ['mapMarkerConfirmed']]];
+  const scalarFields = [['Seller', ['sellerId', 'sellerUid', 'ownerId']], ['Project Name', ['name']], ['Village', ['village']], ['Location', ['locality', 'area']], ['Price', ['startingPrice', 'priceFrom']], ['Cashback Offered', ['cashbackPerGuntha', 'cashbackAmount']], ['Contact number', ['contactNumber', 'siteVisitContact']], ['WhatsApp number', ['whatsappNumber']], ['Developer', ['developer', 'developerName']], ['Land zone', ['landZone']], ['NA status', ['naStatus']], ['Installment purchase', ['installmentPurchaseAvailable']], ['Bank loan', ['bankLoan']], ['About Project', ['description']], ['Address', ['completeAddress']], ['Exact map marker confirmed', ['mapMarkerConfirmed']]];
   scalarFields.forEach(([label, keys]) => { const before = valueFor(original, keys); const after = valueFor(draft, keys); if (!same(before, after)) changed.push({ label, before: formatAuditValue(before), after: formatAuditValue(after) }); });
   if (!same(original.layoutPolygon, draft.layoutPolygon) || !same([original.latitude, original.longitude], [draft.latitude, draft.longitude])) changed.push({ label: 'Location / layout', before: 'Updated map data', after: 'Updated map data' });
   const added = []; const removed = [];
@@ -18,3 +18,4 @@ export function getPropertyChangeAudit(original = {}, draft = {}) {
   if (!same(valueFor(original, ['thumbnail', 'heroImage']), valueFor(draft, ['thumbnail', 'heroImage']))) changed.push({ label: 'Hero image', before: 'Current image', after: 'New image' });
   return { changed, added, removed, hasChanges: Boolean(changed.length || added.length || removed.length) };
 }
+

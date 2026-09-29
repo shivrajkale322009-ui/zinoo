@@ -1,5 +1,6 @@
 import React from 'react';
-import { Check, FileText } from 'lucide-react';
+import { BadgeCheck } from 'lucide-react';
+import BuyerDetailSection from './BuyerDetailSection';
 import { getProjectDocumentLabel } from '../../../utils/projectDocuments';
 import { ImageLightbox, InAppDocumentViewer } from '../../PropertyMediaDocumentsManager';
 
@@ -12,7 +13,7 @@ export default function BuyerProjectMedia({
   galleryViewerIndex,
   documentViewer,
   documents,
-  documentsLoading,
+  documentsLoading = false,
   order,
   onViewGallery,
   onOpenGalleryImage,
@@ -44,24 +45,25 @@ export default function BuyerProjectMedia({
   }
 
   if (variant === 'documents') {
+    const visibleDocuments = selectedDisplay.documents.showOnDetails ? (documents || []) : [];
+
     return (
-      selectedDisplay.documents.showOnDetails && <section className="reference-section premium-documents-section" style={{ order }}>
-        <div className="reference-section-title"><h3>Documents</h3>{documents.length > 0 && <button type="button" onClick={() => onViewDocument(documents[0])}>View all</button>}</div>
-        {documentsLoading ? <p>Loading documents…</p> : documents.length ? (
-          <div className="buyer-document-list">
-            {documents.map((document) => (
+      <BuyerDetailSection title="Documents" className="premium-documents-section" style={{ order }}>
+        {visibleDocuments.length > 0 ? <>
+        <div className="reference-section-title"><button type="button" onClick={() => onViewDocument(visibleDocuments[0])}>View all</button></div>
+        <div className="buyer-document-list">
+            {visibleDocuments.map((document) => (
               <article key={document.id || document.url}>
-                <FileText size={22} />
-                <div>
+                <div className="buyer-document-name">
                   <strong>{document.displayName || getProjectDocumentLabel(document.type)}</strong>
-                  <small><Check size={13} /> Verified</small>
+                  <BadgeCheck className="property-name-verified-badge buyer-document-verified-badge" aria-label="Verified document" />
                 </div>
                 <button type="button" onClick={() => onViewDocument(document)}>View</button>
               </article>
             ))}
-          </div>
-        ) : <p>No verified documents are available.</p>}
-      </section>
+        </div>
+        </> : <p className="buyer-detail-empty" role="status">{documentsLoading ? 'Loading documents…' : 'No documents available yet. Contact us on WhatsApp for details.'}</p>}
+      </BuyerDetailSection>
     );
   }
 

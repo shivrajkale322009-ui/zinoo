@@ -4,4 +4,8 @@
     <string name="title_activity_main">Zinoo</string>
     <string name="package_name">com.druvio.app</string>
     <string name="custom_url_scheme">com.druvio.app</string>
+    <!-- Replace these placeholders with the values from your Facebook app dashboard. -->
+    <string name="facebook_app_id">YOUR_FACEBOOK_APP_ID</string>
+    <string name="fb_login_protocol_scheme">fbYOUR_FACEBOOK_APP_ID</string>
+    <string name="facebook_client_token">YOUR_FACEBOOK_CLIENT_TOKEN</string>
 </resources>

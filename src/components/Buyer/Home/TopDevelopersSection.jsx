@@ -25,7 +25,7 @@ export default function TopDevelopersSection({ onViewDeveloper }) {
   return (
     <section className="buyer-top-developers" aria-labelledby="top-developers-title">
       <header className="buyer-top-developers-head">
-        <div><h4 id="top-developers-title">Top Developers in Chakan</h4><p>Trusted plotting developers building premium communities around Chakan.</p></div>
+        <div><h4 id="top-developers-title">Top Developers in Chakan</h4></div>
         <button type="button" onClick={() => document.querySelector('.buyer-developer-rail')?.scrollTo({ left: 0, behavior: 'smooth' })}>View All <ArrowRight size={15} /></button>
       </header>
       <div className="buyer-developer-rail">

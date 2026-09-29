@@ -2,10 +2,53 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWebRecaptchaLifecycle } from './webRecaptchaLifecycle.js';
 
+test('reopening login preserves the previous pending widget and cleanup leaves the new widget alive', async () => {
+  const originalDocument = globalThis.document;
+  const originalSetTimeout = globalThis.setTimeout;
+  const deferred = [];
+  const children = new Set();
+  const host = {
+    isConnected: true,
+    appendChild(node) { children.add(node); },
+    replaceChildren() { children.clear(); }
+  };
+  globalThis.document = { createElement: () => ({
+    setAttribute() {}, remove() { children.delete(this); }
+  }) };
+  globalThis.setTimeout = (callback) => { deferred.push(callback); return 1; };
+  try {
+    const make = () => createWebRecaptchaLifecycle({
+      getContainer: () => host,
+      createVerifier: (container) => ({ container, clear() {} })
+    });
+    const first = make();
+    let release;
+    const request = first.execute(() => new Promise((resolve) => { release = resolve; }));
+    await Promise.resolve();
+    const firstWidget = first.getCurrent().container;
+    first.dispose();
+    const second = make();
+    const secondWidget = (await second.initialize()).container;
+    assert.equal(first.getState().requestInFlight, true);
+    assert.equal(children.has(firstWidget), true);
+    assert.equal(children.has(secondWidget), true);
+    release({ verificationId: 'finished' });
+    await request;
+    deferred.forEach((callback) => callback());
+    assert.equal(children.has(firstWidget), false);
+    assert.equal(children.has(secondWidget), true);
+    second.dispose();
+    assert.equal(children.size, 0);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
 const setup = () => {
   const events = [];
   const verifiers = [];
-  const host = { isConnected: true, parentElement: {} };
+  const host = { isConnected: true, parentElement: {}, clearedWidgetCount: 0, replaceChildren() { this.clearedWidgetCount += 1; } };
   const lifecycle = createWebRecaptchaLifecycle({
     getContainer: () => host,
     createVerifier: (container, callbacks) => {
@@ -25,6 +68,7 @@ test('initializes one verifier against the stable host and reuses it', async () 
   assert.equal(first, second);
   assert.equal(first.container, host);
   assert.equal(verifiers.length, 1);
+  assert.equal(host.clearedWidgetCount, 0);
 });
 
 test('keeps the verifier and its DOM alive after a successful OTP request', async () => {
@@ -35,8 +79,8 @@ test('keeps the verifier and its DOM alive after a successful OTP request', asyn
   assert.equal(lifecycle.getCurrent(), verifiers[0]);
 });
 
-test('keeps failed CAPTCHA DOM intact until a later explicit retry', async () => {
-  const { lifecycle, verifiers } = setup();
+test('clears the failed verifier without clearing the shared host on retry', async () => {
+  const { host, lifecycle, verifiers } = setup();
   await assert.rejects(lifecycle.execute(() => Promise.reject(
     Object.assign(new Error('expired'), { code: 'auth/invalid-app-credential' })
   )), { code: 'auth/invalid-app-credential' });
@@ -47,6 +91,7 @@ test('keeps failed CAPTCHA DOM intact until a later explicit retry', async () =>
   assert.equal(verifiers[0].clearCount, 1);
   assert.notEqual(retryVerifier, verifiers[0]);
   assert.equal(verifiers.length, 2);
+  assert.equal(host.clearedWidgetCount, 0);
 });
 
 test('expiration and widget errors mark the verifier invalid without deleting callback DOM', async () => {
@@ -98,4 +143,26 @@ test('close or unmount defers cleanup while Firebase owns the verifier', async (
 test('fails cleanly when the persistent host is unavailable', async () => {
   const lifecycle = createWebRecaptchaLifecycle({ createVerifier: () => null, getContainer: () => null });
   await assert.rejects(lifecycle.initialize(), { code: 'auth/captcha-check-failed' });
+});
+
+test('uses a fresh child element for each browser reCAPTCHA verifier', async () => {
+  const originalDocument = globalThis.document;
+  const widgets = [];
+  globalThis.document = {
+    createElement: () => ({ setAttribute() {}, remove() { this.removed = true; } })
+  };
+  try {
+    const host = { isConnected: true, replaceChildren() {}, appendChild(node) { widgets.push(node); } };
+    const lifecycle = createWebRecaptchaLifecycle({
+      getContainer: () => host,
+      createVerifier: (container) => ({ container, clear() {} })
+    });
+    const first = await lifecycle.initialize();
+    lifecycle.invalidate('retry');
+    const second = await lifecycle.initialize();
+    assert.notEqual(first.container, second.container);
+    assert.equal(widgets.length, 2);
+  } finally {
+    globalThis.document = originalDocument;
+  }
 });

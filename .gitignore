@@ -33,9 +33,20 @@ functions/lib/
 .env.development.local
 .env.test.local
 .env.production.local
+functions/.env.*
+!functions/.env.example
+
+# Local customer exports and repair backups
+zinoo-whatsapp-leads-*.csv
+functions/lead-timestamp-backup-*.json
+whatsapp-template-review.png
 
 # Firebase
 .firebase/
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
+
+# Local live-update signing key and generated release archives
+updates/private/
+updates/releases/

@@ -83,8 +83,10 @@ if (!searchableText.includes('GUEST_BUYER_APP') || !searchableText.includes('zin
 const androidBuildText = existsSync(androidBuildFile) ? readFileSync(androidBuildFile, 'utf8') : '';
 const versionCode = Number(androidBuildText.match(/versionCode\s+(\d+)/)?.[1] || 0);
 const versionName = androidBuildText.match(/versionName\s+["']([^"']+)["']/)?.[1] || '';
-if (versionCode < 13 || versionName !== '1.0.5') {
-  fail(`Expected Android release 1.0.5 (13), found ${versionName || 'unknown'} (${versionCode || 'unknown'}).`);
+const runtimePath = path.join(root, 'updates', 'android-runtime.json');
+const runtime = existsSync(runtimePath) ? JSON.parse(readFileSync(runtimePath, 'utf8')) : {};
+if (String(versionCode) !== runtime.nativeBuild || versionName !== runtime.versionName) {
+  fail(`Android version ${versionName} (${versionCode}) differs from the captured update runtime.`);
 }
 
 if (!existsSync(pluginRegistryPath)) {
@@ -97,8 +99,22 @@ if (!existsSync(pluginRegistryPath)) {
       && plugin?.classpath === 'io.capawesome.capacitorjs.plugins.firebase.authentication.FirebaseAuthenticationPlugin'
     );
     if (!firebaseAuthRegistered) fail('FirebaseAuthentication plugin is not registered in capacitor.plugins.json.');
+    for (const pkg of ['@capgo/capacitor-updater', '@capawesome/capacitor-app-update']) {
+      if (!plugins.some((plugin) => plugin.pkg === pkg)) fail(`Update plugin is not registered: ${pkg}`);
+    }
   } catch (error) {
     fail(`Could not parse capacitor.plugins.json: ${error.message}`);
+  }
+}
+
+const nativeConfigPath = path.join(root, 'android/app/src/main/assets/capacitor.config.json');
+if (existsSync(nativeConfigPath)) {
+  const nativeConfig = JSON.parse(readFileSync(nativeConfigPath, 'utf8'));
+  if (nativeConfig.server?.url) fail('Release configuration must not load a development server.');
+  const updater = nativeConfig.plugins?.CapacitorUpdater;
+  if (updater?.autoUpdate !== false || updater?.directUpdate !== false || updater?.autoDeletePrevious !== false
+      || updater?.resetWhenUpdate !== true || !(updater?.appReadyTimeout > 0) || updater?.statsUrl !== '') {
+    fail('Native live-update safeguards are missing from the copied configuration.');
   }
 }
 

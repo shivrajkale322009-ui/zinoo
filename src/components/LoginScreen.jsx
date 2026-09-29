@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { signInWithCredential, signInWithPopup, signInWithRedirect, GoogleAuthProvider, PhoneAuthProvider, RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import { Capacitor } from '@capacitor/core';
@@ -8,6 +9,7 @@ import { ArrowRight, ChevronLeft, Loader, ShieldCheck } from 'lucide-react';
 import { assertWebOtpOnline, normalizeIndianMobileNumber, normalizePhoneAuthError, phoneAuthErrorMessage } from '../utils/phoneAuth';
 import { authFailureDetails, authTrace, sanitizeAuthDiagnosticMessage, startAuthAttempt } from '../utils/authDiagnostics';
 import { createWebRecaptchaLifecycle } from '../utils/webRecaptchaLifecycle';
+import { delayOtpRetry, otpRetrySeconds } from '../utils/otpRetryCooldown';
 
 const POPUP_FALLBACK_ERRORS = new Set([
   'auth/popup-blocked',
@@ -34,6 +36,11 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [resendSeconds, setResendSeconds] = useState(25);
+  const [retrySeconds, setRetrySeconds] = useState(() => otpRetrySeconds());
+  useEffect(() => {
+    const timer = window.setInterval(() => setRetrySeconds(otpRetrySeconds()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const otpInputRefs = useRef([]);
   const mountedRef = useRef(true);
   const authRequestInFlight = useRef(false);
@@ -45,6 +52,8 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
   const appVersionRef = useRef(null);
   const brandTapCountRef = useRef(0);
   const brandTapResetRef = useRef(null);
+  const countryCodeTapCountRef = useRef(0);
+  const countryCodeTapResetRef = useRef(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -101,12 +110,13 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
       webRecaptchaLifecycleRef.current = createWebRecaptchaLifecycle({
         getContainer: () => document.getElementById('recaptcha-container'),
         createVerifier: (container, callbacks) => new RecaptchaVerifier(auth, container, callbacks),
-        onEvent: ({ type, reason }) => {
+        onEvent: ({ type, reason, code }) => {
           const container = document.getElementById('recaptcha-container');
           authTrace(`WEB_RECAPTCHA_${type.toUpperCase()}`, {
             flow: 'phone',
             sdk: 'firebase/auth',
             reason: reason || null,
+            errorCode: code || null,
             origin: window.location.origin,
             containerPresent: Boolean(container),
             containerConnected: Boolean(container?.isConnected),
@@ -129,6 +139,7 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
     clearRecaptcha();
     void clearNativePhoneAttempt();
     if (brandTapResetRef.current) window.clearTimeout(brandTapResetRef.current);
+    if (countryCodeTapResetRef.current) window.clearTimeout(countryCodeTapResetRef.current);
   }, [clearNativePhoneAttempt, clearRecaptcha]);
 
   useEffect(() => {
@@ -377,9 +388,34 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
       }, 2500);
     }
   };
+  const handleCountryCodeTap = () => {
+    countryCodeTapCountRef.current += 1;
+    if (countryCodeTapCountRef.current === 5) {
+      if (countryCodeTapResetRef.current) window.clearTimeout(countryCodeTapResetRef.current);
+      countryCodeTapCountRef.current = 0;
+      countryCodeTapResetRef.current = null;
+      void handleGoogleLogin();
+      return;
+    }
+    if (!countryCodeTapResetRef.current) {
+      countryCodeTapResetRef.current = window.setTimeout(() => {
+        countryCodeTapCountRef.current = 0;
+        countryCodeTapResetRef.current = null;
+      }, 2500);
+    }
+  };
   const handleSendOtp = async (event) => {
     event.preventDefault(); if (authRequestInFlight.current) return;
-    authRequestInFlight.current = true; setLoading(true); setError('');
+    if (otpRetrySeconds() > 0) { setRetrySeconds(otpRetrySeconds()); return; }
+    startAuthAttempt();
+    authRequestInFlight.current = true;
+    // Paint the pending state before the native bridge/reCAPTCHA work begins.
+    // On slower devices that setup can otherwise keep the Verify button looking
+    // tappable for a noticeable moment.
+    flushSync(() => {
+      setLoading(true);
+      setError('');
+    });
     const normalizedPhone = normalizeIndianMobileNumber(phoneNumber);
     try {
       if (!normalizedPhone) throw Object.assign(new Error('Invalid Indian mobile number.'), { code: 'auth/invalid-phone-number' });
@@ -392,7 +428,7 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
       }
       assertWebOtpOnline(navigator.onLine);
       console.info('[Zinoo Auth] Web phone OTP request prepared', {
-        phoneNumber: normalizedPhone,
+        phoneNumberFormat: '+91**********',
         isE164IndianNumber: /^\+91[6-9]\d{9}$/.test(normalizedPhone),
         platform: Capacitor.getPlatform(),
         projectId: firebaseConfigDiagnostics.projectId,
@@ -431,12 +467,13 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
       setResendSeconds(25);
       setStep('otp');
     } catch (err) {
+      const cooldown = delayOtpRetry(err?.code);
       if (!mountedRef.current) return;
+      setRetrySeconds(cooldown);
       console.error('[Zinoo Auth] signInWithPhoneNumber rejected', {
         name: err?.name || 'Error',
         code: err?.code || 'unknown',
-        message: err?.message || 'Unknown Firebase phone authentication error',
-        customData: err?.customData ?? null,
+        message: sanitizeAuthDiagnosticMessage(err?.message),
         phoneNumberFormat: normalizedPhone ? '+91**********' : null,
         verifierPresent: Boolean(webRecaptchaLifecycleRef.current?.getCurrent()),
         projectId: firebaseConfigDiagnostics.projectId,
@@ -461,10 +498,10 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
     authRequestInFlight.current = true; setLoading(true); setError('');
     try {
       if (confirmationResult.platform === 'android') {
-        await confirmNativePhoneCredential(confirmationResult.verificationId, otp, 'code-verification');
+        await confirmNativePhoneCredential(confirmationResult.verificationId, otp.replace(/\D/g, ''), 'code-verification');
         return;
       }
-      await confirmationResult.confirm(otp);
+      await confirmationResult.confirm(otp.replace(/\D/g, ''));
     } catch (err) {
       if (!mountedRef.current) return;
       const diagnostic = await logPhoneAuthFailure('code-verification', err);
@@ -486,19 +523,28 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
   };
   const updateOtpDigit = (index, rawValue) => {
     const digit = rawValue.replace(/\D/g, '').slice(-1);
-    const digits = otp.padEnd(6, ' ').split(' ');
+    const digits = Array.from(otp.padEnd(6, ' '), (value) => (/\d/.test(value) ? value : ' '));
     digits[index] = digit || ' ';
-    setOtp(digits.join('').replace(/ /g, ''));
+    setOtp(digits.join(''));
     if (digit && index < 5) otpInputRefs.current[index + 1]?.focus();
   };
   const handleOtpKeyDown = (index, event) => {
-    if (event.key === 'Backspace' && !otp[index] && index > 0) otpInputRefs.current[index - 1]?.focus();
+    if (event.key !== 'Backspace' && event.key !== 'Delete') return;
+    event.preventDefault();
+    const digits = Array.from(otp.padEnd(6, ' '), (value) => (/\d/.test(value) ? value : ' '));
+    if (event.key === 'Backspace' && !/\d/.test(digits[index]) && index > 0) {
+      digits[index - 1] = ' ';
+      otpInputRefs.current[index - 1]?.focus();
+    } else {
+      digits[index] = ' ';
+    }
+    setOtp(digits.join(''));
   };
   const handleOtpPaste = (event) => {
     const pasted = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
     if (!pasted) return;
     event.preventDefault();
-    setOtp(pasted);
+    setOtp(pasted.padEnd(6, ' '));
     otpInputRefs.current[Math.min(pasted.length, 6) - 1]?.focus();
   };
   const formattedPhone = phoneNumber ? `${phoneNumber.slice(0, 5)} ${phoneNumber.slice(5)}` : '';
@@ -506,27 +552,27 @@ function LoginScreen({ onBackToLanding, initialStep = 'home', initialPhone = '',
   return <div className={`login-screen ${presentation === 'modal' ? 'login-screen-modal' : ''}`} role={presentation === 'modal' ? 'dialog' : undefined} aria-modal={presentation === 'modal' ? 'true' : undefined} aria-label={presentation === 'modal' ? 'Sign in to continue' : undefined}>
     {onBackToLanding && <button type="button" className="login-back-to-site" onClick={onBackToLanding} aria-label="Close login"><ChevronLeft size={20} /></button>}
     <header className="login-hero">
-      <button type="button" className="login-brand-trigger" onClick={handleBrandTap} aria-label="Zinoo">
+      {presentation !== 'modal' && <button type="button" className="login-brand-trigger" onClick={handleBrandTap} aria-label="Zinoo">
         <img className="login-brand-wordmark" src="/brand/zinoo-logo.png" alt="Zinoo"/>
-      </button>
-      <p>Find verified plots. Book visits. Claim cashback.</p>
+      </button>}
+      {presentation !== 'modal' && <p>Find verified plots. Book visits. Claim cashback.</p>}
     </header>
 
     <main className="login-auth-panel">{error && <div className="login-error">⚠️ {error}</div>}
       {(step === 'home' || step === 'phone') && <form onSubmit={handleSendOtp} className="login-form login-phone-entry">
         <label className="login-mobile-label" htmlFor="login-mobile-number">Mobile number</label>
-        <label className="login-phone-field"><span>+91</span><input id="login-mobile-number" type="tel" inputMode="numeric" autoComplete="tel-national" placeholder="Enter mobile number" value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value.replace(/\D/g, '').slice(0, 10))} disabled={loading} required autoFocus/></label>
-        <button id="login-send-otp-button" type="submit" disabled={loading || phoneNumber.length !== 10} className="login-submit">{loading ? <><Loader className="spin"/> Verifying...</> : 'Verify'}</button>
+        <div className="login-phone-field"><button type="button" className="login-country-code-trigger" onClick={handleCountryCodeTap} aria-label="India country code, tap five times to choose a Google account">+91</button><input id="login-mobile-number" type="tel" inputMode="numeric" autoComplete="tel-national" placeholder="Enter mobile number" value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value.replace(/\D/g, '').slice(0, 10))} disabled={loading} required autoFocus/></div>
+        <button id="login-send-otp-button" type="submit" disabled={loading || retrySeconds > 0 || phoneNumber.length !== 10} className="login-submit">{loading ? <><Loader className="spin"/> Verifying...</> : retrySeconds > 0 ? `Retry in ${retrySeconds}s` : 'Verify'}</button>
       </form>}
       {step === 'otp' && <form onSubmit={handleVerifyOtp} className="login-form">
         <div className="login-form-heading"><div><h1>Verify OTP</h1><p>Enter the 6-digit code sent to<br/><strong>+91 {formattedPhone}</strong></p></div></div>
-        <div className="login-otp-cells" onPaste={handleOtpPaste}>{Array.from({ length: 6 }, (_, index) => <input key={index} ref={(element) => { otpInputRefs.current[index] = element; }} type="text" inputMode="numeric" autoComplete={index === 0 ? 'one-time-code' : 'off'} maxLength="1" value={otp[index] || ''} onChange={(event) => updateOtpDigit(index, event.target.value)} onKeyDown={(event) => handleOtpKeyDown(index, event)} aria-label={`OTP digit ${index + 1}`} autoFocus={index === 0}/>)}</div>
+        <div className="login-otp-cells" onPaste={handleOtpPaste}>{Array.from({ length: 6 }, (_, index) => <input key={index} ref={(element) => { otpInputRefs.current[index] = element; }} type="text" inputMode="numeric" autoComplete={index === 0 ? 'one-time-code' : 'off'} maxLength="1" value={/\d/.test(otp[index]) ? otp[index] : ''} onChange={(event) => updateOtpDigit(index, event.target.value)} onKeyDown={(event) => handleOtpKeyDown(index, event)} aria-label={`OTP digit ${index + 1}`} autoFocus={index === 0}/>)}</div>
         <p className="login-resend">Didn&apos;t receive OTP? {resendSeconds > 0 ? <>Resend in <strong>00:{String(resendSeconds).padStart(2, '0')}</strong></> : <button type="button" onClick={() => go('phone')}>Resend now</button>}</p>
-        <button type="submit" disabled={loading || otp.length !== 6} className="login-submit">{loading ? <><Loader className="spin"/> Verifying...</> : <>Verify &amp; Continue <ArrowRight/></>}</button>
+        <button type="submit" disabled={loading || otp.replace(/\D/g, '').length !== 6} className="login-submit">{loading ? <><Loader className="spin"/> Verifying...</> : <>Verify &amp; Continue <ArrowRight/></>}</button>
         <p className="login-form-security"><ShieldCheck/> Your verification helps us keep Zinoo secure.</p>
       </form>}
     </main>
-    <footer className="login-terms">By signing in, you agree to Zinoo&apos;s <a href="/terms-and-conditions">Terms of Service</a> and <a href="/privacy-policy.html">Privacy Policy</a></footer>
+    {presentation !== 'modal' && <footer className="login-terms">By signing in, you agree to Zinoo&apos;s <a href="/terms-and-conditions">Terms of Service</a> and <a href="/privacy-policy.html">Privacy Policy</a></footer>}
   </div>;
 }
 

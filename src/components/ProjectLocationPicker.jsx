@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { Check, Expand, LocateFixed, MapPin, Pencil, RotateCcw, Undo2, X } from 'lucide-react';
-import { loadGoogleMaps } from '../maps/googleMaps';
+import { loadGeometryLibrary, loadGoogleMaps } from '../maps/googleMaps';
 import { functions } from '../firebaseConfig';
 import { getGoogleMapsErrorMessage, googleMapsConfig, googleMapsMissingMessage } from '../maps/googleMapsConfig';
 import { buildProjectGeometry, normalizeProjectPolygon } from '../utils/projectGeometry';
@@ -217,10 +217,11 @@ export default function ProjectLocationPicker({
     showPolygon(draftPoints, true);
   };
 
-  const saveBoundary = () => {
+  const saveBoundary = async () => {
     try {
       const path = polygonRef.current?.getPath().getArray().map((point) => point.toJSON()) || draftPoints;
-      const geometry = buildProjectGeometry(path, window.google.maps);
+      const maps = await loadGeometryLibrary();
+      const geometry = buildProjectGeometry(path, maps);
       onLayoutChange?.(geometry);
       setDraftPoints([]);
       setDrawing(false);

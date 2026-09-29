@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   File,
   FileImage,
@@ -28,11 +29,12 @@ const VIDEO_TYPES = new Set(['video/mp4', 'video/webm']);
 const DOCUMENT_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'zip', 'rar']);
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
-const MAX_DOCUMENT_SIZE = 15 * 1024 * 1024;
+const MAX_DOCUMENT_SIZE = 50 * 1024 * 1024;
 
 const idFor = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const extensionFor = (name = '') => name.split('.').pop()?.toLowerCase() || '';
 const safeFileName = (name = 'file') => name.replace(/[^a-zA-Z0-9._-]/g, '-');
+const documentContentDisposition = (name) => `inline; filename="${safeFileName(name)}"`;
 const fileLabel = (bytes = 0) => {
   if (!bytes) return '—';
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -64,6 +66,8 @@ export const normalizePropertyImages = (property) => {
     : [
         ...(Array.isArray(property?.galleryImages) ? property.galleryImages : []),
         ...(Array.isArray(property?.images) ? property.images : []),
+        ...(Array.isArray(property?.gallery) ? property.gallery : []),
+        ...(Array.isArray(property?.display?.media?.gallery) ? property.display.media.gallery : []),
         ...legacy
       ];
   const seen = new Set();
@@ -117,9 +121,12 @@ export const isGoogleDocumentUrl = (value) => {
     || parsed.hostname.endsWith('.drive.google.com');
 };
 
+const isMobileDocumentViewport = () => typeof window !== 'undefined'
+  && (window.matchMedia?.('(max-width: 768px)').matches || window.innerWidth <= 768);
+
 /**
- * Routes Google-hosted documents directly to a browser tab. Other supported
- * documents continue into Zinoo's shared in-app viewer.
+ * Mobile keeps the current page behind a large preview dialog. Desktop
+ * opens externally hosted or unsupported formats in a separate tab.
  */
 export const openDocumentPreview = (document, setViewer) => {
   const sourceUrl = documentUrl(document);
@@ -128,6 +135,10 @@ export const openDocumentPreview = (document, setViewer) => {
     return;
   }
   const previewKind = getProjectDocumentPreviewKind(document);
+  if (isMobileDocumentViewport()) {
+    setViewer(document);
+    return;
+  }
   if (isGoogleDocumentUrl(sourceUrl) || previewKind === 'external') {
     const opened = window.open(sourceUrl, '_blank');
     if (!opened) {
@@ -154,7 +165,22 @@ function UploadTask({ item }) {
 
 export function InAppDocumentViewer({ document: activeDocument, onClose }) {
   const [loadError, setLoadError] = useState('');
+  const closeButtonRef = useRef(null);
   useEffect(() => setLoadError(''), [activeDocument]);
+  useEffect(() => {
+    if (!activeDocument) return;
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeButtonRef.current?.focus();
+    const handleKey = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKey);
+      previousFocus?.focus?.();
+    };
+  }, [activeDocument, onClose]);
   if (!activeDocument) return null;
   const name = documentName(activeDocument);
   const previewKind = getProjectDocumentPreviewKind(activeDocument);
@@ -181,12 +207,12 @@ export function InAppDocumentViewer({ document: activeDocument, onClose }) {
   // Google Docs/Drive URL can never become an iframe source.
   const canRenderDirectly = validUrl && !isGoogleHostedDocument && (isImage || isText || isPDF);
 
-  return (
+  return createPortal(
     <div className="document-viewer-overlay" role="dialog" aria-modal="true" aria-labelledby="property-document-title">
       <div className="document-viewer-shell">
         <div className="document-viewer-header">
           <div><span>Document preview</span><h3 id="property-document-title">{name}</h3></div>
-          <button type="button" onClick={onClose} aria-label="Close document viewer"><X size={19} /></button>
+          <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="Close document viewer"><X size={19} /></button>
         </div>
         <div className="document-viewer-content">
           {errorMessage ? (
@@ -214,7 +240,7 @@ export function InAppDocumentViewer({ document: activeDocument, onClose }) {
           )}
         </div>
       </div>
-    </div>
+    </div>, document.body
   );
 }
 
@@ -721,6 +747,7 @@ export default function PropertyMediaDocumentsManager({ property, user, onChange
     try {
       const task = uploadBytesResumable(assetRef, file, {
         contentType: file.type || 'application/octet-stream',
+        contentDisposition: documentContentDisposition(file.name),
         customMetadata: { projectId: property.id, uploadedBy: user.uid, documentType: replacing?.type || 'other' }
       });
       const snapshot = await new Promise((resolve, reject) => task.on('state_changed',
@@ -774,7 +801,7 @@ export default function PropertyMediaDocumentsManager({ property, user, onChange
     const selected = [...files];
     const invalid = selected.find((file) => !DOCUMENT_EXTENSIONS.has(extensionFor(file.name)) || file.size > MAX_DOCUMENT_SIZE);
     if (invalid) {
-      setError('Documents must use a supported format and be no larger than 15 MB.');
+      setError('Documents must use a supported format and be no larger than 50 MB.');
       return;
     }
     try {

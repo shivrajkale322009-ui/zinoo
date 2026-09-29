@@ -7,7 +7,22 @@ export async function ensureUserDoc(db, user) {
     const ref = doc(db, 'users', user.uid);
     const result = await runTransaction(db, async (transaction) => {
       const snap = await transaction.get(ref);
-      if (snap.exists()) return { profile: snap.data(), existing: true };
+      if (snap.exists()) {
+        // Keep a server-authoritative activity timestamp so the admin buyer
+        // directory can be ordered by the most recent Zinoo sign-in.
+        const activityUpdate = {
+          lastSignedInAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
+
+        // Older accounts may predate first-sign-in tracking. Capture the
+        // first observed sign-in once, then leave it unchanged forever.
+        if (!snap.data().firstSignedInAt) {
+          activityUpdate.firstSignedInAt = serverTimestamp();
+        }
+        transaction.update(ref, activityUpdate);
+        return { profile: snap.data(), existing: true };
+      }
 
       const profile = {
         uid: user.uid,
@@ -15,7 +30,9 @@ export async function ensureUserDoc(db, user) {
         email: user.email || '',
         phone: user.phoneNumber || '',
         permissions: { buyer: true, seller: false, admin: false },
-        createdAt: serverTimestamp()
+        createdAt: serverTimestamp(),
+        firstSignedInAt: serverTimestamp(),
+        lastSignedInAt: serverTimestamp()
       };
       transaction.set(ref, profile);
       return { profile, existing: false };

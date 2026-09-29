@@ -21,7 +21,6 @@ import {
   Plus,
   Search,
   Settings,
-  Sparkles,
   ShieldCheck,
   ShieldX,
   Heart,
@@ -39,6 +38,7 @@ import { getCashbackPerGuntha, withCanonicalPlotArea } from '../utils/projectAre
 import { getProjectApprovalStatus, PROPERTY_STATUS } from '../utils/projectVisibility';
 import useMediaQuery from '../utils/useMediaQuery';
 import CashbackWorkspace from './CashbackWorkspace';
+import { getPropertyDisplayModel } from '../utils/propertyDisplayModel';
 import PropertyDisplayEditor from './PropertyDisplayEditor';
 import PropertyRejectionModal from './PropertyRejectionModal';
 import UserAvatar from './UserAvatar';
@@ -430,8 +430,8 @@ function SellerDashboard({
       setDocumentError('Your sign-in session is unavailable. Please sign in again before uploading a document.');
       return;
     }
-    if (file.size > 15 * 1024 * 1024) {
-      setDocumentError('Document must be 15 MB or smaller.');
+    if (file.size > 50 * 1024 * 1024) {
+      setDocumentError('Document must be 50 MB or smaller.');
       return;
     }
     if (!['application/pdf', 'image/jpeg', 'image/png'].includes(contentType)) {
@@ -446,6 +446,7 @@ function SellerDashboard({
     try {
       const snapshot = await uploadBytes(storageRef, file, {
         contentType,
+        contentDisposition: `inline; filename="${safeName}"`,
         customMetadata: {
           ownerId,
           sellerUid: ownerId,
@@ -672,7 +673,6 @@ function SellerDashboard({
         {!isAndroidLayout && <header className="seller-desktop-topbar">
           {isAdminView && selectedSeller && <button type="button" className="seller-header-admin-control" onClick={onBackToAdmin} aria-label="Exit seller mode and return to admin" title="Return to admin"><ShieldCheck size={21} /></button>}
           {!isAndroidLayout && <div className="seller-topbar-actions">
-            {activeTab === 'projects' && <button type="button" className="seller-dashboard-quick-create" onClick={() => selectTab('add')}><Plus size={17} /> Create listing</button>}
             <NotificationCenter notifications={sellerNotifications} userId={user?.uid} />
           </div>}
         </header>}
@@ -709,10 +709,14 @@ function SellerDashboard({
           <div className="seller-mobile-project-simple-list">
             {mobileProjects.map((project) => {
               const status = getProjectApprovalStatus(project);
-              const location = [project.village, project.area || project.locality].filter(Boolean).join(', ') || 'Location pending';
+              const display = getPropertyDisplayModel(project);
+              const photo = display.media.heroImage || display.media.gallery[0]?.url || project.thumbnailUrl;
+              const projectName = project.name || display.basic.projectName || 'Unnamed project';
               return <button type="button" key={project.id || project.name} className="seller-mobile-project-simple-row" onClick={() => handleEditClick(project)}>
-                <span className="seller-mobile-project-simple-icon"><Building size={21} /></span>
-                <span className="seller-mobile-project-simple-location"><MapPin size={14} /> {location}</span>
+                <span className="seller-mobile-project-photo">
+                  {photo ? <img src={photo} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} /> : <span>No photo</span>}
+                </span>
+                <span className="seller-mobile-project-name">{projectName}</span>
                 <span className="seller-mobile-project-simple-meta">
                   <strong className={status === PROPERTY_STATUS.ACTIVE ? 'active' : 'pending'}>{formatProjectStatus(project)}</strong>
                 </span>
@@ -743,7 +747,7 @@ function SellerDashboard({
             </div>
           </section>
 
-          <div className="seller-dashboard-grid">
+          <div className="seller-dashboard-grid seller-dashboard-grid--projects-only">
             <section className="seller-projects-workspace">
               <div className="seller-os-section-heading"><div><span>Projects</span><h2>Recent projects</h2></div><button type="button" onClick={() => selectTab('add')}><Plus size={16} /> New project</button></div>
 
@@ -803,10 +807,6 @@ function SellerDashboard({
           )}
             </section>
 
-            <aside className="seller-insights-column">
-              <section className="seller-ai-card"><Sparkles size={19} /><div><span>Zinoo AI Assistant</span><h3>{pendingReviewCount ? 'Complete pending listings' : 'Improve listing engagement'}</h3><p>{pendingReviewCount ? `${pendingReviewCount} project${pendingReviewCount > 1 ? 's are' : ' is'} awaiting review. Complete missing documents to publish faster.` : 'Add recent layout photos to the listing with the lowest content completeness.'}</p><strong className="seller-ai-impact">Expected impact: faster buyer decisions</strong><div className="seller-ai-actions"><button type="button" onClick={() => myProjects[0] && handleEditClick(myProjects[0])}>Review suggestion</button><button type="button" className="secondary" onClick={() => selectTab('listings')}>Not now</button></div><small>Confidence 86%</small></div></section>
-              <section className="seller-task-list"><div className="seller-os-section-heading"><div><span>Today</span><h2>Tasks</h2></div><strong>{pendingCashbacks} open</strong></div><div className="seller-task-progress"><i><b style={{ width: `${pendingCashbacks ? 18 : 100}%` }} /></i></div><button type="button" onClick={() => selectTab('cashbacks')}><i /> <span>Review cashback requests</span><b>{pendingCashbacks}</b></button></section>
-            </aside>
           </div>
         </div>
       ) : activeTab === 'profile' ? (
@@ -896,16 +896,16 @@ function SellerDashboard({
       </main>
       {isAndroidLayout && (
         <nav className="seller-mobile-nav m3-bottom-navigation" aria-label="Seller navigation">
-          <button type="button" className={['projects', 'add'].includes(activeTab) ? 'active' : ''} onClick={() => selectTab('projects')}>
+          <button type="button" className={activeTab === 'projects' ? 'active' : ''} aria-current={activeTab === 'projects' ? 'page' : undefined} onClick={() => selectTab('projects')}>
             <Building size={24} /><span>Projects</span>
           </button>
-          <button type="button" className="seller-mobile-create" onClick={() => selectTab('add')} aria-label="Create new listing">
-            <Plus size={25} />
+          <button type="button" className={`seller-mobile-add-tab ${activeTab === 'add' ? 'active' : ''}`} aria-current={activeTab === 'add' ? 'page' : undefined} onClick={() => selectTab('add')} aria-label="Create new listing">
+            <Plus size={25} /><span>Add Project</span>
           </button>
-          <button type="button" className={activeTab === 'cashbacks' ? 'active' : ''} onClick={() => selectTab('cashbacks')}>
+          <button type="button" className={activeTab === 'cashbacks' ? 'active' : ''} aria-current={activeTab === 'cashbacks' ? 'page' : undefined} onClick={() => selectTab('cashbacks')}>
             <ClipboardList size={24} /><span>Requests</span>
           </button>
-          <button type="button" className={activeTab === 'profile' ? 'active' : ''} onClick={() => selectTab('profile')}>
+          <button type="button" className={activeTab === 'profile' ? 'active' : ''} aria-current={activeTab === 'profile' ? 'page' : undefined} onClick={() => selectTab('profile')}>
             <User size={24} /><span>Profile</span>
           </button>
         </nav>

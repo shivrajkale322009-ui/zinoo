@@ -9,6 +9,7 @@ import {
   WalletCards
 } from 'lucide-react';
 import CashbackBadge from '../../CashbackBadge';
+import BuyerDetailSection from './BuyerDetailSection';
 import { getLandZoneLabel, getNaStatusLabel } from '../../../utils/projectLand';
 
 export default function BuyerProjectDetails({
@@ -24,11 +25,13 @@ export default function BuyerProjectDetails({
   contactActions,
   documentsSection,
   bottomActions,
+  onNeedFinancing,
   previewEditor
 }) {
   const [aboutExpanded, setAboutExpanded] = useState(false);
   const [heroDragX, setHeroDragX] = useState(0);
   const heroGestureRef = useRef(null);
+  const heroVideoRefs = useRef(new Map());
   const heroImages = useMemo(() => {
     const galleryMedia = selectedGallery.filter((item) => item.downloadURL);
     const heroUrl = selectedDisplay.media.heroImage;
@@ -42,6 +45,14 @@ export default function BuyerProjectDetails({
     [activeHeroIndex - 1, activeHeroIndex + 1].forEach((index) => {
       const media = heroImages[index];
       if (media?.downloadURL && media.mediaType !== 'video') { const image = new Image(); image.src = media.downloadURL; }
+    });
+  }, [activeHeroIndex, heroImages]);
+  // A slide remains mounted during the carousel transition. Pause any video
+  // that has just moved off-screen so mixed photo/video carousels never play
+  // more than one property's media track at a time.
+  useEffect(() => {
+    heroVideoRefs.current.forEach((video, index) => {
+      if (index !== activeHeroIndex) video?.pause();
     });
   }, [activeHeroIndex, heroImages]);
   const finishHeroGesture = (event) => {
@@ -64,6 +75,9 @@ export default function BuyerProjectDetails({
     { label: 'NA Status', value: getNaStatusLabel(selectedProject), icon: FileCheck2 }
   ];
   const about = selectedDisplay.overview.body || selectedDisplay.basic.shortDescription;
+  const visibleAmenities = selectedDisplay.amenities.showOnDetails
+    ? selectedDisplay.amenities.items.filter((item) => item.enabled)
+    : [];
   return (
     <div
       className="buyer-side-panel-content project-panel-content"
@@ -73,7 +87,7 @@ export default function BuyerProjectDetails({
       <div className={`premium-project-details reference-property-details ${projectScrollTop > 28 ? 'project-header-scrolled' : ''}`} key={selectedProject.id}>
           {appBar}
           <section
-            className={`premium-project-hero reference-hero-carousel${heroGestureRef.current?.direction === 'horizontal' ? ' is-swiping' : ''}`}
+            className={`premium-project-hero reference-hero-carousel${heroImages[activeHeroIndex]?.mediaType === 'video' ? ' has-active-video' : ''}${heroGestureRef.current?.direction === 'horizontal' ? ' is-swiping' : ''}`}
             onPointerDown={(event) => { if (event.target.closest?.('.reference-hero-video-frame')) return; heroGestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, direction: null, dragX: 0 }; }}
             onPointerMove={(event) => {
               const gesture = heroGestureRef.current;
@@ -86,15 +100,15 @@ export default function BuyerProjectDetails({
               gesture.dragX = Math.max(-90, Math.min(90, dx));
               setHeroDragX(gesture.dragX);
             }}
-            onPointerUp={finishHeroGesture}
-            onPointerCancel={finishHeroGesture}
+            onPointerUp={(event) => { if (!event.target.closest?.('.reference-hero-video-frame')) finishHeroGesture(event); }}
+            onPointerCancel={(event) => { if (!event.target.closest?.('.reference-hero-video-frame')) finishHeroGesture(event); }}
           >
             <div className="reference-hero-carousel-track" style={{ transform: `translate3d(calc(${-activeHeroIndex * 100}% + ${heroDragX}px), 0, 0)` }}>
               {heroImages.map((image, index) => (
                 <div className="reference-hero-slide" key={image.id || image.downloadURL || index}>
                   {image.mediaType !== 'video' && <span className="reference-hero-slide-backdrop" style={{ backgroundImage: `url(${image.downloadURL})` }} aria-hidden="true" />}
                   {image.mediaType === 'video'
-                    ? <><video className="reference-hero-video-backdrop" src={image.downloadURL} muted autoPlay loop playsInline aria-hidden="true" /><div className="reference-hero-video-frame"><video className="reference-hero-video" src={image.downloadURL} muted autoPlay loop controls playsInline preload="metadata" aria-label={`${selectedDisplay.basic.projectName} video ${index + 1}`} onPointerDown={(event) => event.stopPropagation()} onPointerMove={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onLoadedMetadata={(event) => { const { videoWidth, videoHeight } = event.currentTarget; if (videoWidth && videoHeight) event.currentTarget.parentElement?.style.setProperty('--video-aspect', `${videoWidth} / ${videoHeight}`); }} /></div></>
+                    ? <>{index === activeHeroIndex && <video className="reference-hero-video-backdrop" src={image.downloadURL} muted loop playsInline preload="metadata" aria-hidden="true" />}<div className="reference-hero-video-frame"><video ref={(node) => { if (node) heroVideoRefs.current.set(index, node); else heroVideoRefs.current.delete(index); }} className="reference-hero-video" src={image.downloadURL} controls playsInline preload="metadata" aria-label={`${selectedDisplay.basic.projectName} video ${index + 1}`} onPointerDown={(event) => event.stopPropagation()} onPointerMove={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onLoadedMetadata={(event) => { const { videoWidth, videoHeight } = event.currentTarget; if (videoWidth && videoHeight) event.currentTarget.parentElement?.style.setProperty('--video-aspect', `${videoWidth} / ${videoHeight}`); }} /></div></>
                     : <img src={image.downloadURL} alt={`${selectedDisplay.basic.projectName} photo ${index + 1}`} draggable="false" />}
                 </div>
               ))}
@@ -137,17 +151,39 @@ export default function BuyerProjectDetails({
               {contactActions}
             </section>
 
-            <section className="reference-section google-project-overview">
-              <div className="reference-section-title"><h3>Overview</h3></div>
-              <div className="google-project-facts">{overviewItems.map(({ label, value, icon: Icon }) => <div key={label}><Icon size={21} /><span><strong>{previewEditor?.editing ? previewEditor.overviewControl(label, value) : value}</strong><small>{label}</small></span></div>)}{previewEditor?.editing && <div><WalletCards size={21} /><span><strong><label className="preview-toggle"><input type="checkbox" checked={Boolean(selectedProject.bankLoan)} onChange={(event) => previewEditor.setField('bankLoan', event.target.checked)} /> Bank loan</label></strong><small>Bank Loan</small></span></div>}{previewEditor?.editing && <div><Building2 size={21} /><span><strong><input className="preview-inline-input" aria-label="Available plots" type="number" min="0" value={selectedProject.remainingPlots ?? ''} onChange={(event) => previewEditor.setField('remainingPlots', event.target.value)} /></strong><small>Available Plots</small></span></div>}</div>
-            </section>
+            <BuyerDetailSection title="Overview" className="google-project-overview" key={`overview-${selectedProject.id}`}>
+              <dl className="buyer-overview-rows">
+                {overviewItems.map(({ label, value, icon: Icon }) => (
+                  <div className="buyer-overview-row" key={label}>
+                    <dt><Icon size={18} strokeWidth={1.7} aria-hidden="true" /><span>{label === 'Installment' && !previewEditor?.editing ? 'Financing' : label}</span></dt>
+                    <dd>
+                      {previewEditor?.editing
+                        ? previewEditor.overviewControl(label, value)
+                        : label === 'Installment'
+                          ? <button type="button" className="buyer-overview-financing" onClick={onNeedFinancing}>Need Financing</button>
+                          : value}
+                    </dd>
+                  </div>
+                ))}
+                {previewEditor?.editing && <>
+                  <div className="buyer-overview-row">
+                    <dt><WalletCards size={18} aria-hidden="true" /><span>Bank Loan</span></dt>
+                    <dd><label className="preview-toggle"><input type="checkbox" checked={Boolean(selectedProject.bankLoan)} onChange={(event) => previewEditor.setField('bankLoan', event.target.checked)} /> Bank loan</label></dd>
+                  </div>
+                  <div className="buyer-overview-row">
+                    <dt><Building2 size={18} aria-hidden="true" /><span>Available Plots</span></dt>
+                    <dd><input className="preview-inline-input" aria-label="Available plots" type="number" min="0" value={selectedProject.remainingPlots ?? ''} onChange={(event) => previewEditor.setField('remainingPlots', event.target.value)} /></dd>
+                  </div>
+                </>}
+              </dl>
+            </BuyerDetailSection>
 
             {documentsSection}
 
-            {selectedDisplay.amenities.showOnDetails && selectedDisplay.amenities.items.some((item) => item.enabled) && <section className="reference-section reference-amenities-section">
-              <h3>Amenities</h3>
-              <div className="google-amenity-chips">{selectedDisplay.amenities.items.filter((item) => item.enabled).map((item) => previewEditor?.editing ? <label className="preview-amenity-chip" key={item.id}><input type="checkbox" checked onChange={() => previewEditor.toggleAmenity(item.title)} /><Leaf size={16} /> {item.title}</label> : <span key={item.id}><Leaf size={16} /> {item.title}</span>)}{previewEditor?.editing && previewEditor.availableAmenities.map((name) => <label className="preview-amenity-chip" key={name}><input type="checkbox" onChange={() => previewEditor.toggleAmenity(name)} /> <Leaf size={16} /> {name}</label>)}</div>
-            </section>}
+            <BuyerDetailSection title="Amenities" className="reference-amenities-section" key={`amenities-${selectedProject.id}`}>
+              {visibleAmenities.length > 0 || previewEditor?.editing ? <div className="google-amenity-chips">{visibleAmenities.map((item) => previewEditor?.editing ? <label className="preview-amenity-chip" key={item.id}><input type="checkbox" checked onChange={() => previewEditor.toggleAmenity(item.title)} /><Leaf size={16} /> {item.title}</label> : <span key={item.id}><Leaf size={16} /> {item.title}</span>)}{previewEditor?.editing && previewEditor.availableAmenities.map((name) => <label className="preview-amenity-chip" key={name}><input type="checkbox" onChange={() => previewEditor.toggleAmenity(name)} /> <Leaf size={16} /> {name}</label>)}</div>
+                : <p className="buyer-detail-empty">No amenities listed yet. Contact us on WhatsApp for details.</p>}
+            </BuyerDetailSection>
 
             {about && <section className="reference-section google-project-about">
               <h3>About Project</h3>
@@ -161,3 +197,4 @@ export default function BuyerProjectDetails({
     </div>
   );
 }
+

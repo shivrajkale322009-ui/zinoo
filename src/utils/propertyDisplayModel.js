@@ -66,7 +66,7 @@ export function createPropertyDisplayModel(project = {}) {
       district: asText(project.district)
     },
     pricing: {
-      startingPrice: asNumber(project.priceFrom ?? project.startingPrice),
+      startingPrice: asNumber(project.startingPrice ?? project.priceFrom ?? project.display?.pricing?.startingPrice),
       pricePrefix: asText(project.pricePrefix, 'Starting from')
     },
     media: {
@@ -225,8 +225,19 @@ export function getPropertyDisplayModel(project = {}) {
     ...fallback,
     ...configured,
     basic: mergeSection(fallback.basic, configured.basic),
-    pricing: mergeSection(fallback.pricing, configured.pricing),
-    media: mergeSection(fallback.media, configured.media),
+    pricing: { ...mergeSection(fallback.pricing, configured.pricing), startingPrice: fallback.pricing.startingPrice },
+    media: {
+      ...mergeSection(fallback.media, configured.media),
+      // The photo manager owns canonical media, including an empty gallery.
+      // Old display snapshots must not resurrect photos absent from the editor.
+      ...(Array.isArray(project.media) ? {
+        heroImage: fallback.media.gallery.find((image) => image.url === fallback.media.heroImage)?.url || fallback.media.gallery[0]?.url || '',
+        gallery: fallback.media.gallery.map((image) => {
+          const presentation = asArray(configured.media?.gallery).find((item) => item.url === image.url);
+          return { ...image, ...(presentation ? { alt: presentation.alt || image.alt, enabled: presentation.enabled !== false } : {}) };
+        })
+      } : {})
+    },
     verified: mergeSection(fallback.verified, configured.verified),
     cashback: mergeSection(fallback.cashback, configured.cashback),
     rating: mergeSection(fallback.rating, configured.rating),

@@ -5,6 +5,7 @@ const npmCli = process.env.npm_execpath;
 
 const steps = [
   ['Install locked dependencies and apply patches', ['ci', '--legacy-peer-deps']],
+  ['Capture native compatibility for this Android release', ['run', 'updates:runtime']],
   ['Build current web application', ['run', 'build']],
   ['Synchronize web and native Android projects', ['exec', 'cap', 'sync', 'android']],
   ['Verify copied Android web assets', ['run', 'android:release:verify']]

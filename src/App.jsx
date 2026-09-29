@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef, useState, useCallback, lazy, Suspense } from 'react';
+import React, { useContext, useEffect, useRef, useState, useCallback, lazy, Suspense, startTransition } from 'react';
 import { getRedirectResult, onAuthStateChanged } from 'firebase/auth';
 import { Capacitor } from '@capacitor/core';
 import { httpsCallable } from 'firebase/functions';
@@ -18,6 +18,7 @@ import {
   where
 } from 'firebase/firestore';
 import BuyerErrorBoundary from './components/BuyerErrorBoundary';
+import { scopedCashbacks } from './utils/cashbackAccess';
 import { auth, db, functions, firebaseProjectId } from './firebaseConfig';
 import {
   canAccessView,
@@ -35,6 +36,8 @@ import { getProjectRoutePath, getProjectRouteSlug } from './utils/projectRoute';
 import { trackLead } from './utils/metaPixel';
 import { requestNotificationPermissionOnce } from './services/pushNotifications';
 import { logoutUser, MANAGED_SELLER_CONTEXT_KEY } from './services/authSessionService';
+import UpdateReady from './updates/UpdateReady';
+import NativeUpdateNotice from './updates/NativeUpdateNotice';
 
 const BuyerApp = lazy(() => import('./components/BuyerApp'));
 const SellerDashboard = lazy(() => import('./components/SellerDashboard'));
@@ -42,6 +45,19 @@ const AdminPanel = lazy(() => import('./components/AdminPanel'));
 const LoginScreen = lazy(() => import('./components/LoginScreen'));
 const ProfileDropdown = lazy(() => import('./components/ProfileDropdown'));
 const NotificationCenter = lazy(() => import('./components/NotificationCenter'));
+
+const isNativePlatform = Capacitor.isNativePlatform();
+const markStartup = (name) => {
+  if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+    performance.mark(`zinoo:${name}`);
+  }
+};
+
+function StartupLoading() {
+  return <main role="status" aria-label="Loading" style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', background: '#f8fafc' }}>
+    <i aria-hidden="true" style={{ width: 30, height: 30, border: '3px solid #dbeafe', borderTopColor: '#2563eb', borderRadius: '50%', animation: 'zinoo-loading-spin .7s linear infinite' }} />
+  </main>;
+}
 
 function LaunchSplash() {
   return <main className="zinoo-launch-splash" aria-label="Zinoo is starting">
@@ -102,7 +118,7 @@ const getGoogleRedirectResultOnce = () => {
   return googleRedirectResultPromise;
 };
 function App() {
-  const [launchSplashVisible, setLaunchSplashVisible] = useState(true);
+  const [launchSplashVisible, setLaunchSplashVisible] = useState(isNativePlatform);
   const { isDarkMode, toggleTheme } = useContext(ThemeContext);
   const [user, setUser] = useState(null);
   const [profileData, setProfileData] = useState(null);
@@ -131,8 +147,28 @@ function App() {
   const pendingLeadSubmissionRef = useRef(false);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setLaunchSplashVisible(false), 1250);
+    if (!isNativePlatform) return undefined;
+    const timer = window.setTimeout(() => {
+      setLaunchSplashVisible(false);
+      markStartup('native-splash-dismissed');
+    }, 650);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    // Map is the first buyer screen. Start its code and Google Maps API while
+    // authentication and profile setup run, rather than waiting for them to
+    // finish before beginning the map download.
+    let cancelled = false;
+    void Promise.all([
+      import('./components/map/InteractiveMap'),
+      import('./maps/googleMaps').then(({ loadGoogleMaps }) => loadGoogleMaps())
+    ]).then(() => {
+      if (!cancelled) markStartup('maps-api-ready');
+    }).catch(() => {
+      // MapScreen presents the existing user-facing map error when needed.
+    });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -240,11 +276,13 @@ function App() {
       ? nextView
       : getDefaultView(permissions);
 
-    setCurrentView(resolvedView);
-    if (resolvedView !== 'seller') {
-      setSelectedSeller(null);
-      window.sessionStorage.removeItem(MANAGED_SELLER_CONTEXT_KEY);
-    }
+    // These views are code-split. Keep the current screen interactive until a
+    // requested chunk has loaded instead of synchronously suspending on a click.
+    startTransition(() => {
+      setCurrentView(resolvedView);
+      if (resolvedView !== 'seller') setSelectedSeller(null);
+    });
+    if (resolvedView !== 'seller') window.sessionStorage.removeItem(MANAGED_SELLER_CONTEXT_KEY);
   }, [permissions]);
 
   const handleAccountDeleted = useCallback((message) => {
@@ -316,6 +354,7 @@ function App() {
         });
       }
       if (!disposed) setAuthReady(true);
+      markStartup('auth-resolved');
       setUser(nextUser);
       if (!nextUser) {
         setShowLogin(false);
@@ -428,9 +467,12 @@ function App() {
         }
         setProfileData(nextProfileData);
         setPermissions(userPermissions);
-        setCurrentView((current) => canAccessView(userPermissions, current)
-          ? current
-          : getDefaultView(userPermissions));
+        setCurrentView((current) => {
+          if (userPermissions.admin && typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+            return 'admin';
+          }
+          return canAccessView(userPermissions, current) ? current : getDefaultView(userPermissions);
+        });
         if (!userPermissions.admin && !userPermissions.seller) setSelectedSeller(null);
         setProfileStatus('ready');
         setError('');
@@ -489,7 +531,7 @@ function App() {
   }, [authReady, user, profileRetryNonce]);
 
   useEffect(() => {
-    if (!authReady || user) return undefined;
+    if (!authReady) return undefined;
     const publicProjectsQuery = query(
       collection(db, 'publicProjects'),
       where('publicVisibility', '==', true),
@@ -504,6 +546,7 @@ function App() {
       });
       setPublicProjects(projects);
       setPublicProjectsReady(true);
+      markStartup('public-projects-ready');
       writeStartupCache('public-projects', projects);
     }, (publicProjectsError) => {
       console.error('[Zinoo Firestore] public project listener failed', publicProjectsError);
@@ -548,12 +591,15 @@ function App() {
       // Admin inspecting an existing seller workspace.
       if (permissions.admin && currentView === 'seller' && selectedSeller) {
         if (name === 'projects') return query(ref, where('ownerId', '==', selectedSeller.id));
-        if (name === 'leads' || name === 'visits') return query(ref, where('projectOwnerId', '==', selectedSeller.id));
+        if (name === 'leads' || name === 'visits' || name === 'cashbacks') return query(ref, where('projectOwnerId', '==', selectedSeller.id));
         return ref;
       }
 
       // Primary admin view keeps global access.
-      if (permissions.admin && currentView === 'admin') return query(ref, limit(500));
+      if (permissions.admin && currentView === 'admin') {
+        // The lead directory, totals, and import deduplication need the full live list.
+        return name === 'leads' ? ref : query(ref, limit(500));
+      }
 
       // Buyer mode reuses the existing buyer app with active listings plus the
       // signed-in account's own activity records.
@@ -575,10 +621,10 @@ function App() {
     const queryDescriptionFor = (name) => {
       if (permissions.admin && currentView === 'seller' && selectedSeller) {
         if (name === 'projects') return `where(ownerId == ${selectedSeller.id})`;
-        if (name === 'leads' || name === 'visits') return `where(projectOwnerId == ${selectedSeller.id})`;
+        if (name === 'leads' || name === 'visits' || name === 'cashbacks') return `where(projectOwnerId == ${selectedSeller.id})`;
         return 'unfiltered';
       }
-      if (permissions.admin && currentView === 'admin') return 'limit(500)';
+      if (permissions.admin && currentView === 'admin') return name === 'leads' ? 'unfiltered' : 'limit(500)';
       if (currentView === 'buyer') {
         if (name === 'projects') return `where(status == ${PROPERTY_STATUS.ACTIVE})`;
         if (name === 'notifications') return `where(recipientId == ${user.uid})`;
@@ -608,6 +654,7 @@ function App() {
         throw queryError;
       }
       const unsubscribe = onSnapshot(source, (snapshot) => {
+        if (disposed) return;
         const lastSnapshotTime = new Date().toISOString();
         if (import.meta.env.DEV) {
           console.info('[Zinoo Firestore] snapshot received', { path, filters, documentCount: snapshot.size, lastSnapshotTime, fromCache: snapshot.metadata.fromCache });
@@ -761,8 +808,10 @@ function App() {
     }
     const context = { sellerUid: seller.uid || seller.id, sellerName: seller.displayName || seller.name || '', businessName: seller.businessName || '', enteredByAdminUid: user.uid, initialSellerTab };
     window.sessionStorage.setItem(MANAGED_SELLER_CONTEXT_KEY, JSON.stringify(context));
-    setSelectedSeller({ ...seller, uid: seller.uid || seller.id, initialSellerTab, managedSellerContext: context });
-    setCurrentView('seller');
+    startTransition(() => {
+      setSelectedSeller({ ...seller, uid: seller.uid || seller.id, initialSellerTab, managedSellerContext: context });
+      setCurrentView('seller');
+    });
   }, [user]);
 
   const handleBackToAdmin = useCallback(() => {
@@ -779,18 +828,43 @@ function App() {
     else setProfileData((current) => (current ? { ...current, ...changes } : current));
   }, [selectedSeller]);
 
-  if (!authReady || launchSplashVisible) return <LaunchSplash />;
-  if (!user) {
+  if (launchSplashVisible) return <LaunchSplash />;
+  // Android requires a restored or newly authenticated session before browsing.
+  // Wait for Firebase first so returning users never flash the login screen.
+  if (Capacitor.getPlatform() === 'android') {
+    if (!authReady) return <StartupLoading />;
+    if (!user) {
+      return (
+        <>
+          {!isOnline && <div className="offline-indicator">Offline</div>}
+          {error && <div className="app-error" role="alert">{error}</div>}
+          <Suspense fallback={<StartupLoading />}>
+            <UpdateReady><LoginScreen presentation="screen" /></UpdateReady>
+          </Suspense>
+          <div id="recaptcha-container" />
+        </>
+      );
+    }
+    if (profileStatus !== 'ready' && profileStatus !== 'error') return <StartupLoading />;
+  }
+  // The buyer map is public. Keep it rendering while a signed-in account's
+  // private profile or Firebase session is loading, so map tiles do not wait
+  // for either request.
+  const profilePending = Boolean(user) && profileStatus !== 'ready' && profileStatus !== 'error';
+  if (!authReady || !user || profilePending) {
     const requireAuthentication = (intent = null) => {
+      if (user) return;
       if (intent) window.sessionStorage.setItem('zinooPendingAuthenticatedAction', JSON.stringify(intent));
-      setShowLogin(true);
+      // LoginScreen is lazy-loaded, so opening it from a click must be a
+      // transition while its chunk is fetched.
+      startTransition(() => setShowLogin(true));
     };
     return (
-      <Suspense fallback={null}>
-        <main className="live-app view-buyer buyer-experience">
+      <main className="live-app view-buyer buyer-experience">
           {!isOnline && <div className="offline-indicator">Offline</div>}
           {error && <div className="app-error" role="alert">{error}</div>}
           <section className="live-app-content">
+            <Suspense fallback={<StartupLoading />}>
             <BuyerErrorBoundary>
               <BuyerApp
                 projects={publicProjects}
@@ -812,32 +886,35 @@ function App() {
                 onProjectRouteChange={navigateProjectRoute}
               />
             </BuyerErrorBoundary>
+            </Suspense>
           </section>
-        </main>
         {showLogin && <div className="auth-modal-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target !== event.currentTarget || user) return;
           window.sessionStorage.removeItem('zinooPendingAuthenticatedAction');
           setPendingLead(null);
           setShowLogin(false);
         }}>
-          <LoginScreen
-            presentation="modal"
-            onBackToLanding={!user ? () => {
-              window.sessionStorage.removeItem('zinooPendingAuthenticatedAction');
-              setPendingLead(null);
-              setShowLogin(false);
-            } : undefined}
-            initialStep={pendingLead ? 'phone' : 'home'}
-            initialPhone={pendingLead?.phone || ''}
-          />
+          <Suspense fallback={<StartupLoading />}>
+            <LoginScreen
+              presentation="modal"
+              onBackToLanding={!user ? () => {
+                window.sessionStorage.removeItem('zinooPendingAuthenticatedAction');
+                setPendingLead(null);
+                setShowLogin(false);
+              } : undefined}
+              initialStep={pendingLead ? 'phone' : 'home'}
+              initialPhone={pendingLead?.phone || ''}
+            />
+          </Suspense>
         </div>}
-        <div id="recaptcha-container" aria-hidden="true" />
-      </Suspense>
+        <div id="recaptcha-container" />
+      </main>
     );
   }
   if (profileStatus === 'error') {
     return (
       <main className="login-screen">
+        <UpdateReady />
         <section className="login-auth-panel" role="alert">
           <h1>Profile unavailable</h1>
           <p>{error || 'Your Firebase session is active, but your Zinoo profile is unavailable.'}</p>
@@ -854,7 +931,7 @@ function App() {
       </main>
     );
   }
-  if (profileStatus !== 'ready' || !profileData || !permissions) return null;
+  if (profileStatus !== 'ready' || !profileData || !permissions) return <StartupLoading />;
 
   const profileName = user.displayName || user.phoneNumber || user.email || 'User';
   const authenticatedProfile = {
@@ -878,6 +955,7 @@ function App() {
     ? (
       <AdminPanel
         cashbacks={data.cashbacks}
+        leads={data.leads}
         projects={data.projects}
         updateProject={updateProject}
         user={authenticatedProfile}
@@ -901,6 +979,7 @@ function App() {
           ? (
             <AdminPanel
               cashbacks={data.cashbacks}
+              leads={data.leads}
               projects={data.projects}
               updateProject={updateProject}
               user={authenticatedProfile}
@@ -922,6 +1001,8 @@ function App() {
           : (
             <SellerDashboard
               {...data}
+              key={`seller-${selectedSeller?.id || user.uid}`}
+              cashbacks={scopedCashbacks(data.cashbacks, 'seller', selectedSeller?.id || user.uid)}
               user={authenticatedProfile}
               updateProject={updateProject}
               addProject={addProject}
@@ -943,6 +1024,7 @@ function App() {
         <BuyerErrorBoundary>
           <BuyerApp
             {...data}
+            cashbacks={scopedCashbacks(data.cashbacks, 'buyer', user.uid)}
             user={authenticatedProfile}
             buyerProfile={profileData}
             addLead={addLead}
@@ -1000,10 +1082,11 @@ function App() {
       )}
       {error && <div className="app-error" role="alert">{error}</div>}
       <section className="live-app-content">
-        <Suspense fallback={null}>
-          {content}
+        <Suspense fallback={<StartupLoading />}>
+          <UpdateReady>{content}</UpdateReady>
         </Suspense>
       </section>
+      <NativeUpdateNotice />
     </main>
   );
 }

@@ -8,6 +8,7 @@ import {
 } from '../utils/projectDocuments';
 import {
   Gift,
+  ArrowLeft,
   BadgeCheck,
   Search,
   MessageSquare,
@@ -27,7 +28,6 @@ import {
   PieChart,
   Route,
   Share2,
-  ChevronUp,
   Heart
 } from 'lucide-react';
 import { functions, storage } from '../firebaseConfig';
@@ -37,6 +37,7 @@ import { getProjectPurchaseValue } from '../utils/purchaseValue';
 import { calculateCashbackForArea, getCashbackPerGuntha, squareFeetToGuntha } from '../utils/projectArea';
 import { normalizePropertyImages, openDocumentPreview } from './PropertyMediaDocumentsManager';
 import { getPropertyDisplayModel } from '../utils/propertyDisplayModel';
+import { mergeFreshProject } from '../utils/projectFreshness';
 import {
   LAND_ZONE_OPTIONS,
   NA_STATUS_OPTIONS,
@@ -53,9 +54,13 @@ import {
 import { DEFAULT_FILTERS, SIDEBAR_ITEMS } from './Buyer/buyerConstants';
 import BuyerDesktopNavigation from './Buyer/Navigation/BuyerDesktopNavigation';
 import BuyerMobileNavigation from './Buyer/Navigation/BuyerMobileNavigation';
+import BuyerLoanScreen from './Buyer/Loan/BuyerLoanScreen';
+import CashbackProjectSelect from './CashbackProjectSelect';
 import DesktopHeader from './Buyer/Shell/DesktopHeader';
 import BuyerHomePanel from './Buyer/Home/BuyerHomePanel';
+import BuyerFilters from './Buyer/Home/BuyerFilters';
 import BuyerHomeScreen from './Buyer/Home/BuyerHomeScreen';
+import StaticMap from './map/StaticMap';
 import { readPersistentCache, writeStartupCache } from '../utils/startupCache';
 import { CHAKAN_MAP_POSITION } from '../utils/chakanLocation';
 import BuyerProjectActions from './Buyer/ProjectDetails/BuyerProjectActions';
@@ -71,6 +76,7 @@ import {
 } from './Buyer/buyerPresentation';
 import { trackLead, trackViewContent } from '../utils/metaPixel';
 import { getProjectPublicUrl } from '../utils/projectPublicUrl';
+import { getProjectShareData } from '../utils/projectShare';
 
 const InteractiveMap = lazy(() => import('./map/InteractiveMap'));
 const CashbackWorkspace = lazy(() => import('./CashbackWorkspace'));
@@ -117,11 +123,9 @@ function BuyerApp({
   onProjectRouteChange
 }) {
   const isAndroidLayout = useMediaQuery('(max-width: 768px)');
-  const [activeScreen, setActiveScreen] = useState(() => {
-    const requestedScreen = window.sessionStorage.getItem('flinokBuyerDestination');
-    window.sessionStorage.removeItem('flinokBuyerDestination');
-    return requestedScreen === 'support' ? 'support' : 'map';
-  });
+  const [activeScreen, setActiveScreen] = useState('map');
+  const loanReturnScreen = useRef('map');
+  const [loanPlotPrice, setLoanPlotPrice] = useState(null);
   const [panelMode, setPanelMode] = useState(null);
   const [mobileSheetSnap, setMobileSheetSnap] = useState('expanded');
   // Preserve the compact map-marker preview when the selected project's URL
@@ -145,8 +149,7 @@ function BuyerApp({
   const [activeLayout, setActiveLayout] = useState(null);
   const [loadingLayouts, setLoadingLayouts] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  // The map is a separate destination. Keep it dormant while Home owns the
-  // viewport so its canvas can never replace or bleed through the home feed.
+  // The map is the default buyer destination and begins loading immediately.
   const [interactiveMap, setInteractiveMap] = useState(activeScreen === 'map');
   const [interactiveMapReady, setInteractiveMapReady] = useState(false);
   const enableInteractiveMap = useCallback(() => setInteractiveMap(true), []);
@@ -314,7 +317,7 @@ function BuyerApp({
         || routeProject.showVerifiedNameBadge === true
         || routeProject.display?.verified?.showNameBadge === true;
       const resolvedRouteProject = {
-        ...routeProject,
+        ...mergeFreshProject(current, routeProject),
         ...(showVerifiedNameBadge ? { showVerifiedNameBadge: true } : {})
       };
       const currentImage = current.thumbnail || current.heroImage || current.primaryImage || '';
@@ -334,6 +337,14 @@ function BuyerApp({
     setMobileSheetSnap(isAndroidLayout && mapMarkerPreviewProjectId === String(routeProject.id || '') ? 'collapsed' : 'expanded');
     setProjectScrollTop(0);
   }, [enableInteractiveMap, isAndroidLayout, mapMarkerPreviewProjectId, panelMode, routeProject, routeSlug, routeStatus]);
+
+  useEffect(() => {
+    setSelectedProject((current) => {
+      if (!current) return current;
+      const latest = projects.find((project) => project.id === current.id);
+      return latest ? mergeFreshProject(current, latest) : current;
+    });
+  }, [projects]);
 
   const handleHomeProjectSelect = useCallback((project) => {
     if (!project) return;
@@ -395,14 +406,10 @@ function BuyerApp({
   const shareProject = useCallback(async () => {
     const url = getProjectPublicUrl(selectedProject);
     if (!url) return alert('This project does not have a public link yet.');
-    const shareData = {
-      title: selectedProject?.name || 'Zinoo property',
-      text: `Explore ${selectedProject?.name || 'this property'} on Zinoo`,
-      url
-    };
+    const shareData = getProjectShareData(selectedProject, url);
     try {
       if (navigator.share) return await navigator.share(shareData);
-      await navigator.clipboard?.writeText(url);
+      await navigator.clipboard?.writeText(shareData.text);
       alert('Project link copied.');
     } catch (error) {
       if (error?.name !== 'AbortError') alert('Unable to share this project right now.');
@@ -410,6 +417,8 @@ function BuyerApp({
   }, [selectedProject]);
 
   const navigateToScreen = useCallback((screen) => {
+    if (screen !== 'loan') setLoanPlotPrice(null);
+    if (screen === 'loan' && activeScreen !== 'loan') loanReturnScreen.current = activeScreen;
     if (screen === 'map') {
       enableInteractiveMap();
       window.setTimeout(() => {
@@ -419,10 +428,21 @@ function BuyerApp({
       }, 0);
     }
     if (screen !== 'map') setMapDeveloperId('');
+    onProjectRouteChange?.(null);
     setSelectedProject(null);
     setPanelMode(null);
     setActiveScreen(screen);
-  }, [enableInteractiveMap]);
+  }, [activeScreen, enableInteractiveMap, onProjectRouteChange]);
+
+  useEffect(() => {
+    if (activeScreen !== 'cashback') return undefined;
+    const handleBack = (event) => {
+      event.preventDefault();
+      navigateToScreen('home');
+    };
+    window.addEventListener('zinoo:buyer-back', handleBack);
+    return () => window.removeEventListener('zinoo:buyer-back', handleBack);
+  }, [activeScreen, navigateToScreen]);
 
   useEffect(() => {
     const handleNotificationNavigation = (event) => {
@@ -766,6 +786,7 @@ function BuyerApp({
     const expanded = Math.max(compact, Math.min(full, Math.round(viewportHeight * 0.5)));
     const metrics = { collapsed: compact, expanded, full, min: compact, max: full, navHeight };
     mobileSheetMetricsRef.current = metrics;
+    sheet.style.setProperty('--sheet-full-height-px', `${Math.round(full)}px`);
     sheet.style.setProperty('--sheet-bottom-px', `${Math.round(navHeight)}px`);
     return metrics;
   }, [isAndroidLayout, panelOpen]);
@@ -776,12 +797,8 @@ function BuyerApp({
     let completionTimer;
     const requestFocus = () => {
       if (cancelled) return;
-      const metrics = measureMobileSheet();
-      const sheetHeight = isAndroidLayout
-        ? (metrics?.[mobileSheetSnap] || mobileSheetRef.current?.getBoundingClientRect().height || 0)
-        : 0;
       window.dispatchEvent(new CustomEvent('flinok-focus-project', {
-        detail: { project: selectedProject, layout: activeLayout, bottomInsetPx: sheetHeight, animated: true, requestId: pendingMapFocusProjectId }
+        detail: { project: selectedProject, layout: activeLayout, animated: true, requestId: pendingMapFocusProjectId }
       }));
       completionTimer = window.setTimeout(() => setPendingMapFocusProjectId(''), 1800);
     };
@@ -791,7 +808,7 @@ function BuyerApp({
       cancelAnimationFrame(frame);
       clearTimeout(completionTimer);
     };
-  }, [activeLayout, activeScreen, interactiveMapReady, isAndroidLayout, measureMobileSheet, mobileSheetSnap, pendingMapFocusProjectId, selectedProject]);
+  }, [activeLayout, activeScreen, interactiveMapReady, pendingMapFocusProjectId, selectedProject]);
 
   useEffect(() => {
     const finishFocus = (event) => {
@@ -838,6 +855,58 @@ function BuyerApp({
     applyMobileSheetHeight(metrics[nextSnap], true);
   }, [applyMobileSheetHeight, measureMobileSheet]);
 
+  useEffect(() => {
+    const sheet = mobileSheetRef.current;
+    if (!sheet || !isAndroidLayout || !panelOpen || panelMode !== 'project') return undefined;
+    let gesture = null;
+    const start = (event) => {
+      gesture = null;
+      if (event.touches.length !== 1 || event.target.closest('button, a, input, textarea, select, video, .property-sheet-drag-handle')) return;
+      const touch = event.touches[0];
+      gesture = { x: touch.clientX, y: touch.clientY, handled: false };
+    };
+    const move = (event) => {
+      if (!gesture || event.touches.length !== 1) return;
+      if (gesture.handled) {
+        if (event.cancelable) event.preventDefault();
+        return;
+      }
+      const touch = event.touches[0];
+      const dx = touch.clientX - gesture.x;
+      const dy = touch.clientY - gesture.y;
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
+        gesture = null;
+        return;
+      }
+      const content = sheet.querySelector('.project-panel-content');
+      if (mobileSheetSnap !== 'collapsed' && content?.scrollTop > 2) {
+        gesture.y = touch.clientY;
+        return;
+      }
+      if (Math.abs(dy) < 24) return;
+      const nextSnap = dy < 0
+        ? (mobileSheetSnap === 'collapsed' ? 'expanded' : 'full')
+        : 'collapsed';
+      if (nextSnap === mobileSheetSnap) return;
+      if (event.cancelable) event.preventDefault();
+      gesture.handled = true;
+      if (content) content.scrollTop = 0;
+      setProjectScrollTop(0);
+      setMobileSheetSnap(nextSnap);
+    };
+    const end = () => { gesture = null; };
+    sheet.addEventListener('touchstart', start, { passive: true });
+    sheet.addEventListener('touchmove', move, { passive: false });
+    sheet.addEventListener('touchend', end);
+    sheet.addEventListener('touchcancel', end);
+    return () => {
+      sheet.removeEventListener('touchstart', start);
+      sheet.removeEventListener('touchmove', move);
+      sheet.removeEventListener('touchend', end);
+      sheet.removeEventListener('touchcancel', end);
+    };
+  }, [isAndroidLayout, mobileSheetSnap, panelMode, panelOpen]);
+
   const handleProjectPanelScroll = useCallback((event) => {
     const scrollTop = event.currentTarget.scrollTop;
     setProjectScrollTop(Math.min(scrollTop, 180));
@@ -861,13 +930,6 @@ function BuyerApp({
 
   const renderCashbackPanel = () => (
     <div className="buyer-side-panel-content cashback-panel-content">
-      <div className="cashback-panel-header">
-        <div className="cashback-panel-icon"><Gift size={20} /></div>
-        <div><h3>Claim Cashback</h3><p>Submit your plot purchase details for verification</p></div>
-        <button type="button" className="cashback-screen-close" onClick={() => navigateToScreen('map')} aria-label="Close Cashback and return to map">
-          <X size={18} />
-        </button>
-      </div>
       <div className="cashback-view-tabs">
         <button type="button" className={cashbackView === 'claim' ? 'active' : ''} onClick={() => setCashbackView('claim')}>New request</button>
         <button type="button" className={cashbackView === 'history' ? 'active' : ''} onClick={() => setCashbackView('history')}>History <span>{cashbacks.length}</span></button>
@@ -875,18 +937,11 @@ function BuyerApp({
       {cashbackView === 'history' ? <CashbackWorkspace role="buyer" cashbacks={cashbacks} /> : <form onSubmit={handleCashbackSubmit} className="cashback-claim-form">
         <section className="cashback-form-section">
           <div className="cashback-section-heading"><span>1</span><div><h4>Purchase details</h4></div></div>
-          <label>Select the project
-            <select
-              required
-              value={cashbackForm.projectId}
-              onChange={(event) => setCashbackForm((current) => ({ ...current, projectId: event.target.value }))}
-            >
-              <option value="">Select a project</option>
-              {cashbackProjects.map((project) => (
-                <option key={project.id} value={project.id}>{project.name}</option>
-              ))}
-            </select>
-          </label>
+          <CashbackProjectSelect
+            projects={cashbackProjects}
+            value={cashbackForm.projectId}
+            onChange={(projectId) => setCashbackForm((current) => ({ ...current, projectId }))}
+          />
           <label>Purchased area (sq.ft.)
             <input
               required
@@ -968,6 +1023,10 @@ function BuyerApp({
     };
     return (
       <BuyerProjectDetails
+        onNeedFinancing={() => {
+          setLoanPlotPrice(selectedDisplay.pricing.startingPrice);
+          navigateToScreen('loan');
+        }}
         selectedProject={selectedProject}
         selectedDisplay={selectedDisplay}
         selectedGallery={selectedGallery}
@@ -1031,15 +1090,39 @@ function BuyerApp({
             onActiveLayoutChange={setActiveLayout}
             loadVisibleProjects={false}
             filters={mapFilters}
+            onOpenFilters={() => setFiltersOpen(true)}
+            onToggleInstallment={() => setMapFilters({ ...mapFilters, installmentMax: mapFilters.installmentMax ? 0 : 20000 })}
+            showFilterCapsules={!panelOpen}
             externalOverlayOpen={filtersOpen || panelOpen}
             onLayersOpen={() => setFiltersOpen(false)}
             onMapReady={handleInteractiveMapReady}
           /></Suspense>}
-          {!interactiveMapReady && <div className="interactive-map-loader" aria-hidden="true"><i /><i /><i /><i /></div>}
+          {!interactiveMapReady && <StaticMap
+            projects={mapProjects}
+            onActivate={enableInteractiveMap}
+            onSelectProject={handleMapProjectSelect}
+          />}
         </div>
       )}
 
-      {(['home', 'map', 'saved', 'cashback', 'nearby', 'support', 'developer'].includes(activeScreen)) && (!isAndroidLayout || panelMode !== 'project' || mobileSheetSnap === 'collapsed') && (
+      {activeScreen === 'map' && <BuyerFilters
+        hideShortcuts
+        filtersOpen={filtersOpen}
+        activeFilterCount={activeFilterCount}
+        filteredProjectCount={filteredProjects.length}
+        mapFilters={mapFilters}
+        landZoneOptions={LAND_ZONE_OPTIONS}
+        naStatusOptions={NA_STATUS_OPTIONS}
+        onToggleFilters={() => setFiltersOpen((prev) => !prev)}
+        onCloseFilters={() => setFiltersOpen(false)}
+        onBudgetChange={(event) => setMapFilters({ ...mapFilters, budgetMax: Number(event.target.value) })}
+        onLandZoneToggle={(value) => toggleFilterOption('landZones', value)}
+        onNaStatusToggle={(value) => toggleFilterOption('naStatuses', value)}
+        onInstallmentToggle={() => setMapFilters({ ...mapFilters, installmentMax: mapFilters.installmentMax ? 0 : 20000 })}
+        onResetFilters={() => setMapFilters(DEFAULT_FILTERS)}
+      />}
+
+      {(['home', 'map', 'saved', 'nearby', 'support', 'developer'].includes(activeScreen)) && (!isAndroidLayout || panelMode !== 'project' || mobileSheetSnap === 'collapsed') && (
         <DesktopHeader
           homeSearchQuery={homeSearchQuery}
           voiceSearchActive={voiceSearchActive}
@@ -1086,15 +1169,14 @@ function BuyerApp({
         <BuyerDesktopNavigation
           items={SIDEBAR_ITEMS}
           activeItem={activeSidebarItem}
-          onNavigate={(screen) => (!isAuthenticated && ['saved', 'cashback'].includes(screen))
-            ? requireAuthentication({ type: `open-${screen}`, resumeScreen: screen })
-            : navigateToScreen(screen)}
+          onNavigate={navigateToScreen}
         />
       )}
 
       {activeScreen === 'home' && (
         <BuyerHomeScreen>
           <BuyerHomePanel
+            onOpenCashback={() => navigateToScreen('cashback')}
             filtersOpen={filtersOpen}
             activeFilterCount={activeFilterCount}
             filteredProjects={filteredProjects}
@@ -1109,7 +1191,6 @@ function BuyerApp({
             onBudgetChange={(event) => setMapFilters({ ...mapFilters, budgetMax: Number(event.target.value) })}
             onLandZoneToggle={(value) => toggleFilterOption('landZones', value)}
             onNaStatusToggle={(value) => toggleFilterOption('naStatuses', value)}
-            onBankLoanChange={(event) => setMapFilters({ ...mapFilters, bankLoan: event.target.checked })}
             onInstallmentToggle={() => setMapFilters({ ...mapFilters, installmentMax: mapFilters.installmentMax ? 0 : 20000 })}
             onResetFilters={() => setMapFilters(DEFAULT_FILTERS)}
             onProjectSelect={handleHomeProjectSelect}
@@ -1143,16 +1224,25 @@ function BuyerApp({
           loading={projectsLoading}
           onProjectSelect={handleProjectSelect}
           onDeveloperSelect={handleDeveloperSelect}
+          authRequired={!isAuthenticated}
+          onLogin={() => requireAuthentication({ type: 'open-saved', resumeScreen: 'saved' })}
         />
       )}
 
       {activeScreen === 'cashback' && (
         <main className="buyer-primary-screen buyer-cashback-screen" aria-label="Cashback claim">
+          <button type="button" className="buyer-cashback-back" onClick={() => navigateToScreen('home')} aria-label="Back to Home"><ArrowLeft size={22} /></button>
           {renderCashbackPanel()}
+          {!isAuthenticated && (
+            <div className="buyer-auth-mask" role="region" aria-label="Login required to view cashback">
+              <button type="button" className="buyer-auth-mask-login" onClick={() => requireAuthentication({ type: 'open-cashback', resumeScreen: 'cashback' })}>Log in</button>
+            </div>
+          )}
         </main>
       )}
 
       {activeScreen === 'support' && <BuyerSupportScreen />}
+      {activeScreen === 'loan' && <BuyerLoanScreen initialPlotPrice={loanPlotPrice} onBack={() => navigateToScreen(loanReturnScreen.current)} />}
 
       <section
         ref={mobileSheetRef}
@@ -1173,8 +1263,10 @@ function BuyerApp({
                 startY: event.clientY,
                 lastY: event.clientY,
                 lastTime: performance.now(),
-                startHeight: metrics[mobileSheetSnap]
+                startHeight: mobileSheetRef.current.querySelector('.buyer-slide-panel-shell').getBoundingClientRect().height
               };
+              if (mobileSheetFrameRef.current) cancelAnimationFrame(mobileSheetFrameRef.current);
+              mobileSheetRef.current.style.setProperty('--sheet-height-px', `${mobileSheetDragRef.current.startHeight}px`);
               mobileSheetRef.current?.classList.add('is-sheet-dragging');
               event.currentTarget.setPointerCapture(event.pointerId);
             }}
@@ -1219,18 +1311,16 @@ function BuyerApp({
                 {selectedDisplay?.cashback.enabled && <small>{formatExactINR(selectedDisplay.cashback.amount)} Cashback</small>}
               </div>
             </div>
-            <button type="button" className="property-sheet-expand-indicator" onClick={() => setMobileSheetSnap('expanded')} aria-label="Expand property details"><ChevronUp size={17} /></button>
+            <button type="button" className="property-sheet-view-button" onClick={() => setMobileSheetSnap('expanded')}>View</button>
           </div>}
           {panelMode === 'project' && renderProjectPanel()}
         </div>
       </section>
 
-      {isAndroidLayout && !panelOpen && (
+      {isAndroidLayout && !panelOpen && activeScreen !== 'cashback' && (
         <BuyerMobileNavigation
           activeScreen={activeScreen}
-          onNavigate={(screen) => (!isAuthenticated && ['saved', 'cashback'].includes(screen))
-            ? requireAuthentication({ type: `open-${screen}`, resumeScreen: screen })
-            : navigateToScreen(screen)}
+          onNavigate={navigateToScreen}
         />
       )}
 
@@ -1309,3 +1399,6 @@ function BuyerApp({
 }
 
 export default BuyerApp;
+
+
+

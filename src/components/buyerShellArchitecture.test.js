@@ -6,7 +6,7 @@ const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('desktop buyer shell keeps one persistent header across buyer destinations', async () => {
   const buyer = await read('./BuyerApp.jsx');
-  assert.match(buyer, /\['home', 'map', 'saved', 'cashback', 'nearby', 'support', 'developer'\]/);
+  assert.match(buyer, /\['home', 'map', 'saved', 'nearby', 'support', 'developer'\]/);
   assert.match(buyer, /!isAndroidLayout \|\| panelMode !== 'project'/);
   assert.match(buyer, /<DesktopHeader/);
 });
@@ -66,9 +66,12 @@ test('an open mobile property sheet owns the bottom edge and hides primary navig
     read('../index.css')
   ]);
   assert.match(buyer, /const panelOpen = activeScreen === 'map' && panelMode === 'project' && Boolean\(selectedProject\);/);
-  assert.match(buyer, /\{isAndroidLayout && !panelOpen && \(\s*<BuyerMobileNavigation/);
+  assert.match(buyer, /\{isAndroidLayout && !panelOpen && activeScreen !== 'cashback' && \(\s*<BuyerMobileNavigation/);
   assert.match(buyer, /const navTop = viewportHeight;\s*const navHeight = 0;/);
   assert.match(buyer, /style=\{isAndroidLayout && panelOpen \? \{ '--sheet-bottom-px': '0px' \} : undefined\}/);
   assert.match(styles, /bottom: var\(--sheet-bottom-px, 0px\) !important;/);
   assert.match(styles, /max-height: calc\(100dvh - var\(--sheet-bottom-px, 0px\)\) !important;/);
 });
+
+
+

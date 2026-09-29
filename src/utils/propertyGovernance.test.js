@@ -32,10 +32,20 @@ test('documents the canonical lifecycle without collapsing approval and publicat
 });
 
 test('reports blockers instead of false completion for missing required data', () => {
-  const governance = getPropertyGovernance(readyProperty({ description: '', thumbnail: '', startingPrice: 0 }), { sellerAssociationValid: true });
+  const governance = getPropertyGovernance(readyProperty({ name: '', thumbnail: '', startingPrice: 0 }), { sellerAssociationValid: true });
   assert.equal(governance.approvalEligible, false);
   assert.ok(governance.completeness < 100);
   assert.deepEqual(governance.blockers.map((item) => item.code).sort(), ['basic_missing', 'cover_missing', 'price_missing']);
+});
+
+test('allows approval and publication without a project description', () => {
+  for (const description of [undefined, '', '   ']) {
+    const pending = getPropertyGovernance(readyProperty({ description }));
+    const approved = getPropertyGovernance(readyProperty({ description, status: PROPERTY_STATUS.APPROVED }));
+    assert.equal(pending.approvalEligible, true);
+    assert.equal(approved.publicationEligible, true);
+    assert.equal(pending.sections.find((section) => section.id === 'basic').state, SECTION_STATE.COMPLETE);
+  }
 });
 
 test('distinguishes invalid values from missing values', () => {

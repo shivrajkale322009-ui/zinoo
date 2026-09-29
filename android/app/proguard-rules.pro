@@ -19,6 +19,8 @@
 # Preserve custom native app plugin classes, messaging services, activities, and helpers
 -keep class com.druvio.app.notifications.** { *; }
 -keep class com.druvio.app.search.** { *; }
+-keep class ee.forgr.capacitor_updater.** { *; }
+-keep class io.capawesome.capacitorjs.plugins.appupdate.** { *; }
 
 # Firebase Messaging Service & Notifications
 -keep class com.google.firebase.messaging.** { *; }

@@ -1,4 +1,5 @@
 import React from 'react';
+import { markUpdateBootFailed } from '../updates/liveUpdates';
 
 class BuyerErrorBoundary extends React.Component {
   constructor(props) {
@@ -11,6 +12,7 @@ class BuyerErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, errorInfo) {
+    markUpdateBootFailed();
     console.error('Buyer workspace render error:', error, errorInfo);
   }
 

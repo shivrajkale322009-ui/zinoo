@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="preload" as="image" href="/zinoo-home-hero.webp" fetchpriority="high" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Zinoo | Verified Plots &amp; Residential Projects in Chakan</title>
     
@@ -62,44 +63,44 @@
     
     <link rel="manifest" href="/manifest.json" />
     <style>
-      html,body,#root{min-height:100%;margin:0;background:#0159f9}
-      #zinoo-boot-splash{position:fixed;inset:0;display:grid;place-items:center;background:#0159f9}
-      #zinoo-boot-splash>div{display:grid;justify-items:center;width:min(72vw,420px);transform:translateY(8vh)}
-      #zinoo-boot-splash img{width:100%;height:auto;object-fit:contain;animation:zinoo-boot-in 420ms cubic-bezier(.2,.8,.2,1) both}
-      #zinoo-boot-splash i{display:block;width:44px;height:1px;margin:4px 0 15px;background:rgba(255,255,255,.72)}
-      #zinoo-boot-splash p{margin:0;color:#fff;font:700 clamp(11px,3vw,15px)/1.2 Manrope,Arial,sans-serif;letter-spacing:.34em;white-space:nowrap}
-      @keyframes zinoo-boot-in{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+      html,body,#root{min-height:100%;margin:0;background:#fff}
+      @keyframes zinoo-loading-spin{to{transform:rotate(360deg)}}
     </style>
 
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;500;600;700;800&family=Noto+Serif+Devanagari:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://maps.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://maps.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;500;600;700;800&family=Noto+Serif+Devanagari:wght@400;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
 
     <!-- Leaflet.js CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" media="print" onload="this.media='all'" />
 
-    <!-- Google AdSense -->
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9721533081804213" crossorigin="anonymous"></script>
-
-    <!-- Meta Pixel Code -->
+    <!-- Advertising and tracking load after the map has had time to start. -->
     <script>
-      !function(f,b,e,v,n,t,s)
-      {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-      n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-      if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
-      n.queue=[];t=b.createElement(e);t.async=!0;
-      t.src=v;s=b.getElementsByTagName(e)[0];
-      s.parentNode.insertBefore(t,s)}(window,document,'script',
-      'https://connect.facebook.net/en_US/fbevents.js');
-      fbq('init','2252404462242027');
-      fbq('track','PageView');
+      window.addEventListener('load', () => window.setTimeout(() => {
+        const ads = document.createElement('script');
+        ads.async = true;
+        ads.crossOrigin = 'anonymous';
+        ads.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9721533081804213';
+        document.head.appendChild(ads);
+
+        !function(f,b,e,v,n,t,s)
+        {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+        n.queue=[];t=b.createElement(e);t.async=true;
+        t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script',
+        'https://connect.facebook.net/en_US/fbevents.js');
+        fbq('init','2252404462242027');
+        fbq('track','PageView');
+      }, 4000), { once: true });
     </script>
-    <!-- End Meta Pixel Code -->
   </head>
   <body>
     <noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=2252404462242027&amp;ev=PageView&amp;noscript=1" alt="" /></noscript>
-    <div id="root"><div id="zinoo-boot-splash"><div><img src="/brand/zinoo-logo.png" alt="" /><i></i><p>FIND • COMPARE • DECIDE</p></div></div></div>
+    <div id="root"><div role="status" aria-label="Loading" style="min-height:100dvh;display:grid;place-items:center;background:#f8fafc"><i aria-hidden="true" style="width:30px;height:30px;border:3px solid #dbeafe;border-top-color:#2563eb;border-radius:50%;animation:zinoo-loading-spin .7s linear infinite"></i></div></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

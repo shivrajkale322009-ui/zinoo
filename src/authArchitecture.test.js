@@ -23,7 +23,8 @@ test('authenticated profile failures remain separate from authentication failure
 test('profile provisioning is idempotent for existing and new users', async () => {
   const profile = await read('./utils/authUser.js');
   assert.match(profile, /runTransaction/);
-  assert.match(profile, /if \(snap\.exists\(\)\) return \{ profile: snap\.data\(\), existing: true \}/);
+  assert.match(profile, /firstSignedInAt: serverTimestamp\(\)/);
+  assert.match(profile, /if \(!snap\.data\(\)\.firstSignedInAt\)/);
   assert.match(profile, /transaction\.set\(ref, profile\)/);
 });
 
@@ -39,7 +40,13 @@ test('OTP request and confirmation both reject duplicate submissions', async () 
   assert.ok((login.match(/if \(authRequestInFlight\.current/g) || []).length >= 2);
   assert.match(login, /if \(authRequestInFlight\.current \|\| !confirmationResult\) return/);
   assert.match(login, /disabled=\{loading \|\| phoneNumber\.length !== 10\}/);
-  assert.match(login, /disabled=\{loading \|\| otp\.length !== 6\}/);
+  assert.match(login, /disabled=\{loading \|\| otp\.replace\(\/\\D\/g, ''\)\.length !== 6\}/);
+});
+
+test('requesting an OTP paints feedback before phone-auth setup starts', async () => {
+  const login = await read('./components/LoginScreen.jsx');
+  assert.match(login, /import \{ flushSync \} from 'react-dom';/);
+  assert.match(login, /authRequestInFlight\.current = true;[\s\S]*flushSync\(\(\) => \{[\s\S]*setLoading\(true\);[\s\S]*setError\(''\);[\s\S]*\}\);[\s\S]*const normalizedPhone/);
 });
 
 test('resend discards stale OTP confirmation state', async () => {
@@ -52,4 +59,15 @@ test('phone authentication does not update component state after unmount', async
   assert.match(login, /mountedRef\.current = false/);
   assert.match(login, /if \(!mountedRef\.current\) return/);
   assert.match(login, /if \(mountedRef\.current\) setLoading\(false\)/);
+});
+
+test('five taps on the country code start Google account selection', async () => {
+  const login = await read('./components/LoginScreen.jsx');
+  assert.match(login, /countryCodeTapCountRef\.current === 5/);
+  const countryCodeHandler = login.slice(login.indexOf('const handleCountryCodeTap'), login.indexOf('const handleSendOtp'));
+  assert.match(countryCodeHandler, /void handleGoogleLogin\(\)/);
+  assert.match(countryCodeHandler, /2500/);
+  assert.match(login, /prompt: 'select_account'/);
+  assert.doesNotMatch(login, /signInWithEmailAndPassword|login-email-modal/);
+  assert.match(login, /login-country-code-trigger/);
 });

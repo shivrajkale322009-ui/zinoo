@@ -95,7 +95,7 @@ export function loadGoogleMaps() {
     const script = document.createElement('script');
     script.id = SCRIPT_ID;
     script.dataset.zinooLoader = 'true';
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(googleMapsConfig.apiKey)}&v=weekly&loading=async&libraries=geometry,marker,places&callback=${CALLBACK_NAME}`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(googleMapsConfig.apiKey)}&v=weekly&loading=async&callback=${CALLBACK_NAME}`;
     script.async = true;
     script.defer = true;
     script.onerror = () => fail('script-load-failed');
@@ -103,4 +103,10 @@ export function loadGoogleMaps() {
   });
 
   return mapsPromise;
+}
+
+export async function loadGeometryLibrary() {
+  const maps = await loadGoogleMaps();
+  if (!maps.geometry?.spherical) await maps.importLibrary('geometry');
+  return maps;
 }

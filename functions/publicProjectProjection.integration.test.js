@@ -59,6 +59,26 @@ const activeProject = (overrides = {}) => ({
   thumbnail: 'https://zinoo.in/project.webp', updatedAt: '2026-08-12T00:00:00.000Z', ...overrides
 });
 
+test('location edits cannot block public price and name updates', async () => {
+  const db = new MemoryFirestore({
+    'projects/p1': activeProject({ name: 'Old demo', startingPrice: 1000000 }),
+    'projects/p2': activeProject()
+  });
+  await projectPublicProjection({ db, projectId: 'p1' });
+  await projectPublicProjection({ db, projectId: 'p2' });
+  const oldLocation = clone(db.records.get('publicLocations/kuruli'));
+  db.records.set('projects/p1', { ...db.records.get('projects/p1'), name: 'Veershree Enclave', village: 'Rase', startingPrice: 2000000 });
+  await projectPublicProjection({ db, projectId: 'p1' });
+  const published = db.records.get('publicProjects/p1');
+  assert.equal(published.projectName, 'Veershree Enclave');
+  assert.equal(published.startingPrice, 2000000);
+  assert.equal(published.locationSlug, 'rase');
+  assert.equal(published.slug, 'old-demo');
+  assert.deepEqual(db.records.get('publicLocations/kuruli'), oldLocation);
+  await projectPublicProjection({ db, projectId: 'p1' });
+  assert.equal(db.records.get('projects/p1').locationSlug, 'rase');
+});
+
 test('a delayed active event cannot recreate a currently deleted project', async () => {
   const db = new MemoryFirestore({
     'publicProjects/p1': { projectId: 'p1', slug: 'matoshri-park', locationSlug: 'kuruli', historicalSlugs: [] },

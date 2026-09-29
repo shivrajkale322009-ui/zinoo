@@ -1,7 +1,8 @@
 export const LAND_ZONE_OPTIONS = [
-  { value: 'agricultural', label: 'Agricultural Zone' },
-  { value: 'residential', label: 'Residential Zone' },
-  { value: 'commercial', label: 'Commercial Zone' }
+  { value: 'agricultural', label: 'Agricultural' },
+  { value: 'residential', label: 'Residential' },
+  { value: 'commercial', label: 'Commercial', upcoming: true },
+  { value: 'industrial', label: 'Industrial', upcoming: true }
 ];
 
 export const NA_STATUS_OPTIONS = [
@@ -32,7 +33,7 @@ export function getProjectNaStatus(project) {
   const explicit = optionValue(NA_STATUS_OPTIONS, project.naStatus ?? project.nonAgriculturalStatus);
   if (explicit) return explicit;
   if (project.isNA === true || project.nonAgricultural === true || project.naPlot === true) return 'na_approved';
-  if (project.isNA === false || project.nonAgricultural === false || project.naPlot === false) return 'not_na';
+  if (project.isNA === false || project.nonAgricultural === false || project.naPlot === false) return 'non_na';
   return '';
 }
 
@@ -47,7 +48,7 @@ export function getNaStatusLabel(projectOrValue) {
 }
 
 export function matchesProjectFilters(project, filters = {}) {
-  const startingPrice = Number(project?.priceFrom ?? project?.startingPrice ?? 0);
+  const startingPrice = Number(project?.startingPrice ?? project?.priceFrom ?? 0);
   const score = Number(project?.DruvioScore ?? project?.plotItScore ?? 0);
   const selectedZones = Array.isArray(filters.landZones) ? filters.landZones : [];
   const selectedDiscoveryZones = Array.isArray(filters.zones) ? filters.zones : [];

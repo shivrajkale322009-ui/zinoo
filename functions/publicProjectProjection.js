@@ -95,6 +95,23 @@ function normalizeLocation(project = {}) {
   };
 }
 
+function publicLayoutPolygon(value) {
+  const coordinates = value?.points || (value?.type === 'Polygon' ? value.coordinates?.[0] : value);
+  if (!Array.isArray(coordinates) || coordinates.length < 3) return null;
+  const geoJson = value?.type === 'Polygon' && !value.points;
+  const points = coordinates.map((point) => {
+    const lat = Array.isArray(point) ? point[geoJson ? 1 : 0] : point?.lat ?? point?.latitude;
+    const lng = Array.isArray(point) ? point[geoJson ? 0 : 1] : point?.lng ?? point?.longitude;
+    if (lat === null || lat === undefined || lat === '' || lng === null || lng === undefined || lng === '') return null;
+    return { lat: Number(lat), lng: Number(lng) };
+  });
+  if (points.some((point) => !point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)
+    || Math.abs(point.lat) > 90 || Math.abs(point.lng) > 180)) return null;
+  if (new Set(points.map((point) => `${point.lat},${point.lng}`)).size < 3) return null;
+  // Copy coordinates only; never publish arbitrary layout/editor metadata.
+  return { type: 'Polygon', points };
+}
+
 function sanitizePublicProject(project, slug) {
   const display = project.display || {};
   const locationEntity = normalizeLocation(project);
@@ -121,6 +138,7 @@ function sanitizePublicProject(project, slug) {
     canonicalSlug: slug,
     projectName,
     location,
+    completeAddress: text(project.completeAddress || display.map?.address, 300),
     locationId: locationEntity.id,
     locationSlug: locationEntity.slug,
     locality: locationEntity.locality,
@@ -139,6 +157,7 @@ function sanitizePublicProject(project, slug) {
     isHighwayTouch: project.isHighwayTouch === true,
     latitude: locationEntity.latitude,
     longitude: locationEntity.longitude,
+    layoutPolygon: publicLayoutPolygon(project.layoutPolygon),
     primaryImage,
     galleryImages,
     videos,
@@ -168,6 +187,29 @@ function selectCanonicalSlug(project, existing = null) {
   return validSlug(requested) ? requested : slugify(project.name);
 }
 
+async function resolveProjectLocation(db, source, read = (ref) => ref.get()) {
+  let location = normalizeLocation(source);
+  let ref = db.collection('publicLocations').doc(location.slug);
+  let snapshot = await read(ref);
+  const conflicts = () => snapshot.exists && snapshot.data().identityKey
+    && snapshot.data().identityKey !== location.identityKey;
+  if (conflicts() && source.locationSlug === location.slug) {
+    // A persisted location slug describes the previous location after an edit.
+    // Resolve the current identity without overwriting the previous location.
+    location = normalizeLocation({ ...source, locationSlug: undefined });
+    ref = db.collection('publicLocations').doc(location.slug);
+    snapshot = await read(ref);
+  }
+  if (conflicts()) {
+    const slug = `${location.slug.slice(0, 72).replace(/-+$/g, '')}-${shortHash(location.identityKey)}`;
+    location = { ...location, id: slug, slug };
+    ref = db.collection('publicLocations').doc(slug);
+    snapshot = await read(ref);
+    if (conflicts()) throw new Error(`Resolved location slug collision for ${slug}.`);
+  }
+  return { location, ref, snapshot };
+}
+
 async function inspectProjectProjection({ db, projectId }) {
   const [sourceSnapshot, publicSnapshot, ownedRegistrySnapshot] = await Promise.all([
     db.collection('projects').doc(projectId).get(),
@@ -186,8 +228,7 @@ async function inspectProjectProjection({ db, projectId }) {
     collisionResolution = `${original} owned by ${registrySnapshot.data().projectId}; use ${proposedSlug}`;
     registrySnapshot = await db.collection('publicProjectSlugs').doc(proposedSlug).get();
   }
-  const location = normalizeLocation(source);
-  const locationSnapshot = await db.collection('publicLocations').doc(location.slug).get();
+  const { location, snapshot: locationSnapshot } = await resolveProjectLocation(db, source);
   const locationCollision = locationSnapshot.exists && locationSnapshot.data().identityKey
     && locationSnapshot.data().identityKey !== location.identityKey
     ? `${location.slug}: ${location.identityKey} conflicts with ${locationSnapshot.data().identityKey}` : 'none';
@@ -273,22 +314,7 @@ async function projectPublicProjection({ db, projectId }) {
       }
     }
 
-    let location = normalizeLocation(source);
-    let locationRef = db.collection('publicLocations').doc(location.slug);
-    let locationSnapshot = await tx.get(locationRef);
-    if (locationSnapshot.exists && locationSnapshot.data().identityKey
-      && locationSnapshot.data().identityKey !== location.identityKey) {
-      if (source.locationSlug === location.slug) {
-        throw new Error(`Location slug collision for ${location.slug}: ${location.identityKey} conflicts with ${locationSnapshot.data().identityKey}.`);
-      }
-      const resolvedSlug = `${location.slug.slice(0, 72).replace(/-+$/g, '')}-${shortHash(location.identityKey)}`;
-      location = { ...location, id: resolvedSlug, slug: resolvedSlug };
-      locationRef = db.collection('publicLocations').doc(resolvedSlug);
-      locationSnapshot = await tx.get(locationRef);
-      if (locationSnapshot.exists && locationSnapshot.data().identityKey !== location.identityKey) {
-        throw new Error(`Resolved location slug collision for ${resolvedSlug}.`);
-      }
-    }
+    const { location, ref: locationRef, snapshot: locationSnapshot } = await resolveProjectLocation(db, source, (ref) => tx.get(ref));
 
     let previousLocationSnapshot = null;
     let previousLocationProjects = null;
@@ -342,6 +368,7 @@ module.exports = {
   createPublicProjectProjectionHandler,
   inspectProjectProjection,
   normalizeLocation,
+  publicLayoutPolygon,
   projectPublicProjection,
   selectCanonicalSlug,
   sanitizePublicProject,
