@@ -35,6 +35,7 @@ const callableOptions = {
   region: 'us-central1',
   cors: ALLOWED_ORIGINS
 };
+Object.assign(exports, require('./metaCapiFunctions')({ db, marketingDb, callableOptions }));
 exports.publicProjectSeo = onRequest({ region: 'us-central1', timeoutSeconds: 30, memory: '256MiB' }, createPublicProjectSeoHandler(db));
 exports.projectPublicProjection = onDocumentWritten({
   document: 'projects/{projectId}',

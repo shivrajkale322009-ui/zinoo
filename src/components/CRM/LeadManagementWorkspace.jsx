@@ -16,6 +16,7 @@ import LeadTable from './LeadTable';
 import LeadDetailWorkspace from './LeadDetailWorkspace';
 import AddLeadModal from './AddLeadModal';
 import CRMMetricsModal from './CRMMetricsModal';
+import MetaCapiSettings from './MetaCapiSettings';
 import '../../styles/lead-crm.css';
 
 export default function LeadManagementWorkspace({
@@ -160,6 +161,7 @@ export default function LeadManagementWorkspace({
 
   return (
     <div style={{ width: '100%' }}>
+      {!selectedLead && <MetaCapiSettings />}
       {selectedLead ? (
         <LeadDetailWorkspace
           lead={selectedLead}
