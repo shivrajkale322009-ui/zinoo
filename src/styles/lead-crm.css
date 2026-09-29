@@ -1232,3 +1232,9 @@
   outline: 2px solid var(--status-color);
   outline-offset: 2px;
 }
+.crm-quick-note { min-width: 170px; max-width: 260px; white-space: normal; }
+.crm-quick-note-preview { margin: 0 0 7px; font-size: 12px; color: #475569; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.crm-quick-note-form { display: grid; gap: 8px; margin-top: 8px; }
+.crm-quick-note-form textarea { width: 100%; min-height: 90px; resize: vertical; }
+.crm-quick-note-form > div { display: flex; gap: 6px; }
+.crm-quick-note-form [role="alert"] { color: #b91c1c; }

@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useId } from 'react';
 import LeadBudgetSelect from './LeadBudgetSelect';
+import LeadQuickNote from './LeadQuickNote';
 import {
   Search,
   Filter,
@@ -35,7 +36,7 @@ import {
   createActivityRecord
 } from '../../utils/crmLeadModel';
 
-const TABLE_COLUMNS = ['Customer Name', 'Uploaded Date', 'Phone / Contact', 'Source', 'Budget', 'Location & Size', 'Assigned Agent', 'Stage', 'Temp', 'Next Follow-up', 'Actions'];
+const TABLE_COLUMNS = ['Customer Name', 'Uploaded Date', 'Phone / Contact', 'Source', 'Budget', 'Location & Size', 'Assigned Agent', 'Stage', 'Temp', 'Next Follow-up', 'Notes', 'Actions'];
 const COLUMN_STORAGE_KEY = 'druvio.crm.hiddenColumns';
 
 export default function LeadTable({
@@ -536,6 +537,7 @@ export default function LeadTable({
                     <th hidden={hiddenColumns.includes('Stage')}>Stage</th>
                     <th hidden={hiddenColumns.includes('Temp')}>Temp</th>
                     <th hidden={hiddenColumns.includes('Next Follow-up')}>Next Follow-up</th>
+                    <th hidden={hiddenColumns.includes('Notes')}>Notes</th>
                     <th hidden={hiddenColumns.includes('Actions')} style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
@@ -625,6 +627,7 @@ export default function LeadTable({
                           )}
                         </td>
 
+                        <td hidden={hiddenColumns.includes('Notes')}><LeadQuickNote lead={lead} currentUser={currentUser} onUpdateLead={onUpdateLead} /></td>
                         <td hidden={hiddenColumns.includes('Actions')}>
                           <div className="crm-quick-actions" style={{ justifyContent: 'flex-end' }}>
                             {callUrl && (
@@ -723,6 +726,7 @@ export default function LeadTable({
                     </div>
 
                     <div className="crm-mobile-card-footer">
+                      <LeadQuickNote lead={lead} currentUser={currentUser} onUpdateLead={onUpdateLead} />
                       <div style={{ display: 'flex', gap: 8 }}>
                         {callUrl && (
                           <a href={callUrl} className="crm-icon-btn phone">
