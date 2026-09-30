@@ -13523,19 +13523,6 @@ html.dark-mode .seller-workspace select option,
   font-size: 10px;
 }
 
-.admin-property-card-mini-offer {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  max-width: 100%;
-  padding: 4px 8px;
-  border: 1px solid #bbf7d0;
-  border-radius: 999px;
-  background: #eaf8ee;
-  color: #1c7c36 !important;
-  font-size: 10px !important;
-}
-
 .admin-property-card-main:focus-visible {
   outline: 3px solid rgba(37, 99, 235, .22);
   outline-offset: -3px;

@@ -1517,8 +1517,6 @@ function AdminPanel({
                           const documentNames = propertyDocuments.map((document) => document.displayName || document.originalFileName || document.fileName || getProjectDocumentLabel(document.type));
                           const documentSummary = documentNames.length > 2 ? `${documentNames.slice(0, 2).join(', ')} +${documentNames.length - 2} more` : documentNames.join(', ');
                           const highlightOffer = property.highlightBadge || property.display?.highlightBadge;
-                          const cashbackRaw = property.cashbackPerGuntha ?? property.cashbackAmount ?? property.cashback ?? property.display?.cashback?.amount ?? 0;
-                          const cashbackOffer = Number(String(cashbackRaw).replace(/[^\d.]/g, '')) || 0;
                           return (
                             <article key={property.id} className={`admin-property-list-card ${property.hasErrors ? 'has-errors' : ''} ${propertyActionsMenu?.id === property.id ? 'has-open-menu' : ''}`}>
                               <button type="button" className="admin-property-card-main" onClick={() => openPropertyDetails(property, 'properties')} aria-label={`View ${property.name || 'property'}`}>
@@ -1545,7 +1543,7 @@ function AdminPanel({
                                   </span>
                                   <span className="admin-property-card-extra-row admin-property-card-offer-row">
                                     <Sparkles size={15} aria-hidden="true" />
-                                    <span><small>Offer strip</small>{highlightOffer && highlightOffer !== 'NONE' ? <PropertyHighlightBadge badgeType={highlightOffer} /> : cashbackOffer > 0 ? <strong className="admin-property-card-mini-offer">Cashback ₹{new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(cashbackOffer)}</strong> : <strong>None selected</strong>}</span>
+                                    <span><small>Offer strip</small>{highlightOffer && highlightOffer !== 'NONE' ? <PropertyHighlightBadge badgeType={highlightOffer} /> : <strong>No offer strip</strong>}</span>
                                   </span>
                                   <span className="admin-property-card-extra-row">
                                     <FileText size={15} aria-hidden="true" />
