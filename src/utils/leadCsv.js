@@ -39,6 +39,6 @@ export function parseLeadCsv(text, fallbackDate) {
     const time = rawTime.match(/^(\d{1,2}):(\d{2})(?:\s*([ap])m)?$/i);
     if (rawTime && (!time || Number(time[2]) > 59 || Number(time[1]) > (time[3] ? 12 : 23) || (time[3] && Number(time[1]) < 1))) throw new Error(`Invalid time on CSV row ${index + 2}.`);
     const hours = time ? (time[3] ? Number(time[1]) % 12 + (time[3].toLowerCase() === 'p' ? 12 : 0) : Number(time[1])) : null;
-    return { name: get(row,'name') || 'Unnamed lead', phone: `+91${digits}`, date, importTime: time ? `${String(hours).padStart(2,'0')}:${time[2]}` : '', sourceLot: get(row,'source lot') };
+    return { name: get(row,'name') || 'Sir/Madam', phone: `+91${digits}`, date, importTime: time ? `${String(hours).padStart(2,'0')}:${time[2]}` : '', sourceLot: get(row,'source lot') };
   });
 }

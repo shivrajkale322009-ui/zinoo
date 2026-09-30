@@ -89,12 +89,13 @@ test('defines all standard CRM stages and temperature tiers', () => {
   const stageKeys = LEAD_STAGES.map((s) => s.key);
   assert.ok(stageKeys.includes('New'));
   assert.ok(stageKeys.includes('Contacted'));
-  assert.ok(stageKeys.includes('Requirement Collected'));
+  assert.ok(!stageKeys.includes('Requirement Collected'));
   assert.ok(stageKeys.includes('Projects Suggested'));
   assert.ok(stageKeys.includes('Visit Scheduled'));
   assert.ok(stageKeys.includes('Visit Completed'));
-  assert.ok(stageKeys.includes('Interested'));
-  assert.ok(stageKeys.includes('Negotiation'));
+  assert.ok(!stageKeys.includes('Interested'));
+  assert.ok(!stageKeys.includes('Negotiation'));
+  assert.ok(!stageKeys.includes('Follow Up Later'));
   assert.ok(stageKeys.includes('Closed Won'));
   assert.ok(stageKeys.includes('Closed Lost'));
 

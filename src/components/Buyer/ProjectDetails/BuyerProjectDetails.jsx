@@ -4,11 +4,15 @@ import {
   BadgeCheck,
   FileCheck2,
   Image as ImageIcon,
+  Info,
+  Layers,
   Leaf,
   MapPin,
+  Sparkles,
   WalletCards
 } from 'lucide-react';
 import CashbackBadge from '../../CashbackBadge';
+import PropertyHighlightBadge from '../../PropertyHighlightBadge';
 import BuyerDetailSection from './BuyerDetailSection';
 import { getLandZoneLabel, getNaStatusLabel } from '../../../utils/projectLand';
 
@@ -114,6 +118,7 @@ export default function BuyerProjectDetails({
               ))}
             </div>
             <div className="premium-project-hero-scrim" />
+            <PropertyHighlightBadge badgeType={selectedProject?.highlightBadge || selectedDisplay?.highlightBadge} isHero />
             <div className="reference-gallery-count"><ImageIcon size={14} /> {activeHeroIndex + 1}/{heroImages.length}</div>
             {previewEditor?.editing && <div className="preview-gallery-controls"><label title="Add photo"><ImageIcon size={15} /><input type="file" hidden accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) previewEditor.addMedia(file, 'gallery'); event.target.value = ''; }} /></label><label title="Add video"><span>+</span><input type="file" hidden accept="video/mp4,video/webm" onChange={(event) => { const file = event.target.files?.[0]; if (file) previewEditor.addMedia(file, 'video'); event.target.value = ''; }} /></label>{previewEditor.removeMedia && <button type="button" title="Remove current media" onClick={() => previewEditor.removeMedia(activeHeroIndex)} aria-label="Remove current media">×</button>}</div>}
             {heroImages.length > 1 && (
@@ -151,7 +156,7 @@ export default function BuyerProjectDetails({
               {contactActions}
             </section>
 
-            <BuyerDetailSection title="Overview" className="google-project-overview" key={`overview-${selectedProject.id}`}>
+            <BuyerDetailSection title="Overview" icon={Layers} className="google-project-overview" key={`overview-${selectedProject.id}`}>
               <dl className="buyer-overview-rows">
                 {overviewItems.map(({ label, value, icon: Icon }) => (
                   <div className="buyer-overview-row" key={label}>
@@ -180,16 +185,27 @@ export default function BuyerProjectDetails({
 
             {documentsSection}
 
-            <BuyerDetailSection title="Amenities" className="reference-amenities-section" key={`amenities-${selectedProject.id}`}>
+            <BuyerDetailSection title="Amenities" icon={Sparkles} className="reference-amenities-section" key={`amenities-${selectedProject.id}`}>
               {visibleAmenities.length > 0 || previewEditor?.editing ? <div className="google-amenity-chips">{visibleAmenities.map((item) => previewEditor?.editing ? <label className="preview-amenity-chip" key={item.id}><input type="checkbox" checked onChange={() => previewEditor.toggleAmenity(item.title)} /><Leaf size={16} /> {item.title}</label> : <span key={item.id}><Leaf size={16} /> {item.title}</span>)}{previewEditor?.editing && previewEditor.availableAmenities.map((name) => <label className="preview-amenity-chip" key={name}><input type="checkbox" onChange={() => previewEditor.toggleAmenity(name)} /> <Leaf size={16} /> {name}</label>)}</div>
                 : <p className="buyer-detail-empty">No amenities listed yet. Contact us on WhatsApp for details.</p>}
             </BuyerDetailSection>
 
-            {about && <section className="reference-section google-project-about">
-              <h3>About Project</h3>
-              {previewEditor?.editing ? <textarea className="preview-inline-textarea" aria-label="About project" value={selectedProject.description || ''} onChange={(event) => previewEditor.setField('description', event.target.value)} /> : <p className={aboutExpanded ? 'is-expanded' : ''}>{about}</p>}
-              {about.length > 160 && <button type="button" onClick={() => setAboutExpanded((value) => !value)}>{aboutExpanded ? 'Show less' : 'Read more'}</button>}
-            </section>}
+            {about && (
+              <BuyerDetailSection title="About" icon={Info} className="google-project-about" key={`about-${selectedProject.id}`}>
+                {previewEditor?.editing ? (
+                  <textarea
+                    className="preview-inline-textarea"
+                    aria-label="About project"
+                    value={selectedProject.description || ''}
+                    onChange={(event) => previewEditor.setField('description', event.target.value)}
+                  />
+                ) : (
+                  <p className="buyer-project-about-text">
+                    {about}
+                  </p>
+                )}
+              </BuyerDetailSection>
+            )}
 
           </div>
         </div>

@@ -36,6 +36,22 @@ test('rejects inaccessible, oversized, and unsupported image sources before uplo
   assert.equal(uploads, 0);
 });
 
+test('accepts the project hosting image but rejects lookalike hosting domains', async (t) => {
+  const calls = [];
+  t.mock.method(global, 'fetch', async (url, options) => {
+    calls.push(String(url));
+    return options.method === 'POST'
+      ? new Response(JSON.stringify({ id: 'hosted-image' }))
+      : new Response(new Uint8Array([255, 216, 255]), { headers: { 'content-type': 'image/jpeg' } });
+  });
+  const args = { accessToken: 'test-token', phoneNumberId: '123' };
+  assert.equal(await uploadTemplateImage({ ...args, url: 'https://druvio.web.app/zinoo-campaign-september-2026.jpeg' }), 'hosted-image');
+  for (const host of ['other-project.web.app', 'druvio.web.app.example.com', 'evil-druvio.web.app']) {
+    await assert.rejects(uploadTemplateImage({ ...args, url: `https://${host}/image.jpg` }), /hosted/);
+  }
+  assert.equal(calls.length, 2);
+});
+
 const template = { metaTemplateName: 'marketing_v1', language: 'en', components: [
   { type: 'HEADER', format: 'IMAGE' },
   { type: 'BODY', text: 'Hello {{customer_name}}' },
@@ -45,6 +61,20 @@ test('media template includes image and named recipient parameter', () => {
   assert.deepEqual(buildTemplateComponents(template, 'Customer One', 'https://example.com/image.jpg'), [
     { type: 'header', parameters: [{ type: 'image', image: { link: 'https://example.com/image.jpg' } }] },
     { type: 'body', parameters: [{ type: 'text', text: 'Customer One', parameter_name: 'customer_name' }] },
+  ]);
+});
+test('lead name falls back to Sir/Madam when missing, blank or null', () => {
+  assert.deepEqual(buildTemplateComponents(template, '', 'https://example.com/image.jpg'), [
+    { type: 'header', parameters: [{ type: 'image', image: { link: 'https://example.com/image.jpg' } }] },
+    { type: 'body', parameters: [{ type: 'text', text: 'Sir/Madam', parameter_name: 'customer_name' }] },
+  ]);
+  assert.deepEqual(buildTemplateComponents(template, '   ', 'https://example.com/image.jpg'), [
+    { type: 'header', parameters: [{ type: 'image', image: { link: 'https://example.com/image.jpg' } }] },
+    { type: 'body', parameters: [{ type: 'text', text: 'Sir/Madam', parameter_name: 'customer_name' }] },
+  ]);
+  assert.deepEqual(buildTemplateComponents(template, null, 'https://example.com/image.jpg'), [
+    { type: 'header', parameters: [{ type: 'image', image: { link: 'https://example.com/image.jpg' } }] },
+    { type: 'body', parameters: [{ type: 'text', text: 'Sir/Madam', parameter_name: 'customer_name' }] },
   ]);
 });
 test('missing and invalid media fail before sending', async () => {

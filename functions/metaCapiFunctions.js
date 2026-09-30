@@ -1,16 +1,17 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
-const { defineSecret } = require('firebase-functions/params');
 const { FieldValue, Timestamp } = require('firebase-admin/firestore');
 const { randomUUID } = require('node:crypto');
 const { DATASET_ID, STAGES, epoch, buildStageEvent, userData, sendEvent } = require('./metaCapi');
 
 module.exports = function createMetaCapiFunctions({ db, marketingDb, callableOptions }) {
-  const token = defineSecret('META_CAPI_ACCESS_TOKEN');
+  // Secret requirement temporarily relaxed so deployment does not fail when Secret Manager
+  // lacks META_CAPI_ACCESS_TOKEN. Reads from process.env.META_CAPI_ACCESS_TOKEN if configured.
+  const getCapiToken = () => process.env.META_CAPI_ACCESS_TOKEN || '';
   const configRef = marketingDb.doc('meta_capi/config');
   const queue = marketingDb.collection('meta_capi_events');
-  const metaCapiAdmin = onCall({ ...callableOptions, secrets: [token], timeoutSeconds: 60 }, async (request) => {
+  const metaCapiAdmin = onCall({ ...callableOptions, timeoutSeconds: 60 }, async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const profile = (await db.doc(`users/${request.auth.uid}`).get()).data() || {};
     if (!(profile.role === 'admin' || profile.admin === true || profile.permissions?.admin === true)) throw new HttpsError('permission-denied', 'Admin access required.');
@@ -19,9 +20,11 @@ module.exports = function createMetaCapiFunctions({ db, marketingDb, callableOpt
     if (action === 'test') {
       const code = String(request.data?.testCode || '').trim();
       if (!/^[A-Za-z0-9_-]{4,100}$/.test(code)) throw new HttpsError('invalid-argument', 'Enter the test event code from Meta Events Manager.');
+      const token = getCapiToken();
+      if (!token) throw new HttpsError('failed-precondition', 'META_CAPI_ACCESS_TOKEN is not configured.');
       const event = { event_name: 'Lead', event_time: Math.floor(Date.now() / 1000), event_id: `druvio-test-${randomUUID()}`, action_source: 'system_generated', custom_data: { event_source: 'crm', lead_event_source: 'Druvio' }, user_data: userData({ email: 'capi-test@example.com' }) };
       let result;
-      try { result = await sendEvent({ event, token: token.value(), testCode: code }); }
+      try { result = await sendEvent({ event, token, testCode: code }); }
       catch (error) { throw new HttpsError('failed-precondition', error.message); }
       await configRef.set({ lastTestAt: Timestamp.now(), lastTestTraceId: result.traceId, datasetId: DATASET_ID }, { merge: true });
       return { tested: true, ...result };
@@ -47,9 +50,11 @@ module.exports = function createMetaCapiFunctions({ db, marketingDb, callableOpt
     } catch (error) { if (error.code !== 6 && error.code !== 'already-exists') throw error; }
   });
 
-  const deliverMetaLeadEvents = onSchedule({ schedule: 'every 1 minutes', region: 'us-central1', secrets: [token], timeoutSeconds: 300, maxInstances: 1 }, async () => {
+  const deliverMetaLeadEvents = onSchedule({ schedule: 'every 1 minutes', region: 'us-central1', timeoutSeconds: 300, maxInstances: 1 }, async () => {
     const config = (await configRef.get()).data() || {};
     if (config.mode !== 'production') return;
+    const token = getCapiToken();
+    if (!token) return;
     const pending = await queue.where('readyAt', '<=', Timestamp.now()).orderBy('readyAt').limit(10).get();
     for (const doc of pending.docs) {
       const item = await marketingDb.runTransaction(async (transaction) => {
@@ -64,7 +69,7 @@ module.exports = function createMetaCapiFunctions({ db, marketingDb, callableOpt
         continue;
       }
       try {
-        const result = await sendEvent({ event: item.event, token: token.value() });
+        const result = await sendEvent({ event: item.event, token });
         await doc.ref.update({ status: 'sent', sentAt: Timestamp.now(), readyAt: FieldValue.delete(), event: FieldValue.delete(), error: FieldValue.delete(), traceId: result.traceId });
       } catch (error) {
         const retry = error.retryable && item.attempts < 11;

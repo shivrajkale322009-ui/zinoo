@@ -49,7 +49,8 @@ import {
   TrendingUp,
   Bot,
   Copy,
-  MessageCircle
+  MessageCircle,
+  Phone
 } from 'lucide-react';
 import {
   collection,
@@ -75,6 +76,7 @@ import { applyHighwayResult } from '../utils/highwayInfo';
 import PropertyMediaDocumentsManager, { InAppDocumentViewer, openDocumentPreview } from './PropertyMediaDocumentsManager';
 import PropertyDisplayEditor from './PropertyDisplayEditor';
 import AdminPropertyDetails from './AdminPropertyDetails';
+import PropertyHighlightBadge from './PropertyHighlightBadge';
 import AmenityCatalogManager from './AmenityCatalogManager';
 import useMediaQuery from '../utils/useMediaQuery';
 import CashbackWorkspace from './CashbackWorkspace';
@@ -1182,7 +1184,7 @@ function AdminPanel({
       </aside>}
 
       <section className={`admin-content ${editingProperty ? 'admin-content-property-editor' : ''}`}>
-        {activeTab !== 'home' && <div className={`admin-content-header admin-content-header-compact ${editingProperty ? 'admin-content-header-editor' : ''}`}>
+        {activeTab !== 'home' && !(isAndroidLayout && activeTab === 'crm_leads') && <div className={`admin-content-header admin-content-header-compact ${editingProperty ? 'admin-content-header-editor' : ''}`}>
           <div>
             <h1>{activeTab === 'whatsapp' && whatsAppView === 'total-leads' ? 'WhatsApp Leads > Total leads' : currentMeta.title}</h1>
             <p>{activeTab === 'whatsapp' && whatsAppView === 'total-leads' ? 'All WhatsApp leads' : currentMeta.description}</p>
@@ -1510,6 +1512,13 @@ function AdminPanel({
                           const status = getProjectStatus(property);
                           const statusLabel = status === PROPERTY_STATUS.PENDING ? 'Pending Review' : status.replace(/_/g, ' ');
                           const propertySeller = sellers.find((seller) => seller.id === (property.sellerId || property.sellerUid || property.ownerId));
+                          const propertyPhone = property.contactNumber || property.siteVisitContactNumber || property.siteVisitContact || property.whatsappNumber || propertySeller?.phoneNumber || propertySeller?.phone;
+                          const propertyDocuments = normalizeProjectDocuments(property);
+                          const documentNames = propertyDocuments.map((document) => document.displayName || document.originalFileName || document.fileName || getProjectDocumentLabel(document.type));
+                          const documentSummary = documentNames.length > 2 ? `${documentNames.slice(0, 2).join(', ')} +${documentNames.length - 2} more` : documentNames.join(', ');
+                          const highlightOffer = property.highlightBadge || property.display?.highlightBadge;
+                          const cashbackRaw = property.cashbackPerGuntha ?? property.cashbackAmount ?? property.cashback ?? property.display?.cashback?.amount ?? 0;
+                          const cashbackOffer = Number(String(cashbackRaw).replace(/[^\d.]/g, '')) || 0;
                           return (
                             <article key={property.id} className={`admin-property-list-card ${property.hasErrors ? 'has-errors' : ''} ${propertyActionsMenu?.id === property.id ? 'has-open-menu' : ''}`}>
                               <button type="button" className="admin-property-card-main" onClick={() => openPropertyDetails(property, 'properties')} aria-label={`View ${property.name || 'property'}`}>
@@ -1528,6 +1537,24 @@ function AdminPanel({
                                     {!property.sellerAssociationValid && <span className="admin-property-pill is-error">Seller Missing</span>}
                                   </span>
                                   <span className="admin-property-card-date"><Clock3 size={14} aria-hidden="true" /> Added on {formatAdminDate(addedAt)}</span>
+                                </span>
+                                <span className="admin-property-card-extra">
+                                  <span className="admin-property-card-extra-row">
+                                    <Phone size={15} aria-hidden="true" />
+                                    <span><small>Mobile</small><strong title={propertyPhone || 'No mobile number added'}>{propertyPhone || 'Not added'}</strong></span>
+                                  </span>
+                                  <span className="admin-property-card-extra-row admin-property-card-offer-row">
+                                    <Sparkles size={15} aria-hidden="true" />
+                                    <span><small>Offer strip</small>{highlightOffer && highlightOffer !== 'NONE' ? <PropertyHighlightBadge badgeType={highlightOffer} /> : cashbackOffer > 0 ? <strong className="admin-property-card-mini-offer">Cashback ₹{new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(cashbackOffer)}</strong> : <strong>None selected</strong>}</span>
+                                  </span>
+                                  <span className="admin-property-card-extra-row">
+                                    <FileText size={15} aria-hidden="true" />
+                                    <span><small>Documents</small><strong title={documentSummary || 'No documents added'}>{documentSummary || 'None added'}</strong></span>
+                                  </span>
+                                  <span className="admin-property-card-extra-row">
+                                    <MapPin size={15} aria-hidden="true" />
+                                    <span><small>Zone</small><strong>{getLandZoneLabel(property)}</strong></span>
+                                  </span>
                                 </span>
                               </button>
                               <div className="admin-property-card-actions">

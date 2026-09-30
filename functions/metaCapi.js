@@ -2,7 +2,7 @@ const { createHash } = require('node:crypto');
 
 const DATASET_ID = '2252404462242027';
 const API_VERSION = 'v26.0';
-const STAGES = Object.freeze({ New: 'Lead', Contacted: 'Contacted', 'Requirement Collected': 'RequirementCollected', 'Projects Suggested': 'ProjectsSuggested', 'Visit Scheduled': 'VisitScheduled', 'Visit Completed': 'VisitCompleted', Interested: 'QualifiedLead', Negotiation: 'Negotiation', 'Follow Up Later': 'FollowUpLater', 'Closed Won': 'ConvertedLead', 'Closed Lost': 'ClosedLost' });
+const STAGES = Object.freeze({ New: 'Lead', Contacted: 'Contacted', 'Projects Suggested': 'ProjectsSuggested', 'Visit Scheduled': 'VisitScheduled', 'Visit Completed': 'QualifiedLead', 'Closed Won': 'ConvertedLead', 'Closed Lost': 'ClosedLost' });
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const epoch = (value) => value?.toMillis?.() || (value?.seconds ? value.seconds * 1000 : new Date(value || 0).getTime());
 function metaId(value) {

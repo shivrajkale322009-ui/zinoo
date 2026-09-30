@@ -56,6 +56,7 @@ export function createPropertyDisplayModel(project = {}) {
 
   return {
     schemaVersion: 1,
+    highlightBadge: asText(project.highlightBadge, 'NONE'),
     basic: {
       projectName: asText(project.name),
       shortTitle: asText(project.shortTitle || project.name),
@@ -254,7 +255,8 @@ export function getPropertyDisplayModel(project = {}) {
     map: mergeSection(fallback.map, configured.map),
     trust: mergeSection(fallback.trust, configured.trust),
     actions: mergeSection(fallback.actions, configured.actions),
-    visibility: mergeSection(fallback.visibility, configured.visibility)
+    visibility: mergeSection(fallback.visibility, configured.visibility),
+    highlightBadge: configured.highlightBadge || fallback.highlightBadge || 'NONE'
   };
 }
 
@@ -300,6 +302,7 @@ export function withPropertyDisplayModel(project = {}, options = {}) {
     district: display.basic.district,
     cashbackAmount: display.cashback.enabled ? display.cashback.amount : 0,
     cashbackPerGuntha: display.cashback.enabled ? display.cashback.amount : 0,
+    highlightBadge: displaySource.highlightBadge || display.highlightBadge || 'NONE',
     // RERA is optional. Do not manufacture an undefined key here: Firestore
     // rejects undefined values when this normalized object is created or saved.
     ...(() => {

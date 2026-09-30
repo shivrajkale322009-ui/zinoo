@@ -21,7 +21,7 @@ export default function MetaCapiSettings() {
   return <details className="crm-meta-settings" onToggle={(event) => { if (event.currentTarget.open && !status && !busy) run('status'); }}>
     <summary>Meta lead integration</summary>
     <p>Dataset 2252404462242027 · {status?.mode === 'production' ? 'Sending enabled' : 'Sending disabled'}</p>
-    <p>Only Meta-sourced leads are sent. Mark a lead Interested only after confirming their budget, location and buying interest; this sends QualifiedLead. Closed Won sends ConvertedLead. Notes are never sent.</p>
+    <p>Only Meta-sourced leads are sent. Visit Completed sends QualifiedLead after the buyer’s visit. Closed Won sends ConvertedLead. Use Hot, Warm or Cold to track buying interest. Notes are never sent.</p>
     <label>Meta test event code<input value={code} onChange={(event) => setCode(event.target.value)} placeholder="From Events Manager → Test events" /></label>
     <div className="crm-meta-actions">
       <button className="crm-btn crm-btn-secondary" disabled={busy || !code.trim()} onClick={() => run('test')}>Send test event</button>

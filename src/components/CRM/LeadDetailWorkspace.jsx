@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from 'react';
+import { updateNoteWithDate } from '../../utils/noteDateShortcut';
+import NoteText from './NoteText';
 import {
   ArrowLeft,
   Phone,
@@ -29,6 +31,7 @@ import {
   CLOSED_LOST_REASONS,
   formatLeadBudget,
   createActivityRecord,
+  createClosedLostUpdate,
   isToday,
   isOverdue,
   PREFERRED_AREAS,
@@ -136,24 +139,18 @@ export default function LeadDetailWorkspace({
     });
   };
 
-  const handleConfirmClosedLost = () => {
-    const activity = createActivityRecord({
-      type: 'deal_closed_lost',
-      title: 'Deal Closed Lost',
-      description: `Reason: ${lostReason}. ${lostNotes ? `Notes: ${lostNotes}` : ''}`,
-      user: currentUser
-    });
-
-    onUpdateLead(lead.id, {
-      stage: 'Closed Lost',
-      dealDetails: {
-        lostReason,
-        lostNotes: lostNotes.trim()
-      },
-      activities: [activity, ...(lead.activities || [])]
-    });
-
-    setIsLostModalOpen(false);
+  const [lostSaving, setLostSaving] = useState(false);
+  const [lostError, setLostError] = useState('');
+  const handleConfirmClosedLost = async () => {
+    if (lostSaving) return;
+    setLostSaving(true);
+    setLostError('');
+    try {
+      const saved = await onUpdateLead(lead.id, createClosedLostUpdate(lead, lostReason, lostNotes, currentUser));
+      if (saved === false) throw new Error('Could not save. Please try again.');
+      setIsLostModalOpen(false);
+    } catch (error) { setLostError(error.message); }
+    finally { setLostSaving(false); }
   };
 
   const handleConfirmClosedWon = () => {
@@ -528,7 +525,7 @@ export default function LeadDetailWorkspace({
             </div>
             <div className="crm-customer-info">
               <h2>
-                {lead.name || 'Unnamed Lead'}
+                {lead.name && !/^unnamed(?:\s+lead)?$/i.test(lead.name.trim()) ? lead.name : 'Sir/Madam'}
                 <span
                   className="crm-badge"
                   style={{
@@ -1318,7 +1315,8 @@ export default function LeadDetailWorkspace({
                           })}
                         </span>
                       </div>
-                      <div className="crm-note-text">{note.text}</div>
+                      {note.stage && <span className="crm-note-stage-tag">{note.stage}</span>}
+                      <div className="crm-note-text"><NoteText>{note.text}</NoteText></div>
                     </div>
                   ))}
                 </div>
@@ -1457,16 +1455,25 @@ export default function LeadDetailWorkspace({
                 <textarea
                   placeholder="e.g. Bought resale plot in Kuruli instead due to budget constraint..."
                   value={lostNotes}
-                  onChange={(e) => setLostNotes(e.target.value)}
+                  onChange={(event) => updateNoteWithDate(event, setLostNotes)}
+                  disabled={lostSaving}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                      event.preventDefault();
+                      if (!event.repeat && !lostSaving) handleConfirmClosedLost();
+                    }
+                  }}
                   rows={2}
                 />
+                <small>Enter to save · Shift+Enter for a new line</small>
               </div>
             </div>
             <div className="crm-modal-footer">
               <button type="button" className="crm-btn crm-btn-secondary" onClick={() => setIsLostModalOpen(false)}>
                 Cancel
               </button>
-              <button type="button" className="crm-btn crm-btn-outline-danger" onClick={handleConfirmClosedLost}>
+              {lostError && <p role="alert">{lostError}</p>}
+              <button type="button" className="crm-btn crm-btn-outline-danger" disabled={lostSaving} onClick={handleConfirmClosedLost}>
                 Confirm Closed Lost
               </button>
             </div>

@@ -29,6 +29,7 @@
     "singleProjectMode": true
   },
   "hosting": {
+    "site": "druvio",
     "public": "dist",
     "predeploy": ["node scripts/live-updates.mjs stage-hosting"],
     "ignore": [

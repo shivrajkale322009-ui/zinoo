@@ -9,13 +9,9 @@ import { formatIndianCurrency } from './formatIndian.js';
 export const LEAD_STAGES = [
   { key: 'New', label: 'New', color: 'blue', bg: '#eff6ff', border: '#bfdbfe', text: '#1d4ed8' },
   { key: 'Contacted', label: 'Contacted', color: 'sky', bg: '#f0f9ff', border: '#bae6fd', text: '#0369a1' },
-  { key: 'Requirement Collected', label: 'Requirement Collected', color: 'indigo', bg: '#eef2ff', border: '#c7d2fe', text: '#4338ca' },
   { key: 'Projects Suggested', label: 'Projects Suggested', color: 'purple', bg: '#faf5ff', border: '#e9d5ff', text: '#7e22ce' },
   { key: 'Visit Scheduled', label: 'Visit Scheduled', color: 'amber', bg: '#fffbeb', border: '#fde68a', text: '#b45309' },
-  { key: 'Visit Completed', label: 'Visit Completed', color: 'teal', bg: '#f0fdfa', border: '#99f6e4', text: '#0f766e' },
-  { key: 'Interested', label: 'Interested', color: 'emerald', bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' },
-  { key: 'Negotiation', label: 'Negotiation', color: 'orange', bg: '#fff7ed', border: '#fed7aa', text: '#c2410c' },
-  { key: 'Follow Up Later', label: 'Follow Up Later', color: 'slate', bg: '#f8fafc', border: '#cbd5e1', text: '#475569' },
+  { key: 'Visit Completed', label: 'Visit Completed', color: 'amber', bg: '#fffbeb', border: '#fde68a', text: '#b45309' },
   { key: 'Closed Won', label: 'Closed Won', color: 'green', bg: '#f0fdf4', border: '#bbf7d0', text: '#15803d' },
   { key: 'Closed Lost', label: 'Closed Lost', color: 'rose', bg: '#fff1f2', border: '#fecdd3', text: '#be123c' }
 ];
@@ -80,8 +76,19 @@ export const CLOSED_LOST_REASONS = [
   'Unable to contact',
   'Project unavailable',
   'Loan issue',
+  'Business related (broker, seller, or loan agent)',
   'Other'
 ];
+
+export function createClosedLostUpdate(lead, reason, notes, user) {
+  const text = String(notes || '').trim();
+  if (!CLOSED_LOST_REASONS.includes(reason)) throw new Error('Select a loss reason.');
+  if (reason === 'Other' && !text) throw new Error('Add a note explaining the reason.');
+  const createdAt = new Date().toISOString();
+  const note = { id: `note_${crypto.randomUUID()}`, stage: 'Closed Lost', reason, text: text ? `${reason}: ${text}` : reason, createdAt, createdByName: user?.displayName || user?.name || 'Admin' };
+  const activity = createActivityRecord({ type: 'deal_closed_lost', title: 'Deal Closed Lost', description: note.text, user });
+  return { stage: 'Closed Lost', dealDetails: { ...(lead.dealDetails || {}), lostReason: reason, lostNotes: text }, notes: [note, ...(lead.notes || [])], activities: [activity, ...(lead.activities || [])] };
+}
 
 export const SITE_VISIT_STATUSES = [
   'Scheduled',

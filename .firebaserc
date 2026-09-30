@@ -1,7 +1,7 @@
 {
   "projects": {
     "default": "druvio",
-    "staging ": "druvio"
+    "staging": "druvio"
   },
   "targets": {},
   "etags": {}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { BadgeCheck } from 'lucide-react';
+import { BadgeCheck, FileText } from 'lucide-react';
 import BuyerDetailSection from './BuyerDetailSection';
 import { getProjectDocumentLabel } from '../../../utils/projectDocuments';
 import { ImageLightbox, InAppDocumentViewer } from '../../PropertyMediaDocumentsManager';
@@ -48,7 +48,7 @@ export default function BuyerProjectMedia({
     const visibleDocuments = selectedDisplay.documents.showOnDetails ? (documents || []) : [];
 
     return (
-      <BuyerDetailSection title="Documents" className="premium-documents-section" style={{ order }}>
+      <BuyerDetailSection title="Documents" icon={FileText} className="premium-documents-section" style={{ order }}>
         {visibleDocuments.length > 0 ? <>
         <div className="reference-section-title"><button type="button" onClick={() => onViewDocument(visibleDocuments[0])}>View all</button></div>
         <div className="buyer-document-list">

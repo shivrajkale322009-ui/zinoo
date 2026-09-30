@@ -1,17 +1,18 @@
 import React, { useState, useMemo, useEffect, useId } from 'react';
 import LeadBudgetSelect from './LeadBudgetSelect';
+import LeadNameEditor from './LeadNameEditor';
 import LeadQuickNote from './LeadQuickNote';
+import ClosedLostDialog from './ClosedLostDialog';
 import {
   Search,
   Filter,
   Columns3,
+  ListFilter,
   Plus,
   Phone,
-  MessageCircle,
   Calendar,
   Clock,
   MapPin,
-  ChevronRight,
   TrendingUp,
   UserCheck,
   CheckCircle2,
@@ -64,12 +65,15 @@ export default function LeadTable({
   }, [hiddenColumns]);
   const [savingLeads, setSavingLeads] = useState({});
   const [saveError, setSaveError] = useState('');
+  const [lostLeadId, setLostLeadId] = useState(null);
+  const lostLead = leads.find((lead) => lead.id === lostLeadId);
   const uploadedDate = (lead) => {
     const time = getEpochMs(lead.createdAt) || getEpochMs(lead.date);
     return time ? new Date(time).toLocaleDateString('en-GB') : 'Not available';
   };
   const updateField = async (lead, field, value) => {
     if (savingLeads[lead.id] || value === lead[field]) return;
+    if (field === 'stage' && value === 'Closed Lost') { setLostLeadId(lead.id); return; }
     setSavingLeads((previous) => ({ ...previous, [lead.id]: true }));
     setSaveError('');
     const activity = createActivityRecord({
@@ -89,9 +93,10 @@ export default function LeadTable({
   };
   const fieldSelect = (lead, field, options, selected) => (
     <select className="crm-inline-select crm-colored-status" aria-label={`${field === 'stage' ? 'Stage' : 'Temperature'} for ${lead.name || lead.phone || 'unnamed lead'}`}
-      value={selected.key} disabled={!onUpdateLead || savingLeads[lead.id]}
-      style={{ '--status-bg': selected.bg, '--status-border': selected.border, '--status-color': selected.text }}
+      value={lead[field] || selected.key} disabled={!onUpdateLead || savingLeads[lead.id]}
+      style={{ '--status-bg': selected.bg, '--status-border': selected.border, '--status-color': selected.text, '--status-width': `${(options.find((option) => option.key === lead[field])?.label || lead[field] || selected.label).length + 6}ch` }}
       onChange={(event) => updateField(lead, field, event.target.value)}>
+      {lead[field] && !options.some((option) => option.key === lead[field]) && <option value={lead[field]} disabled>{lead[field]} (previous stage)</option>}
       {options.map((option) => <option key={option.key} value={option.key} style={{ backgroundColor: option.bg, color: option.text, fontWeight: 600 }}>● {option.label}</option>)}
     </select>
   );
@@ -217,8 +222,11 @@ export default function LeadTable({
 
   return (
     <div className="crm-workspace">
+      {lostLead && <ClosedLostDialog lead={lostLead} currentUser={currentUser} onUpdateLead={onUpdateLead} onClose={() => setLostLeadId(null)} />}
       {saveError && <p role="alert">{saveError}</p>}
       {/* 1. TOP METRIC SUMMARY CARDS */}
+      <details className="crm-metrics-dropdown">
+        <summary>Lead summary</summary>
       <div className="crm-metrics-grid">
         <div
           className={`crm-metric-card ${quickFilter === 'all' ? 'active' : ''}`}
@@ -300,6 +308,8 @@ export default function LeadTable({
         </div>
       </div>
 
+      </details>
+
       {/* 2. CONTROLS BAR: SEARCH, QUICK FILTER PILLS, BUTTONS */}
       <div className="crm-control-bar">
         <div className="crm-control-top-row">
@@ -319,24 +329,45 @@ export default function LeadTable({
 
           {/* Action buttons */}
           <div className="crm-action-buttons">
-            <button type="button" className="crm-btn crm-btn-secondary" aria-expanded={showColumns} aria-controls={columnPanelId} onClick={() => setShowColumns((value) => !value)}>
-              <Columns3 size={15} /> Columns
+            <button
+              type="button"
+              className={`crm-btn crm-mobile-icon-action ${showColumns ? 'crm-btn-primary' : 'crm-btn-secondary'}`}
+              aria-label="Columns"
+              title="Columns"
+              aria-expanded={showColumns}
+              aria-controls={columnPanelId}
+              onClick={() => setShowColumns((value) => !value)}
+            >
+              <Columns3 size={15} /><span className="crm-action-label">Columns {hiddenColumns.length > 0 && `(${TABLE_COLUMNS.length - hiddenColumns.length}/${TABLE_COLUMNS.length})`}</span>
             </button>
             <button
               type="button"
-              className={`crm-btn ${showAdvancedFilters ? 'crm-btn-primary' : 'crm-btn-secondary'}`}
+              className={`crm-btn crm-mobile-icon-action ${showAdvancedFilters ? 'crm-btn-primary' : 'crm-btn-secondary'}`}
+              aria-label="Filters"
+              title="Filters"
+              aria-expanded={showAdvancedFilters}
               onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
             >
-              <Filter size={15} /> Filters
+              <Filter size={15} /><span className="crm-action-label">Filters</span>
             </button>
 
             <button
               type="button"
-              className="crm-btn crm-btn-secondary"
+              className="crm-btn crm-btn-secondary crm-mobile-icon-action"
+              aria-label="Pipeline Metrics"
+              title="Pipeline Metrics"
               onClick={onOpenMetrics}
             >
-              <TrendingUp size={15} /> Pipeline Metrics
+              <TrendingUp size={15} /><span className="crm-action-label">Pipeline Metrics</span>
             </button>
+
+            <div className={`crm-btn crm-mobile-icon-action crm-mobile-stage-action ${stageFilter ? 'crm-btn-primary' : 'crm-btn-secondary'}`} title="Lead stage">
+              <ListFilter size={19} aria-hidden="true" />
+              <select aria-label="Lead stage" value={stageFilter} onChange={(event) => { setStageFilter(event.target.value); setQuickFilter('all'); setCurrentPage(1); }}>
+                <option value="">All Leads ({summaryMetrics.totalLeads})</option>
+                {LEAD_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label} ({leads.filter((lead) => (lead.stage || 'New') === stage.key).length})</option>)}
+              </select>
+            </div>
 
             {leads.length === 0 && onLoadSampleData && (
               <button
@@ -351,41 +382,113 @@ export default function LeadTable({
 
             <button
               type="button"
-              className="crm-btn crm-btn-primary"
+              className="crm-btn crm-btn-primary crm-mobile-icon-action"
+              aria-label="Add lead"
+              title="Add lead"
               onClick={onOpenAddModal}
             >
-              <Plus size={16} /> Add Lead
+              <Plus size={16} /><span className="crm-action-label">Add Lead</span>
             </button>
           </div>
         </div>
 
-        {showColumns && <fieldset id={columnPanelId} className="crm-column-picker">
-          <legend>Show columns</legend>
-          {TABLE_COLUMNS.map((column) => <label key={column}>
-            <input type="checkbox" checked={!hiddenColumns.includes(column)} disabled={!hiddenColumns.includes(column) && hiddenColumns.length === TABLE_COLUMNS.length - 1}
-              onChange={() => setHiddenColumns((previous) => previous.includes(column) ? previous.filter((item) => item !== column) : [...previous, column])} />
-            {column}
-          </label>)}
-          <button type="button" className="crm-btn crm-btn-secondary" onClick={() => setHiddenColumns([])}>Show all</button>
-          <button type="button" className="crm-btn crm-btn-secondary" onClick={() => setShowColumns(false)}>Done</button>
-        </fieldset>}
+        {showColumns && (
+          <div id={columnPanelId} className="crm-column-picker" role="region" aria-label="Visible columns and fields">
+            <div className="crm-column-picker-header">
+              <div className="crm-column-picker-title-group">
+                <span className="crm-column-picker-title">
+                  <Columns3 size={16} /> Visible Columns & Fields
+                </span>
+                <span className="crm-column-picker-subtitle">
+                  Controls table on desktop & cards on mobile ({TABLE_COLUMNS.length - hiddenColumns.length} of {TABLE_COLUMNS.length} visible)
+                </span>
+              </div>
+              <button
+                type="button"
+                className="crm-column-picker-close"
+                onClick={() => setShowColumns(false)}
+                aria-label="Close columns panel"
+                title="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="crm-column-picker-grid">
+              {TABLE_COLUMNS.map((column) => {
+                const isChecked = !hiddenColumns.includes(column);
+                const isOnlyOne = isChecked && hiddenColumns.length === TABLE_COLUMNS.length - 1;
+                return (
+                  <label
+                    key={column}
+                    className={`crm-column-chip ${isChecked ? 'active' : ''} ${isOnlyOne ? 'locked' : ''}`}
+                    title={isOnlyOne ? 'At least one column must remain visible' : `Toggle visibility of ${column}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      disabled={isOnlyOne}
+                      onChange={() =>
+                        setHiddenColumns((previous) =>
+                          previous.includes(column)
+                            ? previous.filter((item) => item !== column)
+                            : [...previous, column]
+                        )
+                      }
+                    />
+                    <span>{column}</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="crm-column-picker-footer">
+              <div className="crm-column-picker-actions">
+                <button
+                  type="button"
+                  className="crm-btn crm-btn-secondary"
+                  style={{ height: 32, fontSize: 12, padding: '0 12px' }}
+                  onClick={() => setHiddenColumns([])}
+                >
+                  <CheckCircle2 size={13} /> Show All ({TABLE_COLUMNS.length})
+                </button>
+                {hiddenColumns.length > 0 && (
+                  <button
+                    type="button"
+                    className="crm-btn crm-btn-secondary"
+                    style={{ height: 32, fontSize: 12, padding: '0 12px' }}
+                    onClick={() => setHiddenColumns([])}
+                  >
+                    <RotateCcw size={13} /> Reset
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                className="crm-btn crm-btn-primary"
+                style={{ height: 32, fontSize: 12, padding: '0 16px' }}
+                onClick={() => setShowColumns(false)}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
         {/* Quick Filter Chips */}
         <div className="crm-quick-filters">
           {[
-            { key: 'all', label: 'All Leads', count: summaryMetrics.totalLeads },
-            { key: 'today_fu', label: 'Today Follow-ups', count: summaryMetrics.followUpsToday },
-            { key: 'overdue_fu', label: 'Overdue Follow-ups', count: summaryMetrics.overdueFollowUps },
-            { key: 'new', label: 'New Leads', count: summaryMetrics.newLeads },
-            { key: 'hot', label: 'Hot Leads', count: summaryMetrics.hotLeads },
-            { key: 'visits_today', label: 'Site Visits Today', count: summaryMetrics.siteVisitsToday },
-            { key: 'unassigned', label: 'Unassigned', count: summaryMetrics.unassignedLeads }
+            { key: '', label: 'All Leads', count: summaryMetrics.totalLeads },
+            ...LEAD_STAGES.map((stage) => ({ ...stage, count: leads.filter((lead) => (lead.stage || 'New') === stage.key).length }))
           ].map((chip) => (
             <button
               type="button"
               key={chip.key}
-              className={`crm-chip ${quickFilter === chip.key ? 'active' : ''}`}
+              className={`crm-chip ${quickFilter === 'all' && stageFilter === chip.key ? 'active' : ''}`}
+              aria-pressed={quickFilter === 'all' && stageFilter === chip.key}
+              style={chip.bg ? { background: chip.bg, color: chip.text, borderColor: chip.border, boxShadow: quickFilter === 'all' && stageFilter === chip.key ? `0 0 0 1px ${chip.text}` : 'none' } : undefined}
               onClick={() => {
-                setQuickFilter(chip.key);
+                setQuickFilter('all');
+                setStageFilter(chip.key);
                 setCurrentPage(1);
               }}
             >
@@ -554,12 +657,7 @@ export default function LeadTable({
                       <tr key={lead.id}>
                         <td hidden={hiddenColumns.includes('Customer Name')}>
                           <div className="crm-lead-name-cell">
-                            <span
-                              className="crm-lead-title"
-                              onClick={() => onSelectLead(lead.id)}
-                            >
-                              {lead.name || 'Unnamed Lead'}
-                            </span>
+                            <LeadNameEditor lead={lead} onSelectLead={onSelectLead} onUpdateLead={onUpdateLead} currentUser={currentUser} />
                           </div>
                         </td>
 
@@ -647,17 +745,9 @@ export default function LeadTable({
                                 className="crm-icon-btn whatsapp"
                                 title={`WhatsApp ${lead.name}`}
                               >
-                                <MessageCircle size={14} />
+                                <img src="/loan-whatsapp-icon.png" width={24} height={24} alt="" aria-hidden="true" style={{ objectFit: 'contain' }} />
                               </a>
                             )}
-                            <button
-                              type="button"
-                              className="crm-btn crm-btn-secondary"
-                              style={{ height: 32, padding: '0 10px', fontSize: 12 }}
-                              onClick={() => onSelectLead(lead.id)}
-                            >
-                              View <ChevronRight size={14} />
-                            </button>
                           </div>
                         </td>
                       </tr>
@@ -677,78 +767,131 @@ export default function LeadTable({
                 const waUrl = waDigits ? `https://wa.me/${waDigits.startsWith('91') ? waDigits : `91${waDigits}`}` : '';
                 const callUrl = lead.phone ? `tel:${lead.phone}` : '';
 
+                const showName = !hiddenColumns.includes('Customer Name');
+                const showContact = !hiddenColumns.includes('Phone / Contact');
+                const showSource = !hiddenColumns.includes('Source');
+                const showStage = !hiddenColumns.includes('Stage');
+                const showTemp = !hiddenColumns.includes('Temp');
+                const showUploadedDate = !hiddenColumns.includes('Uploaded Date');
+                const showBudget = !hiddenColumns.includes('Budget');
+                const showLocation = !hiddenColumns.includes('Location & Size');
+                const showAgent = !hiddenColumns.includes('Assigned Agent');
+                const showNextFollowUp = !hiddenColumns.includes('Next Follow-up');
+                const showNotes = !hiddenColumns.includes('Notes');
+                const showActions = !hiddenColumns.includes('Actions');
+
+                const hasHeaderLeft = showName || showContact || showSource;
+                const hasHeaderRight = showStage || showTemp;
+                const hasBody = showUploadedDate || showBudget || showLocation || showAgent || showNextFollowUp;
+                const hasFooter = showNotes || showActions;
+
                 return (
                   <div key={lead.id} className="crm-mobile-card">
-                    <div className="crm-mobile-card-header">
-                      <div>
-                        <div
-                          style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', cursor: 'pointer' }}
-                          onClick={() => onSelectLead(lead.id)}
-                        >
-                          {lead.name || 'Unnamed Lead'}
-                        </div>
-                        <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>
-                          {lead.phone} • <span className="crm-source-tag">{lead.source || 'Website'}</span>
-                        </div>
-                      </div>
+                    {(hasHeaderLeft || hasHeaderRight) && (
+                      <div className="crm-mobile-card-header">
+                        {hasHeaderLeft && (
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            {showName ? (
+                              <LeadNameEditor lead={lead} onSelectLead={onSelectLead} onUpdateLead={onUpdateLead} currentUser={currentUser} />
+                            ) : (showContact || showSource) ? (
+                              <div
+                                style={{ fontSize: 13, fontWeight: 600, color: '#64748b', cursor: 'pointer' }}
+                                onClick={() => onSelectLead(lead.id)}
+                              >
+                                Lead #{lead.id ? lead.id.slice(-6).toUpperCase() : 'Entry'}
+                              </div>
+                            ) : null}
 
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                        {fieldSelect(lead, 'stage', LEAD_STAGES, stageObj)}
-                        {fieldSelect(lead, 'temperature', LEAD_TEMPERATURES, tempObj)}
-                      </div>
-                    </div>
-
-                    <div className="crm-mobile-card-body"><div className="crm-mobile-card-row"><span>Uploaded Date</span><strong>{uploadedDate(lead)}</strong></div>
-                      <div className="crm-mobile-card-row">
-                        <span>Budget</span>
-                        <LeadBudgetSelect lead={lead} onUpdateLead={onUpdateLead} currentUser={currentUser} />
-                      </div>
-                      <div className="crm-mobile-card-row">
-                        <span>Location</span>
-                        <strong>
-                          {Array.isArray(lead.preferredLocations) && lead.preferredLocations.length > 0
-                            ? lead.preferredLocations.join(', ')
-                            : 'Chakan'}
-                        </strong>
-                      </div>
-                      <div className="crm-mobile-card-row">
-                        <span>Agent</span>
-                        <strong>{lead.assignedUserName || 'Unassigned'}</strong>
-                      </div>
-                      <div className="crm-mobile-card-row">
-                        <span>Next Follow-up</span>
-                        <strong>
-                          {lead.nextFollowUpAt
-                            ? new Date(lead.nextFollowUpAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                            : 'None set'}
-                        </strong>
-                      </div>
-                    </div>
-
-                    <div className="crm-mobile-card-footer">
-                      <LeadQuickNote lead={lead} currentUser={currentUser} onUpdateLead={onUpdateLead} />
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        {callUrl && (
-                          <a href={callUrl} className="crm-icon-btn phone">
-                            <Phone size={15} />
-                          </a>
+                            {(showContact || showSource) && (
+                              <div style={{ fontSize: 12, color: '#475569', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                {showContact && lead.phone && <span>{lead.phone}</span>}
+                                {showContact && lead.phone && showSource && lead.source && <span>•</span>}
+                                {showSource && <span className="crm-source-tag">{lead.source || 'Website'}</span>}
+                              </div>
+                            )}
+                          </div>
                         )}
-                        {waUrl && (
-                          <a href={waUrl} target="_blank" rel="noopener noreferrer" className="crm-icon-btn whatsapp">
-                            <MessageCircle size={15} />
-                          </a>
+
+                        {hasHeaderRight && (
+                          <div className="crm-mobile-card-statuses">
+                            {showStage && fieldSelect(lead, 'stage', LEAD_STAGES, stageObj)}
+                            {showTemp && fieldSelect(lead, 'temperature', LEAD_TEMPERATURES, tempObj)}
+                          </div>
                         )}
                       </div>
+                    )}
 
-                      <button
-                        type="button"
-                        className="crm-btn crm-btn-primary"
-                        style={{ height: 34, fontSize: 12 }}
-                        onClick={() => onSelectLead(lead.id)}
-                      >
-                        Open Workspace <ChevronRight size={14} />
-                      </button>
-                    </div>
+                    {hasBody && (
+                      <div className="crm-mobile-card-body">
+                        {showUploadedDate && (
+                          <div className="crm-mobile-card-row">
+                            <span>Uploaded Date</span>
+                            <strong>{uploadedDate(lead)}</strong>
+                          </div>
+                        )}
+                        {showBudget && (
+                          <div className="crm-mobile-card-row">
+                            <span>Budget</span>
+                            <LeadBudgetSelect lead={lead} onUpdateLead={onUpdateLead} currentUser={currentUser} />
+                          </div>
+                        )}
+                        {showLocation && (
+                          <div className="crm-mobile-card-row">
+                            <span>Location & Size</span>
+                            <strong>
+                              {Array.isArray(lead.preferredLocations) && lead.preferredLocations.length > 0
+                                ? lead.preferredLocations.join(', ')
+                                : 'Chakan'}
+                              {lead.preferredPlotSize ? ` • ${lead.preferredPlotSize}` : ''}
+                            </strong>
+                          </div>
+                        )}
+                        {showAgent && (
+                          <div className="crm-mobile-card-row">
+                            <span>Agent</span>
+                            <strong>{lead.assignedUserName || 'Unassigned'}</strong>
+                          </div>
+                        )}
+                        {showNextFollowUp && (
+                          <div className="crm-mobile-card-row">
+                            <span>Next Follow-up</span>
+                            <strong>
+                              {lead.nextFollowUpAt
+                                ? new Date(lead.nextFollowUpAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                                : 'None set'}
+                            </strong>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {hasFooter && (
+                      <div className="crm-mobile-card-footer">
+                        {showNotes && (
+                          <LeadQuickNote lead={lead} currentUser={currentUser} onUpdateLead={onUpdateLead} />
+                        )}
+                        {showActions && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: showNotes ? 'auto' : 0 }}>
+                            {callUrl && (
+                              <a href={callUrl} className="crm-icon-btn phone" title={`Call ${lead.name || 'buyer'}`}>
+                                <Phone size={15} />
+                              </a>
+                            )}
+                            {waUrl && (
+                              <a href={waUrl} target="_blank" rel="noopener noreferrer" className="crm-icon-btn whatsapp" title={`WhatsApp ${lead.name || 'buyer'}`}>
+                                <img src="/loan-whatsapp-icon.png" width={24} height={24} alt="" aria-hidden="true" style={{ objectFit: 'contain' }} />
+                              </a>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {!hasHeaderLeft && !hasHeaderRight && !hasBody && !hasFooter && (
+                      <div style={{ padding: '8px 0', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
+                        All fields hidden. Use "Columns" above to reveal fields.
+                      </div>
+                    )}
                   </div>
                 );
               })}

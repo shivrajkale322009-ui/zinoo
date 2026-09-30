@@ -29,7 +29,8 @@ function buildTemplateComponents(template, leadName, headerMediaUrl, headerMedia
   for (const part of (template.components || []).filter((part) => ['HEADER', 'BODY'].includes(part.type))) {
     const variables = [...new Set([...String(part.text || '').matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((match) => match[1]))];
     if (variables.every((name) => /^\d+$/.test(name))) variables.sort((a, b) => Number(a) - Number(b));
-    if (variables.length) components.push({ type: part.type.toLowerCase(), parameters: variables.map((name) => ({ type: 'text', text: String(leadName || 'Customer').slice(0, 100), ...(/^\d+$/.test(name) ? {} : { parameter_name: name }) })) });
+    const resolvedName = (typeof leadName === 'string' && leadName.trim()) ? leadName.trim() : 'Sir/Madam';
+    if (variables.length) components.push({ type: part.type.toLowerCase(), parameters: variables.map((name) => ({ type: 'text', text: String(resolvedName).slice(0, 100), ...(/^\d+$/.test(name) ? {} : { parameter_name: name }) })) });
   }
   if ((template.components || []).some((part) => part.type === 'BUTTONS' && part.buttons?.some((button) => /\{\{/.test(button.url || '') || !['URL', 'PHONE_NUMBER', 'QUICK_REPLY'].includes(button.type)))) {
     throw new Error('This template needs button parameters that are not supported yet. Choose a template with fixed buttons.');
@@ -72,7 +73,7 @@ async function sendText({ accessToken, phoneNumberId, recipient, body }) {
 
 async function uploadTemplateImage({ accessToken, phoneNumberId, url }) {
   const source = new URL(url);
-  const allowed = ['zinoo.in', 'www.zinoo.in', 'firebasestorage.googleapis.com', 'storage.googleapis.com'];
+  const allowed = ['zinoo.in', 'www.zinoo.in', 'druvio.web.app', 'firebasestorage.googleapis.com', 'storage.googleapis.com'];
   if (source.protocol !== 'https:' || source.username || source.password || (source.port && source.port !== '443')
     || !(allowed.includes(source.hostname) || source.hostname.endsWith('.fbcdn.net') || source.hostname.endsWith('.fbsbx.com'))) {
     throw new Error('Use a header image hosted on Zinoo, Firebase Storage, or Meta.');

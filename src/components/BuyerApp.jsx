@@ -861,16 +861,22 @@ function BuyerApp({
     let gesture = null;
     const start = (event) => {
       gesture = null;
-      if (event.touches.length !== 1 || event.target.closest('button, a, input, textarea, select, video, .property-sheet-drag-handle')) return;
+      if (event.touches.length !== 1 || event.target.closest(
+        'button, a, input, textarea, select, video, [contenteditable="true"], [role="combobox"], [role="listbox"], [role="option"], [role="menu"], [data-dropdown-trigger], [data-dropdown-content], .property-sheet-drag-handle'
+      )) return;
       const touch = event.touches[0];
-      gesture = { x: touch.clientX, y: touch.clientY, handled: false };
+      const shell = sheet.querySelector('.buyer-slide-panel-shell');
+      gesture = {
+        x: touch.clientX,
+        y: touch.clientY,
+        lastY: touch.clientY,
+        startHeight: shell?.getBoundingClientRect().height || 0,
+        currentHeight: shell?.getBoundingClientRect().height || 0,
+        draggingSheet: false
+      };
     };
     const move = (event) => {
       if (!gesture || event.touches.length !== 1) return;
-      if (gesture.handled) {
-        if (event.cancelable) event.preventDefault();
-        return;
-      }
       const touch = event.touches[0];
       const dx = touch.clientX - gesture.x;
       const dy = touch.clientY - gesture.y;
@@ -881,20 +887,69 @@ function BuyerApp({
       const content = sheet.querySelector('.project-panel-content');
       if (mobileSheetSnap !== 'collapsed' && content?.scrollTop > 2) {
         gesture.y = touch.clientY;
+        gesture.lastY = touch.clientY;
+        gesture.startHeight = sheet.querySelector('.buyer-slide-panel-shell')?.getBoundingClientRect().height || gesture.startHeight;
+        gesture.currentHeight = gesture.startHeight;
         return;
       }
-      if (Math.abs(dy) < 24) return;
+      const metrics = mobileSheetMetricsRef.current || measureMobileSheet();
+      if (!metrics) return;
+      if (!gesture.draggingSheet) {
+        if (Math.abs(dy) < 10) return;
+        // At the full snap point, upward movement belongs to the details scroll.
+        if (dy < 0 && mobileSheetSnap === 'full') return;
+        gesture.draggingSheet = true;
+      }
+      if (event.cancelable) event.preventDefault();
+      gesture.lastY = touch.clientY;
+      const height = Math.max(metrics.min, Math.min(metrics.max, gesture.startHeight - dy));
+      gesture.currentHeight = height;
+      applyMobileSheetHeight(height);
+    };
+    const end = () => {
+      if (!gesture) return;
+      const dy = (gesture.lastY ?? gesture.y) - gesture.y;
+      // A small tap or incidental scroll should leave the sheet where it is.
+      if (Math.abs(dy) < 60) {
+        if (gesture.draggingSheet) {
+          mobileSheetRef.current?.classList.remove('is-sheet-dragging');
+          applyMobileSheetHeight(mobileSheetMetricsRef.current?.[mobileSheetSnap] || gesture.startHeight, true);
+        }
+        gesture = null;
+        return;
+      }
+      if (gesture.draggingSheet) {
+        const metrics = mobileSheetMetricsRef.current || measureMobileSheet();
+        if (metrics) {
+          const shell = sheet.querySelector('.buyer-slide-panel-shell');
+          const currentHeight = gesture.currentHeight || shell?.getBoundingClientRect().height || gesture.startHeight - dy;
+          const ordered = ['collapsed', 'expanded', 'full'];
+          const nextSnap = ordered.reduce((closest, snap) => (
+            Math.abs(metrics[snap] - currentHeight) < Math.abs(metrics[closest] - currentHeight) ? snap : closest
+          ));
+          mobileSheetRef.current?.classList.remove('is-sheet-dragging');
+          if (nextSnap !== mobileSheetSnap) {
+            const content = sheet.querySelector('.project-panel-content');
+            if (content) content.scrollTop = 0;
+            setProjectScrollTop(0);
+            setMobileSheetSnap(nextSnap);
+          }
+          applyMobileSheetHeight(metrics[nextSnap], true);
+        }
+        gesture = null;
+        return;
+      }
       const nextSnap = dy < 0
         ? (mobileSheetSnap === 'collapsed' ? 'expanded' : 'full')
         : 'collapsed';
-      if (nextSnap === mobileSheetSnap) return;
-      if (event.cancelable) event.preventDefault();
-      gesture.handled = true;
-      if (content) content.scrollTop = 0;
-      setProjectScrollTop(0);
-      setMobileSheetSnap(nextSnap);
+      if (nextSnap !== mobileSheetSnap) {
+        const content = sheet.querySelector('.project-panel-content');
+        if (content) content.scrollTop = 0;
+        setProjectScrollTop(0);
+        setMobileSheetSnap(nextSnap);
+      }
+      gesture = null;
     };
-    const end = () => { gesture = null; };
     sheet.addEventListener('touchstart', start, { passive: true });
     sheet.addEventListener('touchmove', move, { passive: false });
     sheet.addEventListener('touchend', end);
@@ -905,7 +960,7 @@ function BuyerApp({
       sheet.removeEventListener('touchend', end);
       sheet.removeEventListener('touchcancel', end);
     };
-  }, [isAndroidLayout, mobileSheetSnap, panelMode, panelOpen]);
+  }, [applyMobileSheetHeight, isAndroidLayout, measureMobileSheet, mobileSheetSnap, panelMode, panelOpen]);
 
   const handleProjectPanelScroll = useCallback((event) => {
     const scrollTop = event.currentTarget.scrollTop;

@@ -430,6 +430,7 @@ function App() {
     let unsubscribeProfile = null;
     let profileLoadTimer = null;
     let serverProfileFetch = null;
+    let initialViewAssigned = false;
 
     const clearProfileLoadTimer = () => {
       if (profileLoadTimer) window.clearTimeout(profileLoadTimer);
@@ -467,8 +468,10 @@ function App() {
         }
         setProfileData(nextProfileData);
         setPermissions(userPermissions);
+        const openAdminOnLogin = userPermissions.admin && !initialViewAssigned;
+        initialViewAssigned = true;
         setCurrentView((current) => {
-          if (userPermissions.admin && typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+          if (openAdminOnLogin || (userPermissions.admin && typeof window !== 'undefined' && window.location.pathname.startsWith('/admin'))) {
             return 'admin';
           }
           return canAccessView(userPermissions, current) ? current : getDefaultView(userPermissions);

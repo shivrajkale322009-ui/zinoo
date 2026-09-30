@@ -5,6 +5,13 @@ import { httpsCallable } from 'firebase/functions';
 import { CheckCircle2, ChevronRight, MessageCircle, Plus, Send, Users } from 'lucide-react';
 import { auth, db, functions, marketingDb } from '../firebaseConfig';
 import { parseLeadCsv } from '../utils/leadCsv';
+import { getEpochMs } from '../utils/crmLeadModel';
+
+const leadUploadTime = (lead) => getEpochMs(lead.uploadedAt) || getEpochMs(lead.createdAt) || 0;
+const leadUploadLabel = (lead) => {
+  const timestamp = leadUploadTime(lead);
+  return timestamp ? new Date(timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Not recorded';
+};
 
 const DEFAULT_CAMPAIGN_HEADER_IMAGE = 'https://druvio.web.app/zinoo-campaign-september-2026.jpeg';
 
@@ -71,6 +78,14 @@ const resolveLeadDate = (value, fallbackDate) => {
     ? `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
     : '';
 };
+const leadDisplayName = (name) => {
+  const trimmed = String(name || '').trim();
+  if (!trimmed || /^unnamed(?:\s+lead)?$/i.test(trimmed)) {
+    return 'Sir/Madam';
+  }
+  return trimmed;
+};
+
 const parseImportedLead = (line, fallbackDate, fallbackTime) => {
   const rawLine = String(line || '').trim();
   // WhatsApp copy/paste can preserve tabs or turn them into plain spaces.
@@ -82,7 +97,7 @@ const parseImportedLead = (line, fallbackDate, fallbackTime) => {
     const date = resolveLeadDate(naturalRecord[1], fallbackDate);
     const importTime = normalizeLeadTime(naturalRecord[3]);
     const phone = normalizeIndianImportPhone(naturalRecord[4]);
-    if (date && importTime && phone) return { name: naturalRecord[2].trim() || 'Unnamed lead', phone, date, importTime };
+    if (date && importTime && phone) return { name: naturalRecord[2].trim() || 'Sir/Madam', phone, date, importTime };
   }
   // Support a spreadsheet pasted in any column order, including Name, Phone, Date, Time.
   const columns = rawLine.split(/\t|,/).map((value) => value.trim()).filter(Boolean);
@@ -91,16 +106,17 @@ const parseImportedLead = (line, fallbackDate, fallbackTime) => {
   const phoneIndex = columns.findIndex((value) => Boolean(normalizeIndianImportPhone(value)));
   if (dateIndex >= 0 && timeIndex >= 0 && phoneIndex >= 0) {
     const name = columns.filter((_, index) => ![dateIndex, timeIndex, phoneIndex].includes(index)).join(' ').trim();
-    return { name: name || 'Unnamed lead', phone: normalizeIndianImportPhone(columns[phoneIndex]), date: resolveLeadDate(columns[dateIndex], fallbackDate), importTime: normalizeLeadTime(columns[timeIndex]) };
+    return { name: name || 'Sir/Madam', phone: normalizeIndianImportPhone(columns[phoneIndex]), date: resolveLeadDate(columns[dateIndex], fallbackDate), importTime: normalizeLeadTime(columns[timeIndex]) };
   }
   const legacy = String(line || '').split(/[,\t]/).map((value) => value.trim());
   const name = legacy.length > 1 ? legacy[0] : '';
-  return { name: name || 'Unnamed lead', phone: normalizeIndianImportPhone(legacy.length > 1 ? legacy[1] : legacy[0]), date: fallbackDate, importTime: fallbackTime };
+  return { name: name || 'Sir/Madam', phone: normalizeIndianImportPhone(legacy.length > 1 ? legacy[1] : legacy[0]), date: fallbackDate, importTime: fallbackTime };
 };
 
 export default function WhatsAppLeadManager({ leads = [], onSuccess, onError, onViewChange, onOpenCampaign }) {
   const [campaigns, setCampaigns] = useState([]), [templates, setTemplates] = useState([]), [imports, setImports] = useState([]), [open, setOpen] = useState(false), [saving, setSaving] = useState(false), [selected, setSelected] = useState(null), [recipients, setRecipients] = useState([]), [confirmOpen, setConfirmOpen] = useState(false);
   const [draft, setDraft] = useState({ name: '', audience: 'all', projectId: '', stage: '', templateId: '', customIds: [] });
+  const [lastCustomLeadId, setLastCustomLeadId] = useState(null);
   const [headerMediaUrl, setHeaderMediaUrl] = useState(DEFAULT_CAMPAIGN_HEADER_IMAGE);
   const [mediaReady, setMediaReady] = useState(false);
   const [customLeadSearch, setCustomLeadSearch] = useState('');
@@ -108,10 +124,55 @@ export default function WhatsAppLeadManager({ leads = [], onSuccess, onError, on
   const matchingCustomLeads = useMemo(() => {
     const search = customLeadSearch.trim().toLowerCase();
     const digits = search.replace(/\D/g, '');
-    return leads.filter((lead) => !search || String(lead.name || '').toLowerCase().includes(search)
-      || String(lead.phone || '').toLowerCase().includes(search)
-      || (digits && /^[+\d\s().-]+$/.test(search) && String(lead.phone || '').replace(/\D/g, '').includes(digits)));
+    return leads.filter((lead) => {
+      const displayName = leadDisplayName(lead.name);
+      return !search || displayName.toLowerCase().includes(search)
+        || String(lead.phone || '').toLowerCase().includes(search)
+        || (digits && /^[+\d\s().-]+$/.test(search) && String(lead.phone || '').replace(/\D/g, '').includes(digits));
+    })
+      .sort((a, b) => leadUploadTime(b) - leadUploadTime(a) || String(a.id).localeCompare(String(b.id)));
   }, [leads, customLeadSearch]);
+  const visibleCustomLeads = useMemo(() => matchingCustomLeads.slice(0, customLeadLimit), [matchingCustomLeads, customLeadLimit]);
+
+  const handleCustomLeadSelect = (leadId, event) => {
+    const isShift = Boolean(event?.shiftKey);
+    const currentIndex = visibleCustomLeads.findIndex((l) => l.id === leadId);
+    if (currentIndex === -1) return;
+
+    if (isShift && lastCustomLeadId) {
+      const anchorIndex = visibleCustomLeads.findIndex((l) => l.id === lastCustomLeadId);
+      if (anchorIndex !== -1) {
+        const startIndex = Math.min(anchorIndex, currentIndex);
+        const endIndex = Math.max(anchorIndex, currentIndex);
+        const rangeSlice = visibleCustomLeads.slice(startIndex, endIndex + 1);
+        const rangeIds = rangeSlice.map((l) => l.id);
+
+        setDraft((current) => {
+          const idSet = new Set(current.customIds);
+          const anchorSelected = current.customIds.includes(lastCustomLeadId);
+          if (anchorSelected) {
+            rangeIds.forEach((id) => idSet.add(id));
+          } else {
+            rangeIds.forEach((id) => idSet.delete(id));
+          }
+          return { ...current, customIds: Array.from(idSet) };
+        });
+
+        if (window.getSelection) {
+          window.getSelection().removeAllRanges();
+        }
+        return;
+      }
+    }
+
+    setLastCustomLeadId(leadId);
+    setDraft((current) => ({
+      ...current,
+      customIds: current.customIds.includes(leadId)
+        ? current.customIds.filter((id) => id !== leadId)
+        : [...current.customIds, leadId]
+    }));
+  };
 
   const [importText, setImportText] = useState(''), [importName, setImportName] = useState(''), [importDate, setImportDate] = useState(() => new Date().toISOString().slice(0, 10)), [importTime, setImportTime] = useState(() => new Date().toTimeString().slice(0, 5)), [updateExisting, setUpdateExisting] = useState(false), [importing, setImporting] = useState(false), [deletingLeads, setDeletingLeads] = useState(false);
   const [importOpen, setImportOpen] = useState(false), [manualOpen, setManualOpen] = useState(false), [addingManual, setAddingManual] = useState(false);
@@ -208,6 +269,7 @@ export default function WhatsAppLeadManager({ leads = [], onSuccess, onError, on
       setOpen(false);
       setHeaderMediaUrl(DEFAULT_CAMPAIGN_HEADER_IMAGE);
       setDraft({ name: '', audience: 'all', projectId: '', stage: '', templateId: '', customIds: [] });
+      setLastCustomLeadId(null);
       onSuccess(`Campaign queued for ${result.data.recipientCount} recipients.`);
     }
     catch (e) { onError(e?.message || 'Unable to queue the campaign.'); } finally { setSaving(false); }
@@ -221,7 +283,7 @@ export default function WhatsAppLeadManager({ leads = [], onSuccess, onError, on
   const addManualLead = async () => {
     const userId = auth.currentUser?.uid;
     const phone = normalizeIndianPhone(manualLead.phone);
-    const name = manualLead.name.trim() || 'Unnamed lead';
+    const name = manualLead.name.trim() || 'Sir/Madam';
     if (!userId || !phone) return onError('Enter a valid 10-digit Indian phone number.');
     const digits = phone.replace(/\D/g, '');
     if (leads.some((lead) => String(lead.phone || '').replace(/\D/g, '') === digits)) return onError('This phone number is already a lead.');
@@ -308,7 +370,7 @@ export default function WhatsAppLeadManager({ leads = [], onSuccess, onError, on
           duplicateCount += phoneRows.length;
           const suppliedLead = phoneRows[0];
           const correction = updateExisting ? {
-            ...(suppliedLead.name && suppliedLead.name !== 'Unnamed lead' ? { name: suppliedLead.name } : {}),
+            ...(suppliedLead.name && !/^unnamed(?:\s+lead)?$/i.test(suppliedLead.name.trim()) && suppliedLead.name !== 'Sir/Madam' ? { name: suppliedLead.name } : {}),
             date: suppliedLead.date,
             importTime: suppliedLead.importTime,
           } : {};
@@ -330,19 +392,93 @@ export default function WhatsAppLeadManager({ leads = [], onSuccess, onError, on
       onSuccess(`${createdCount} new leads imported.${updatedCount ? ` ${updatedCount} existing lead${updatedCount === 1 ? '' : 's'} updated from the supplied date and time.` : ''} ${duplicateCount} duplicate phone number${duplicateCount === 1 ? '' : 's'} kept under the existing serial number.`);
     } catch (error) { onError(error?.message || 'Unable to import leads.'); } finally { setImporting(false); }
   };
-  if (selected) return <section className="whatsapp-marketing"><button className="btn-secondary" onClick={() => setSelected(null)}>← Back to campaigns</button><section className="admin-panel-section"><div className="admin-panel-section-head"><div><span className="admin-panel-kicker">Campaign results</span><h3>{selected.name}</h3><p>{selected.sentCount || 0} sent · {selected.deliveredCount || 0} delivered · {selected.failedCount || 0} failed</p></div><span className={`whatsapp-status ${tone(selected.status)}`}>{selected.status}</span></div><div className="whatsapp-recipient-results">{recipients.map(r => <div key={r.id}><span><strong>{r.leadName || 'Lead'}</strong><small>{r.phoneNumber}</small></span><span className={`whatsapp-status ${tone(r.status === 'DELIVERED' ? 'COMPLETED' : r.status === 'FAILED' ? 'FAILED' : 'SENDING')}`}>{r.status}</span>{r.errorMessage && <small>{r.errorMessage}</small>}</div>)}</div></section></section>;
+  if (selected) return <section className="whatsapp-marketing"><button className="btn-secondary" onClick={() => setSelected(null)}>← Back to campaigns</button><section className="admin-panel-section"><div className="admin-panel-section-head"><div><span className="admin-panel-kicker">Campaign results</span><h3>{selected.name}</h3><p>{selected.sentCount || 0} sent · {selected.deliveredCount || 0} delivered · {selected.failedCount || 0} failed</p></div><span className={`whatsapp-status ${tone(selected.status)}`}>{selected.status}</span></div><div className="whatsapp-recipient-results">{recipients.map(r => <div key={r.id}><span><strong>{leadDisplayName(r.leadName)}</strong><small>{r.phoneNumber}</small></span><span className={`whatsapp-status ${tone(r.status === 'DELIVERED' ? 'COMPLETED' : r.status === 'FAILED' ? 'FAILED' : 'SENDING')}`}>{r.status}</span>{r.errorMessage && <small>{r.errorMessage}</small>}</div>)}</div></section></section>;
   return <section className="whatsapp-marketing">
     {importOpen && <section className="admin-panel-section whatsapp-builder whatsapp-import-form"><div className="admin-panel-section-head"><div><span className="admin-panel-kicker">Bulk import</span><h3>Import CRM leads</h3><p>Paste your WhatsApp export directly: <code>29 April [tab] Rutu Kharat [tab] 14:57 [tab] 80109 20376</code>. Zinoo saves each record’s date, name, time, and phone number.</p></div><button className="btn-secondary" onClick={() => setImportOpen(false)}>Cancel</button></div><label>Import name (optional)<input value={importName} placeholder="April WhatsApp leads" onChange={e => setImportName(e.target.value)} /></label><label>Default year/date for simple rows<input type="date" value={importDate} onChange={e => setImportDate(e.target.value)} /></label><label>Default time for simple rows<input type="time" value={importTime} onChange={e => setImportTime(e.target.value)} /></label><label>Leads<textarea value={importText} placeholder={'29 April\tRutu Kharat\t14:57\t80109 20376\n29 April\tShivnanda Gangasagre\t15:05\t820 802 8551'} onChange={e => setImportText(e.target.value)} /></label><label className="whatsapp-consent"><input type="checkbox" checked={updateExisting} onChange={e => setUpdateExisting(e.target.checked)} /> Update the name, date, and time for existing matching phone numbers.</label><p>Rows with their own date and time use those values. A duplicate phone number stays under its existing serial number.</p><div className="whatsapp-directory-actions"><button className="btn-secondary" disabled={importing || deletingLeads} onClick={importLeads}>{importing ? 'Importing…' : 'Import leads'}</button><button className="btn-secondary" disabled={importing || deletingLeads || !leads.length} onClick={deleteAllLeads}>{deletingLeads ? 'Deleting…' : 'Delete all leads'}</button></div></section>}
     {manualOpen && <section className="admin-panel-section whatsapp-builder whatsapp-manual-entry"><div className="admin-panel-section-head"><div><span className="admin-panel-kicker">New lead</span><h3>Add lead manually</h3><p>Add one lead and record consent only when it has been explicitly given.</p></div><button className="btn-secondary" onClick={() => setManualOpen(false)}>Cancel</button></div><label>Name (optional)<input value={manualLead.name} placeholder="Lead name" onChange={e => setManualLead({ ...manualLead, name: e.target.value })} /></label><label>WhatsApp phone number<input type="tel" inputMode="numeric" value={manualLead.phone} placeholder="8468845210" onChange={e => setManualLead({ ...manualLead, phone: e.target.value })} /></label><label className="whatsapp-consent"><input type="checkbox" checked={manualLead.whatsappOptIn} onChange={e => setManualLead({ ...manualLead, whatsappOptIn: e.target.checked })} /> I have recorded this lead’s consent to receive WhatsApp marketing messages.</label><button className="btn-primary" disabled={addingManual} onClick={addManualLead}><Plus size={17} /> {addingManual ? 'Adding…' : 'Add lead'}</button></section>}
     <div className="whatsapp-campaign-trigger whatsapp-dashboard-header"><button type="button" className="btn-primary" onClick={() => { setShowLeadList(false); onViewChange?.('overview'); setImportOpen(false); setManualOpen(false); setOpen(true); window.setTimeout(() => document.getElementById('whatsapp-campaign-builder')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0); }}><Plus size={17} /> Create campaign</button><button className="btn-secondary" onClick={() => { setOpen(false); setManualOpen(false); setImportOpen(true); }}><Plus size={17} /> Import leads</button><button className="btn-secondary" onClick={() => { setOpen(false); setImportOpen(false); setManualOpen(true); }}><Plus size={17} /> Add lead manually</button></div>
     <section className="whatsapp-summary-grid"><button type="button" className="whatsapp-summary-action" onClick={() => { setShowLeadList(true); onViewChange?.('total-leads'); }} aria-label={`Show all ${leads.length} leads`}><span>Total leads</span><div className="whatsapp-summary-metric"><b>{leads.length}</b><Users /></div><small>View all</small></button><article><span>Eligible leads</span><div className="whatsapp-summary-metric"><b>{eligible}</b><CheckCircle2 /></div></article><article><span>Campaigns</span><div className="whatsapp-summary-metric"><b>{campaigns.length}</b><MessageCircle /></div></article><article><span>Messages sent</span><div className="whatsapp-summary-metric"><b>{sent}</b><Send /></div></article></section>
-    {showLeadList && <section className="admin-panel-section whatsapp-lead-directory"><div className="admin-panel-section-head"><div><span className="admin-panel-kicker">Lead directory</span><h3>All leads</h3><p>{visibleLeads.length ? (currentPage - 1) * 100 + 1 : 0}–{Math.min(currentPage * 100, visibleLeads.length)} of {visibleLeads.length} lead{leads.length === 1 ? '' : 's'} shown · latest date first.</p></div><div className="whatsapp-directory-actions"><button className="btn-secondary" onClick={() => setShowImportHistory((current) => !current)}>{showImportHistory ? 'Hide import history' : 'Import history'}</button><button className="btn-secondary" onClick={() => { setShowLeadList(false); onViewChange?.('overview'); }}>Close</button></div></div>{showImportHistory && <div className="whatsapp-import-history"><h4>Import history</h4>{imports.length ? imports.map((item) => <article key={item.id}><span><strong>{item.name || 'Unnamed import'}</strong><small>{displayUploadedAt(item.uploadedAt)}</small></span><span>{item.importedCount || 0} new leads</span><span>{item.duplicateCount || 0} duplicates</span></article>) : <p>No named imports yet.</p>}</div>}<input className="whatsapp-lead-search" type="search" value={leadSearch} placeholder="Search name or phone" aria-label="Search leads" onChange={(event) => setLeadSearch(event.target.value)} />{visibleLeads.length ? <><div className="whatsapp-lead-table-scroll"><div className="whatsapp-lead-table"><div className="whatsapp-lead-table-head"><span>Name / mobile</span><span>Serial no.</span><span>Date</span><span>Time</span><span>Status</span></div><div className="whatsapp-lead-rows">{pageLeads.map((lead) => <div className="whatsapp-lead-row" key={lead.id}><span className="whatsapp-lead-avatar">{String(lead.name || 'L').trim().charAt(0).toUpperCase()}</span><span className="whatsapp-lead-copy"><strong>{lead.name || 'Unnamed lead'}</strong><span>{lead.phone || 'No phone number'}</span>{((lead.duplicateImportCount || 0) > 0 || (leadPhoneCounts.get(phoneKey(lead.phone)) || 0) > 1) && <small className="whatsapp-duplicate-note">Duplicate import ×{Math.max(lead.duplicateImportCount || 0, (leadPhoneCounts.get(phoneKey(lead.phone)) || 1) - 1)}</small>}</span><span className="whatsapp-lead-serial"><strong>#{serialByPhone.get(phoneKey(lead.phone)) || '—'}</strong></span><span className="whatsapp-lead-date"><strong>{displayLeadDate(lead.date)}</strong></span><span className="whatsapp-lead-time"><strong>{displayLeadTime(lead.importTime)}</strong></span><span className={`whatsapp-status ${lead.whatsappOptIn === true ? 'success' : 'warning'}`}>{lead.whatsappOptIn === true ? 'Eligible' : 'Consent needed'}</span>{lead.whatsappOptIn !== true && <button type="button" className="btn-secondary whatsapp-record-consent" disabled={recordingConsentId === lead.id} onClick={() => recordConsent(lead)}>{recordingConsentId === lead.id ? 'Recording…' : 'Record consent'}</button>}</div>)}</div></div></div><div className="whatsapp-lead-pagination"><button className="btn-secondary" disabled={currentPage === 1} onClick={() => setLeadPage(currentPage - 1)}>Previous</button><span>Page {currentPage} of {pageCount}</span><button className="btn-secondary" disabled={currentPage === pageCount} onClick={() => setLeadPage(currentPage + 1)}>Next 100 leads</button></div></> : <div className="admin-empty-state-card"><Users size={28} /><h4>No matching leads</h4><p>Try a different name or phone number.</p></div>}</section>}
-    {open && <section id="whatsapp-campaign-builder" className="admin-panel-section whatsapp-builder whatsapp-campaign-builder"><div className="admin-panel-section-head"><div><span className="admin-panel-kicker">New campaign</span><h3>Campaign builder</h3></div><button className="btn-secondary" onClick={() => setOpen(false)}>Cancel</button></div><label>Campaign name<input value={draft.name} placeholder="Green Valley September Launch" onChange={e => setDraft({ ...draft, name: e.target.value })} /></label><label>Audience<select value={draft.audience} onChange={e => setDraft({ ...draft, audience: e.target.value })}><option value="all">All leads</option><option value="project">Leads from a selected project</option><option value="stage">Leads by lead status</option><option value="custom">Custom selected leads</option></select></label>{draft.audience === 'project' && <label>Project<select value={draft.projectId} onChange={e => setDraft({ ...draft, projectId: e.target.value })}><option value="">Select project</option>{projects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>}{draft.audience === 'stage' && <label>Lead status<select value={draft.stage} onChange={e => setDraft({ ...draft, stage: e.target.value })}><option value="">Select status</option>{stages.map(s => <option key={s}>{s}</option>)}</select></label>}{draft.audience === 'custom' && <>
+    {showLeadList && <section className="admin-panel-section whatsapp-lead-directory"><div className="admin-panel-section-head"><div><span className="admin-panel-kicker">Lead directory</span><h3>All leads</h3><p>{visibleLeads.length ? (currentPage - 1) * 100 + 1 : 0}–{Math.min(currentPage * 100, visibleLeads.length)} of {visibleLeads.length} lead{leads.length === 1 ? '' : 's'} shown · latest date first.</p></div><div className="whatsapp-directory-actions"><button className="btn-secondary" onClick={() => setShowImportHistory((current) => !current)}>{showImportHistory ? 'Hide import history' : 'Import history'}</button><button className="btn-secondary" onClick={() => { setShowLeadList(false); onViewChange?.('overview'); }}>Close</button></div></div>{showImportHistory && <div className="whatsapp-import-history"><h4>Import history</h4>{imports.length ? imports.map((item) => <article key={item.id}><span><strong>{item.name || 'Unnamed import'}</strong><small>{displayUploadedAt(item.uploadedAt)}</small></span><span>{item.importedCount || 0} new leads</span><span>{item.duplicateCount || 0} duplicates</span></article>) : <p>No named imports yet.</p>}</div>}<input className="whatsapp-lead-search" type="search" value={leadSearch} placeholder="Search name or phone" aria-label="Search leads" onChange={(event) => setLeadSearch(event.target.value)} />{visibleLeads.length ? <><div className="whatsapp-lead-table-scroll"><div className="whatsapp-lead-table"><div className="whatsapp-lead-table-head"><span>Name / mobile</span><span>Serial no.</span><span>Date</span><span>Time</span><span>Status</span></div><div className="whatsapp-lead-rows">{pageLeads.map((lead) => <div className="whatsapp-lead-row" key={lead.id}><span className="whatsapp-lead-avatar">{String(leadDisplayName(lead.name) || 'S').trim().charAt(0).toUpperCase()}</span><span className="whatsapp-lead-copy"><strong>{leadDisplayName(lead.name)}</strong><span>{lead.phone || 'No phone number'}</span>{((lead.duplicateImportCount || 0) > 0 || (leadPhoneCounts.get(phoneKey(lead.phone)) || 0) > 1) && <small className="whatsapp-duplicate-note">Duplicate import ×{Math.max(lead.duplicateImportCount || 0, (leadPhoneCounts.get(phoneKey(lead.phone)) || 1) - 1)}</small>}</span><span className="whatsapp-lead-serial"><strong>#{serialByPhone.get(phoneKey(lead.phone)) || '—'}</strong></span><span className="whatsapp-lead-date"><strong>{displayLeadDate(lead.date)}</strong></span><span className="whatsapp-lead-time"><strong>{displayLeadTime(lead.importTime)}</strong></span><span className={`whatsapp-status ${lead.whatsappOptIn === true ? 'success' : 'warning'}`}>{lead.whatsappOptIn === true ? 'Eligible' : 'Consent needed'}</span>{lead.whatsappOptIn !== true && <button type="button" className="btn-secondary whatsapp-record-consent" disabled={recordingConsentId === lead.id} onClick={() => recordConsent(lead)}>{recordingConsentId === lead.id ? 'Recording…' : 'Record consent'}</button>}</div>)}</div></div></div><div className="whatsapp-lead-pagination"><button className="btn-secondary" disabled={currentPage === 1} onClick={() => setLeadPage(currentPage - 1)}>Previous</button><span>Page {currentPage} of {pageCount}</span><button className="btn-secondary" disabled={currentPage === pageCount} onClick={() => setLeadPage(currentPage + 1)}>Next 100 leads</button></div></> : <div className="admin-empty-state-card"><Users size={28} /><h4>No matching leads</h4><p>Try a different name or phone number.</p></div>}</section>}
+    {open && <section id="whatsapp-campaign-builder" className="admin-panel-section whatsapp-builder whatsapp-campaign-builder"><div className="admin-panel-section-head"><div><span className="admin-panel-kicker">New campaign</span><h3>Campaign builder</h3></div><button className="btn-secondary" onClick={() => setOpen(false)}>Cancel</button></div><label>Campaign name<input value={draft.name} placeholder="Green Valley September Launch" onChange={e => setDraft({ ...draft, name: e.target.value })} /></label><label>Audience<select value={draft.audience} onChange={e => { setDraft({ ...draft, audience: e.target.value }); setLastCustomLeadId(null); }}><option value="all">All leads</option><option value="project">Leads from a selected project</option><option value="stage">Leads by lead status</option><option value="custom">Custom selected leads</option></select></label>{draft.audience === 'project' && <label>Project<select value={draft.projectId} onChange={e => setDraft({ ...draft, projectId: e.target.value })}><option value="">Select project</option>{projects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>}{draft.audience === 'stage' && <label>Lead status<select value={draft.stage} onChange={e => setDraft({ ...draft, stage: e.target.value })}><option value="">Select status</option>{stages.map(s => <option key={s}>{s}</option>)}</select></label>}{draft.audience === 'custom' && <>
       <label>Search leads by name or phone number<input type="search" value={customLeadSearch} placeholder="Enter a name or phone number" onChange={(event) => { setCustomLeadSearch(event.target.value); setCustomLeadLimit(100); }} /></label>
-      <p role="status">{matchingCustomLeads.length} matching leads · {draft.customIds.length} selected</p>
-      <div className="whatsapp-custom-leads">{matchingCustomLeads.slice(0, customLeadLimit).map(l => <label key={l.id}><input type="checkbox" checked={draft.customIds.includes(l.id)} onChange={() => setDraft(d => ({ ...d, customIds: d.customIds.includes(l.id) ? d.customIds.filter(id => id !== l.id) : [...d.customIds, l.id] }))} /><span>{l.name || 'Unnamed lead'} · {l.phone || 'No phone'}</span></label>)}{!matchingCustomLeads.length && <p>No matching leads. Try another name or phone number.</p>}</div>
-      {matchingCustomLeads.length > customLeadLimit && <button type="button" className="btn-secondary" onClick={() => setCustomLeadLimit((count) => count + 100)}>Show more leads</button>}
-    </>}<div className="whatsapp-recipient-count"><Users size={17} /><strong>About {estimate} leads selected</strong><span>Final valid E.164 recipient count is verified server-side.</span></div><label>Approved Meta template<select value={draft.templateId} onChange={e => { setDraft({ ...draft, templateId: e.target.value }); setHeaderMediaUrl(DEFAULT_CAMPAIGN_HEADER_IMAGE); setMediaReady(false); }}><option value="">{templateLoadError || (templatesFromCache ? 'Connecting to Firestore…' : approved.length ? 'Select approved template' : 'No approved templates found')}</option>{templates.map(t => <option key={t.id} value={t.id} disabled={String(t.status || '').toUpperCase() !== 'APPROVED'}>{t.name} · {t.language}{String(t.status || '').toUpperCase() !== 'APPROVED' ? ` · ${t.status || 'Unknown status'}` : ''}</option>)}</select></label><button type="button" className="btn-secondary" disabled={syncingTemplates || !marketingAccessReady} onClick={refreshTemplates}>{syncingTemplates ? 'Refreshing…' : 'Refresh from Meta'}</button>{templateSyncError && <p className="app-error" role="alert">{templateSyncError}</p>}{templates.some(t => String(t.status || '').toUpperCase() !== 'APPROVED') && <p>Templates awaiting approval or otherwise unavailable are shown with their status. Only approved templates can be sent.</p>}{templateLoadError && <p className="app-error" role="alert">{templateLoadError}</p>}{!templateLoadError && templatesFromCache && <p>Waiting for a live Firestore connection. Keep this page online and it will load approved templates automatically.</p>}{!templateLoadError && !templatesFromCache && !approved.length && <p>No approved templates are available in this Firebase project yet.</p>}{selectedTemplate && <WhatsAppTemplatePreview key={selectedTemplate.id} template={selectedTemplate} onMediaChange={setHeaderMediaUrl} onReadyChange={setMediaReady} />}<button className="btn-primary" disabled={saving || !approved.length || !mediaReady} onClick={create}><Send size={17} /> {saving ? 'Queuing…' : 'Confirm and send campaign'}</button></section>}
+      <div className="whatsapp-custom-lead-controls">
+        <div className="whatsapp-custom-lead-status">
+          <p role="status"><strong>{matchingCustomLeads.length}</strong> matching leads · <strong>{draft.customIds.length}</strong> selected · Newest uploads first</p>
+          <small className="whatsapp-shift-hint">Tip: Select one lead, then <strong>Shift + Click</strong> anywhere on another lead to select all in between.</small>
+        </div>
+        <div className="whatsapp-custom-lead-actions">
+          <button
+            type="button"
+            className="btn-secondary"
+            style={{ padding: '4px 10px', fontSize: '12px' }}
+            disabled={!matchingCustomLeads.length}
+            onClick={() => {
+              const matchingIds = matchingCustomLeads.map((l) => l.id);
+              setDraft((d) => ({
+                ...d,
+                customIds: Array.from(new Set([...d.customIds, ...matchingIds]))
+              }));
+            }}
+          >
+            Select all matching ({matchingCustomLeads.length})
+          </button>
+          {draft.customIds.length > 0 && (
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ padding: '4px 10px', fontSize: '12px' }}
+              onClick={() => {
+                setDraft((d) => ({ ...d, customIds: [] }));
+                setLastCustomLeadId(null);
+              }}
+            >
+              Clear selection
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="whatsapp-custom-leads" role="group" aria-label="Select custom leads">
+        {visibleCustomLeads.map((l) => {
+          const isSelected = draft.customIds.includes(l.id);
+          return (
+            <label
+              key={l.id}
+              className={isSelected ? 'selected' : ''}
+              onClick={(e) => {
+                e.preventDefault();
+                handleCustomLeadSelect(l.id, e);
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() => {}}
+                tabIndex={0}
+                aria-label={`Select ${leadDisplayName(l.name)} (${l.phone || 'No phone'})`}
+                onKeyDown={(e) => {
+                  if (e.key === ' ' || e.key === 'Enter') {
+                    e.preventDefault();
+                    handleCustomLeadSelect(l.id, e);
+                  }
+                }}
+              />
+              <span>
+                {leadDisplayName(l.name)} · {l.phone || 'No phone'}
+                <small className="whatsapp-custom-upload-date">
+                  Uploaded: {leadUploadLabel(l)}{l.importBatchName ? ` · ${l.importBatchName}` : ''}
+                </small>
+              </span>
+            </label>
+          );
+        })}
+        {!matchingCustomLeads.length && <p>No matching leads. Try another name or phone number.</p>}
+      </div>
+      {matchingCustomLeads.length > customLeadLimit && (
+        <button type="button" className="btn-secondary" onClick={() => setCustomLeadLimit((count) => count + 100)}>
+          Show more leads
+        </button>
+      )}
+    </>}<div className="whatsapp-recipient-count"><Users size={17} /><strong>About {estimate} leads selected</strong><span>Final valid E.164 recipient count is verified server-side.</span></div><label>Approved Meta template<select value={draft.templateId} onChange={e => { setDraft({ ...draft, templateId: e.target.value }); setHeaderMediaUrl(DEFAULT_CAMPAIGN_HEADER_IMAGE); setMediaReady(false); }}><option value="">{templateLoadError || (templatesFromCache ? 'Connecting to Firestore…' : approved.length ? 'Select approved template' : 'No approved templates found')}</option>{templates.map(t => <option key={t.id} value={t.id} disabled={String(t.status || '').toUpperCase() !== 'APPROVED'}>{t.name} · {t.language}{String(t.status || '').toUpperCase() !== 'APPROVED' ? ` · ${t.status || 'Unknown status'}` : ''}</option>)}</select></label><button type="button" className="btn-secondary" disabled={syncingTemplates || !marketingAccessReady} onClick={refreshTemplates}>{syncingTemplates ? 'Refreshing…' : 'Refresh from Meta'}</button>{templateSyncError && <p className="app-error" role="alert">{templateSyncError}</p>}{templates.some(t => String(t.status || '').toUpperCase() !== 'APPROVED') && <p>Templates awaiting approval or otherwise unavailable are shown with their status. Only approved templates can be sent.</p>}{templateLoadError && <p className="app-error" role="alert">{templateLoadError}</p>}{!templateLoadError && templatesFromCache && <p>Waiting for a live Firestore connection. Keep this page online and it will load approved templates automatically.</p>}{!templateLoadError && !templatesFromCache && !approved.length && <p>No approved templates are available in this Firebase project yet.</p>}{selectedTemplate && <WhatsAppTemplatePreview key={selectedTemplate.id} template={selectedTemplate} defaultImageUrl={DEFAULT_CAMPAIGN_HEADER_IMAGE} onMediaChange={setHeaderMediaUrl} onReadyChange={setMediaReady} />}<button className="btn-primary" disabled={saving || !approved.length || !mediaReady} onClick={create}><Send size={17} /> {saving ? 'Queuing…' : 'Confirm and send campaign'}</button></section>}
     <section className="admin-panel-section whatsapp-recent-campaigns"><div className="admin-panel-section-head"><div><h3>Recent campaigns</h3><p>Progress and delivery results are updated by Meta webhooks.</p></div></div>{campaigns.length ? <div className="whatsapp-campaign-list">{campaigns.map(c => <button type="button" className="whatsapp-campaign-row" key={c.id} onClick={() => onOpenCampaign?.(c.id)} aria-label={`View campaign ${c.name}`}><span><strong>{c.name}</strong><small>{displayDate(c.createdAt)} · {c.templateName}</small></span><span>{c.sentCount || 0}/{c.totalRecipients || 0} sent · {c.deliveredCount || 0} delivered · {c.failedCount || 0} failed</span><span className={`whatsapp-status ${tone(c.status)}`}>{c.status}</span><ChevronRight size={18} /></button>)}</div> : <div className="admin-empty-state-card"><MessageCircle size={28} /><h4>No campaigns yet</h4><p>Start with a small test audience and an approved Meta template.</p></div>}</section>
     {confirmOpen && <div className="whatsapp-send-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="whatsapp-send-confirm-title"><section className="whatsapp-send-confirm"><span className="admin-panel-kicker">Final confirmation</span><h2 id="whatsapp-send-confirm-title">Send this campaign?</h2><strong className="whatsapp-send-count">{estimate}</strong><p className="whatsapp-send-count-label">people will receive this WhatsApp message</p><div className="whatsapp-send-summary"><span><b>Campaign</b>{draft.name.trim()}</span><span><b>Audience</b>{draft.audience === 'custom' ? `${draft.customIds.length} selected leads` : draft.audience === 'all' ? 'All eligible leads' : draft.audience === 'project' ? 'Selected project leads' : 'Selected status leads'}</span><span><b>Template</b>{selectedTemplate?.name || 'Approved Meta template'}</span></div>{selectedTemplate && <WhatsAppTemplatePreview key={`confirm-${selectedTemplate.id}`} template={selectedTemplate} headerMediaUrl={headerMediaUrl} />}<div className="whatsapp-send-confirm-actions"><button type="button" className="btn-secondary" disabled={saving} onClick={() => setConfirmOpen(false)}>Go back</button><button type="button" className="btn-primary" disabled={saving} onClick={sendConfirmedCampaign}><Send size={17} /> {saving ? 'Sending…' : `Send to ${estimate} people`}</button></div></section></div>}
   </section>;

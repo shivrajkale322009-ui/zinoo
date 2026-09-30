@@ -247,7 +247,7 @@ exports.createWhatsAppCampaign = onCall({ ...callableOptions, timeoutSeconds: 12
   const templateSnapshot = await templateRef.get();
   if (!templateSnapshot.exists || templateSnapshot.data().status !== 'APPROVED') throw new HttpsError('failed-precondition', 'Choose an approved WhatsApp template.');
   const headerMediaUrl = typeof data.headerMediaUrl === 'string' ? data.headerMediaUrl.trim() : '';
-  try { buildTemplateComponents(templateSnapshot.data(), 'Customer', headerMediaUrl); }
+  try { buildTemplateComponents(templateSnapshot.data(), 'Sir/Madam', headerMediaUrl); }
   catch (error) { throw new HttpsError('invalid-argument', error.message); }
   let leadQuery = db.collection('leads');
   if (audience.type === 'project' && typeof audience.projectId === 'string') leadQuery = leadQuery.where('projectId', '==', audience.projectId);

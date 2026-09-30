@@ -9,3 +9,10 @@ test('seller-only reassignment is included in the save review', () => {
   assert.equal(audit.hasChanges, true);
   assert.ok(audit.changed.some((item) => item.label === 'Seller' && item.before === 'seller-a' && item.after === 'seller-b'));
 });
+
+test('property audit detects property highlight badge changes', () => {
+  const audit = getPropertyChangeAudit({ highlightBadge: 'NONE' }, { highlightBadge: 'BEST_FOR_INVESTMENT' });
+  assert.equal(audit.hasChanges, true);
+  assert.ok(audit.changed.some((item) => item.label === 'Property Highlight' && item.before === 'None' && item.after === 'Best for Investment'));
+});
+

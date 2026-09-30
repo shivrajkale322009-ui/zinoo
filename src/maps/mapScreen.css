@@ -932,6 +932,14 @@
   }
 
   .map-top-right-controls { top: 116px; }
+  /* Keep the satellite switch easy to reach above the mobile bottom navigation. */
+  .map-top-right-controls .map-satellite-preview {
+    position: fixed;
+    left: 16px;
+    right: auto;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    z-index: 12;
+  }
   .map-bottom-right-controls {
     right: 16px;
     bottom: calc(94px + env(safe-area-inset-bottom));
@@ -1066,14 +1074,14 @@
 .zinoo-map-project-pricing { display: grid; gap: 2px; }
 .zinoo-map-project-popup .zinoo-map-project-price { color: var(--ds-cashback, #15803d); font-size: 16px; line-height: 1.2; }
 .zinoo-map-project-popup .zinoo-map-project-cashback { color: var(--ds-cashback, #15803d); font-size: 11px; font-weight: 700; }
-.zinoo-map-popup-actions { align-self: end; display: grid; grid-template-columns: minmax(0, 1fr) 44px 44px; gap: var(--ds-space-2, 8px); margin-top: auto; }
+.zinoo-map-popup-actions { align-self: end; display: grid; grid-template-columns: minmax(0, 1fr) 44px 44px; gap: var(--ds-space-2, 8px); margin-top: auto; transform: translateY(-8px); }
 .zinoo-map-popup-actions button,
 .zinoo-map-popup-actions a { display: grid; min-width: 0; min-height: 44px; place-items: center; padding: 0; border: 1px solid var(--ds-border-strong, #cbd5e1); border-radius: var(--ds-radius-small, 8px); background: var(--ds-surface, #fff); color: var(--ds-neutral-600, #475569); font: 700 12px/1.3 var(--font-body); cursor: pointer; text-decoration: none; }
 .zinoo-map-popup-actions .zinoo-map-popup-details { border-color: var(--ds-trust, #1d4ed8); background: var(--ds-trust, #1d4ed8); color: var(--ds-white, #fff); }
 .zinoo-map-popup-actions .zinoo-map-popup-details:hover { border-color: var(--ds-trust-hover, #1e40af); background: var(--ds-trust-hover, #1e40af); }
 .zinoo-map-popup-share { grid-column: 3; }
 .zinoo-map-popup-icon-action svg { width: 18px; height: 18px; }
-.zinoo-map-popup-close { position: absolute; z-index: 2; top: var(--ds-space-2, 8px); right: var(--ds-space-2, 8px); display: grid; width: 44px; height: 44px; place-items: center; padding: 0; border: 1px solid var(--ds-border, #e2e8f0); border-radius: 50%; background: rgba(255,255,255,.96); color: var(--ds-neutral-700, #334155); font: 500 20px/1 var(--font-ui); cursor: pointer; }
+.zinoo-map-popup-close { position: absolute; z-index: 2; top: 2px; right: var(--ds-space-2, 8px); display: grid; width: 44px; height: 44px; place-items: center; padding: 0; border: 1px solid var(--ds-border, #e2e8f0); border-radius: 50%; background: rgba(255,255,255,.96); color: var(--ds-neutral-700, #334155); font: 500 20px/1 var(--font-ui); cursor: pointer; }
 @keyframes zinoo-popup-in { from { opacity: 0; scale: .98; } to { opacity: 1; scale: 1; } }
 @media (max-width: 768px) { .zinoo-map-project-popup { grid-template-columns: 80px minmax(0, 1fr); width: min(288px, calc(100vw - 32px)); }.zinoo-map-project-popup > img { width: 80px; }.zinoo-map-project-popup-content { padding: 10px; } }
 @media (prefers-reduced-motion: reduce) { .zinoo-map-project-popup { animation: none; } }

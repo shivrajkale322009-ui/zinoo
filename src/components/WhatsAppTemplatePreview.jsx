@@ -3,7 +3,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebaseConfig';
 import { templateMedia } from '../utils/whatsappTemplateMedia';
 
-export default function WhatsAppTemplatePreview({ template, headerMediaUrl = '', onMediaChange, onReadyChange }) {
+export default function WhatsAppTemplatePreview({ template, headerMediaUrl = '', defaultImageUrl = '', onMediaChange, onReadyChange }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -21,7 +21,8 @@ export default function WhatsAppTemplatePreview({ template, headerMediaUrl = '',
   }, [template.id, attempt]);
   const current = result?.templateId === template.id ? result : null;
   const media = templateMedia(current);
-  const effectiveUrl = onMediaChange ? (override ? manualUrl.trim() : media.url) : headerMediaUrl;
+  const defaultMediaUrl = media.format === 'IMAGE' && defaultImageUrl ? defaultImageUrl : media.url;
+  const effectiveUrl = onMediaChange ? (override ? manualUrl.trim() : defaultMediaUrl) : headerMediaUrl;
   const validUrl = (() => { try { const url = new URL(effectiveUrl); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; } })();
   useEffect(() => {
     onMediaChange?.(effectiveUrl);
@@ -33,10 +34,10 @@ export default function WhatsAppTemplatePreview({ template, headerMediaUrl = '',
   return <section className="whatsapp-message-preview" aria-label="WhatsApp message preview">
     <header><strong>Message preview</strong><small>{template.name} · {template.language}</small></header>
     {current && media.required && onMediaChange && <div>
-      {!override && media.url && <p>Using the media from your Meta template automatically.</p>}
-      {!media.url && <p>Meta did not provide a reusable media link. Add a public HTTPS link below.</p>}
-      {media.url && <label><input type="checkbox" checked={override} onChange={(event) => setOverride(event.target.checked)} /> Use different media</label>}
-      {(override || !media.url) && <label>Header media link<input type="url" value={manualUrl} onChange={(event) => { setOverride(true); setManualUrl(event.target.value); }} placeholder="https://your-site.com/campaign-image.jpg" /></label>}
+      {!override && defaultMediaUrl && <p>{media.format === 'IMAGE' && defaultImageUrl ? 'Using your campaign header image.' : 'Using the media from your Meta template automatically.'}</p>}
+      {!defaultMediaUrl && <p>Meta did not provide a reusable media link. Add a public HTTPS link below.</p>}
+      {defaultMediaUrl && <label><input type="checkbox" checked={override} onChange={(event) => setOverride(event.target.checked)} /> Use different media</label>}
+      {(override || !defaultMediaUrl) && <label>Header media link<input type="url" value={manualUrl} onChange={(event) => { setOverride(true); setManualUrl(event.target.value); }} placeholder="https://your-site.com/campaign-image.jpg" /></label>}
     </div>}
     {error ? <div role="alert"><p>{error}</p><button type="button" className="btn-secondary" onClick={() => setAttempt((value) => value + 1)}>Retry preview</button></div>
       : !current ? <p role="status">Loading message from Meta…</p>

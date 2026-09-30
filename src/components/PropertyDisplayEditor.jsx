@@ -8,10 +8,28 @@ import { getProjectDocumentLabel } from '../utils/projectDocuments';
 import { LAND_ZONE_OPTIONS, NA_STATUS_OPTIONS } from '../utils/projectLand';
 import { getPropertyChangeAudit } from '../utils/propertyChangeAudit';
 import { applyHighwayResult } from '../utils/highwayInfo';
+import PropertyHighlightBadge from './PropertyHighlightBadge';
+import { HIGHLIGHT_BADGE_OPTIONS, normalizeHighlightBadge } from '../utils/propertyHighlightBadge';
 
 const listOf = (v) => Array.isArray(v) ? v : typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter(Boolean) : [];
 const photoUrl = (v) => typeof v === 'string' ? v : v?.downloadURL || v?.url || v?.previewURL;
 const statusText = (v) => v ? String(v).replace(/_/g, ' ') : 'Draft';
+const SUGGESTED_PLOT_AMENITIES = [
+  'Internal Roads',
+  'Road Access',
+  'Electricity',
+  'Water Supply',
+  'Drainage System',
+  'Street Lights',
+  'Gated Entrance',
+  'Security',
+  'CCTV',
+  'Compound Wall',
+  'Garden / Park',
+  "Children's Play Area",
+  'Walking Track',
+  'Rainwater Harvesting'
+].map((name) => ({ id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''), name }));
 
 // UI-only V2 delegates all Firebase persistence to the existing seller/admin pipelines.
 export default function PropertyDisplayEditor({ property, mode = 'edit', role = 'seller', sellers = [], user, onChange, onSubmit, onCancel, onReset, isDirty = false, onDirtyChange = () => {}, amenityOptions = [], autoDetectHighway = false, mediaUploading = '', mediaError = '', onMediaUpload, documentUploading = false, documentError = '', onDocumentUpload, onRemoveDocument, submitError = '' }) {
@@ -19,7 +37,10 @@ export default function PropertyDisplayEditor({ property, mode = 'edit', role = 
   const [heroUploading, setHeroUploading] = useState(false); const [heroPreview, setHeroPreview] = useState(null);
   const heroInputRef = useRef(null); const heroImageUploadRef = useRef(null); const imageInputRef = useRef(null); const imageSectionRef = useRef(null); const baseline = useRef(property);
   const display = useMemo(() => getPropertyDisplayModel(property), [property]); const documents = listOf(property.documents); const amenities = listOf(property.amenities); const selectedIds = normalizeAmenityIds(property.amenityIds);
-  const options = amenityOptions.map((x) => ({ id: String(x.id), name: String(x.name || '').trim() })).filter((x) => x.id && x.name); const audit = getPropertyChangeAudit(baseline.current, property);
+  const catalogOptions = amenityOptions.map((x) => ({ id: String(x.id), name: String(x.name || '').trim() })).filter((x) => x.id && x.name);
+  const options = [...catalogOptions, ...SUGGESTED_PLOT_AMENITIES].filter((option, index, all) => all.findIndex((item) => item.name.toLowerCase() === option.name.toLowerCase()) === index);
+  const suggestedAmenityOptions = SUGGESTED_PLOT_AMENITIES.map((suggestion) => options.find((option) => option.name.toLowerCase() === suggestion.name.toLowerCase()) || suggestion);
+  const audit = getPropertyChangeAudit(baseline.current, property);
   const apply = (next) => { onDirtyChange(true); onChange(typeof next === 'function' ? next(property) : next); };
   const updateDisplay = (patch) => ({ ...(property.display || {}), ...patch }); const set = (key, value, aliases = {}) => apply({ ...property, [key]: value, ...aliases });
   const setName = (value) => apply({ ...property, name: value, display: updateDisplay({ basic: { ...(property.display?.basic || {}), projectName: value } }) });
@@ -28,26 +49,33 @@ export default function PropertyDisplayEditor({ property, mode = 'edit', role = 
   const setLocation = (key, value, aliases = {}) => { const next = { ...property, [key]: value, ...aliases }; const location = [next.village, next.taluka, next.locality || next.area].filter(Boolean).join(' • '); apply({ ...next, locationLabel: location, display: updateDisplay({ basic: { ...(property.display?.basic || {}), location } }) }); };
   const setContact = (key, value, aliases = {}) => apply({ ...property, [key]: value, ...aliases, display: updateDisplay({ actions: { ...(property.display?.actions || {}), callNumber: value } }) });
   const setCoordinates = (latitude, longitude) => apply({ ...property, latitude, longitude, mapMarkerConfirmed: true, display: updateDisplay({ map: { ...(property.display?.map || {}), latitude: Number(latitude), longitude: Number(longitude), enabled: true } }) });
-  const toggleAmenity = (option) => { const current = selectedIds.length ? selectedIds : amenities.map((name) => options.find((x) => x.name === name)?.id || `legacy:${name}`); const next = current.includes(option.id) ? current.filter((id) => id !== option.id) : [...current, option.id]; const catalog = [...options, ...amenities.filter((name) => !options.some((x) => x.name === name)).map((name) => ({ id: `legacy:${name}`, name }))]; apply(withSelectedProjectAmenities(property, next, catalog)); };
+  const currentHighlightBadge = normalizeHighlightBadge(property.highlightBadge);
+  const setHighlightBadge = (value) => apply({ ...property, highlightBadge: value, display: updateDisplay({ highlightBadge: value }) });
+  const currentAmenityIds = () => amenities.map((name, index) => selectedIds[index] || options.find((option) => option.name.toLowerCase() === name.toLowerCase())?.id || `legacy:${name}`);
+  const amenityCatalog = (ids = currentAmenityIds()) => [
+    ...options,
+    ...amenities.map((name, index) => ({ id: ids[index], name }))
+  ];
+  const toggleAmenity = (option) => {
+    const current = currentAmenityIds();
+    const next = current.includes(option.id) ? current.filter((id) => id !== option.id) : [...current, option.id];
+    apply(withSelectedProjectAmenities(property, next, amenityCatalog()));
+  };
   const addAmenity = (name) => {
     const cleaned = name.trim();
     if (!cleaned) return;
-    if (amenities.includes(cleaned)) return;
-    const nextAmenities = [...amenities, cleaned];
-    apply({
-      ...property,
-      amenities: nextAmenities,
-      amenityIds: nextAmenities.map(x => x.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''))
-    });
+    if (amenities.some((item) => item.toLowerCase() === cleaned.toLowerCase())) {
+      setNewAmenity('');
+      return;
+    }
+    const option = options.find((item) => item.name.toLowerCase() === cleaned.toLowerCase());
+    const id = option?.id || cleaned.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const catalog = [...amenityCatalog(), { id, name: cleaned }];
+    apply(withSelectedProjectAmenities(property, [...currentAmenityIds(), id], catalog));
     setNewAmenity('');
   };
   const removeAmenity = (indexToRemove) => {
-    const nextAmenities = amenities.filter((_, idx) => idx !== indexToRemove);
-    apply({
-      ...property,
-      amenities: nextAmenities,
-      amenityIds: nextAmenities.map(x => x.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''))
-    });
+    apply(withSelectedProjectAmenities(property, currentAmenityIds().filter((_, index) => index !== indexToRemove), amenityCatalog()));
   };
   const setHeroImageUpload = useCallback((upload) => { heroImageUploadRef.current = upload; }, []);
   const chooseHeroImage = () => { heroInputRef.current?.click(); };
@@ -133,6 +161,60 @@ export default function PropertyDisplayEditor({ property, mode = 'edit', role = 
         </div>
       </section>
       <section className="v2-intro-section"><label className="v2-title-input"><span className="sr-only">Project Name</span><input value={property.name || ''} placeholder="Project Name" onChange={(e) => setName(e.target.value)} required /><b className="v2-required-indicator v2-title-required" aria-hidden="true">*</b></label><div className="v2-location-row"><div className="v2-location-field"><MapPin size={17} aria-hidden="true" />{field('Village', property.village, (v) => setLocation('village', v), { required: true })}</div>{field('Location', property.locality || property.area, (v) => setLocation('locality', v, { area: v }))}</div><div className="v2-price-row">{field('Price (₹)', property.startingPrice ?? property.priceFrom, setPrice, { type: 'number', min: 0 })}{field('Cashback Offered (₹)', property.cashbackPerGuntha ?? property.cashbackAmount, setCashback, { type: 'number', min: 0 })}</div><div className="v2-contact-row">{field('Contact number', property.contactNumber || property.siteVisitContact, (v) => setContact('contactNumber', v, { siteVisitContact: v, siteVisitContactNumber: v }), { type: 'tel' })}{field('WhatsApp number', property.whatsappNumber, (v) => setContact('whatsappNumber', v), { type: 'tel' })}</div></section>
+      <section className="v2-content-section v2-highlight-section">
+        <h3>Property Highlight</h3>
+        <div className="v2-highlight-card-grid" role="radiogroup" aria-label="Property Highlight selector">
+          {HIGHLIGHT_BADGE_OPTIONS.map((option) => {
+            const isSelected = currentHighlightBadge === option.id;
+            const Icon = option.icon;
+            return (
+              <div
+                key={option.id}
+                role="radio"
+                tabIndex={0}
+                aria-label={option.label}
+                aria-checked={isSelected}
+                className={`v2-highlight-card${isSelected ? ' is-selected' : ''}${option.id === 'BEST_FOR_RESIDENTIAL' ? ' v2-highlight-card--strip-only' : ''}`}
+                onClick={() => setHighlightBadge(option.id)}
+                onKeyDown={(e) => {
+                  if (e.key === ' ' || e.key === 'Enter') {
+                    e.preventDefault();
+                    setHighlightBadge(option.id);
+                  }
+                }}
+              >
+                <div className="v2-highlight-card-lead">
+                  <span className="v2-highlight-radio-circle" aria-hidden="true">
+                    {isSelected && <span className="v2-highlight-radio-dot" />}
+                  </span>
+                  <span className="v2-highlight-card-title">
+                    {Icon && <Icon size={16} strokeWidth={2.2} aria-hidden="true" />}
+                    <span>{option.label}</span>
+                  </span>
+                </div>
+                {option.id !== 'NONE' ? (
+                  <PropertyHighlightBadge badgeType={option.id} />
+                ) : (
+                  <span className="v2-highlight-none-preview">None</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="v2-highlight-preview-box">
+          <div className="v2-highlight-preview-header">
+            <span>Preview</span>
+          </div>
+          <div className="v2-highlight-preview-display">
+            {currentHighlightBadge && currentHighlightBadge !== 'NONE' ? (
+              <PropertyHighlightBadge badgeType={currentHighlightBadge} />
+            ) : (
+              <span className="v2-highlight-none-hint">None selected (badge will be hidden)</span>
+            )}
+          </div>
+        </div>
+      </section>
       <section className="v2-content-section"><h3>Overview</h3><div className="v2-overview-grid">
         {role === 'admin' && <label><span>Seller</span><select aria-label="Property seller" value={property.sellerId || property.sellerUid || property.ownerId || ''} onChange={(event) => {
           const sellerId = event.target.value;
@@ -145,12 +227,52 @@ export default function PropertyDisplayEditor({ property, mode = 'edit', role = 
         </select></label>}<label><span>Land Zone</span><select value={property.landZone || ''} onChange={(e) => set('landZone', e.target.value)}><option value="">Select</option>{LAND_ZONE_OPTIONS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}</select></label>{field('Developer', property.developer || property.developerName, (v) => set('developer', v, { developerName: v }))}<label><span>Installment</span><select value={property.installmentPurchaseAvailable ? 'yes' : 'no'} onChange={(e) => set('installmentPurchaseAvailable', e.target.value === 'yes')}><option value="yes">Available</option><option value="no">Not available</option></select></label><label><span>NA Status</span><select value={property.naStatus || ''} onChange={(e) => set('naStatus', e.target.value)}><option value="">Select</option>{NA_STATUS_OPTIONS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}</select></label></div></section>
       <section className="v2-content-section"><h3>Documents</h3>{role === 'admin' && property.id && user ? <PropertyMediaDocumentsManager property={property} user={user} onChange={apply} showMedia={false} /> : <label className="v2-add-file"><Plus size={15} /> Add document<input type="file" hidden accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar" disabled={documentUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) onDocumentUpload?.(file, 'other'); e.target.value = ''; }} /></label>}<div className="v2-document-list">{documents.map((doc, index) => <div key={doc.id || index}><FileText size={18} /><span><strong>{doc.displayName || doc.fileName || getProjectDocumentLabel(doc.type)}</strong><small>{doc.status || 'Pending'}</small></span><button type="button" onClick={() => openDocumentPreview(doc, setDocumentViewer)}>View</button>{onRemoveDocument && <button type="button" aria-label="Remove document" onClick={() => { onDirtyChange(true); onRemoveDocument(doc, index); }}><X size={15} /></button>}</div>)}</div>{documentError && <p role="alert">{documentError}</p>}</section>
       <section className="v2-content-section">
-        <h3>Amenities</h3>
+        <h3>Plot Project Amenities</h3>
         <div className="v2-amenity-management">
+          <div>
+            <div className="v2-amenity-section-title">Common plot amenities · tap to add</div>
+            <div className="v2-amenity-suggestions">
+              {suggestedAmenityOptions.map((option) => {
+                const isAdded = amenities.some((name) => name.toLowerCase() === option.name.toLowerCase());
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`v2-amenity-suggestion${isAdded ? ' is-added' : ''}`}
+                    disabled={isAdded}
+                    aria-pressed={isAdded}
+                    onClick={() => toggleAmenity(option)}
+                  >
+                    <span aria-hidden="true">{isAdded ? '✓' : '+'}</span>{option.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="v2-amenity-section-title">Selected amenities:</div>
+          {amenities.length === 0 ? (
+            <div className="v2-amenity-empty">No amenities added yet.</div>
+          ) : (
+            <div className="v2-amenity-list-chips">
+              {amenities.map((item, index) => (
+                <span key={`${item}-${index}`} className="amenity-chip">
+                  {item}
+                  <button
+                    type="button"
+                    onClick={() => removeAmenity(index)}
+                    aria-label={`Remove ${item}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="v2-amenity-section-title">Add a custom amenity:</div>
           <div className="v2-amenity-input-group">
             <input
               type="text"
-              placeholder="Enter amenity"
+              placeholder="Enter another amenity"
               value={newAmenity}
               onChange={(e) => setNewAmenity(e.target.value)}
               onKeyDown={(e) => {
@@ -167,25 +289,6 @@ export default function PropertyDisplayEditor({ property, mode = 'edit', role = 
               Add
             </button>
           </div>
-          <div className="v2-amenity-section-title">Existing Amenities:</div>
-          {amenities.length === 0 ? (
-            <div className="v2-amenity-empty">No amenities added yet.</div>
-          ) : (
-            <div className="v2-amenity-list-chips">
-              {amenities.map((item, index) => (
-                <span key={index} className="amenity-chip">
-                  {item}
-                  <button
-                    type="button"
-                    onClick={() => removeAmenity(index)}
-                    aria-label={`Remove ${item}`}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
         </div>
       </section>
       <section className="v2-content-section"><h3>About Project (optional)</h3><label className="v2-about-input"><textarea maxLength="2000" value={property.description || ''} placeholder="Tell buyers about the project" onChange={(e) => apply({ ...property, description: e.target.value, display: updateDisplay({ basic: { ...(property.display?.basic || {}), shortDescription: e.target.value }, overview: { ...(property.display?.overview || {}), body: e.target.value } }) })} /><small>{(property.description || '').length}/2000</small></label></section>
