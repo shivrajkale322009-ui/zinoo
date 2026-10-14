@@ -27,6 +27,7 @@ import { reconcileMarkers } from './persistentMarkers';
 
 const DEFAULT_CENTER = CHAKAN_MAP_POSITION;
 const DEFAULT_ZOOM = 12;
+const MAX_ZOOM = 22;
 const PROJECT_FOCUS_DURATION = 600;
 const DEFAULT_FILTERS = Object.freeze({ budgetMax: 5000000, naPlot: false, bankLoan: false, minScore: 0 });
 const pointFor = (project) => getProjectCoordinates(project);
@@ -144,7 +145,7 @@ export default function MapScreen({
   const [mapReady, setMapReady] = useState(null);
   const [mapType, setMapType] = useState('roadmap');
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
-  const [zoomTier, setZoomTier] = useState(Math.floor(DEFAULT_ZOOM));
+  const [clusterChoices, setClusterChoices] = useState(null);
   const [popupProjectId, setPopupProjectId] = useState(null);
   // Layer toggles
   const [showLayers, setShowLayers] = useState(false);
@@ -568,11 +569,12 @@ export default function MapScreen({
           center,
           zoom: Number.isFinite(preservedCamera?.zoom) ? preservedCamera.zoom : DEFAULT_ZOOM,
           minZoom: 11,
+          maxZoom: MAX_ZOOM,
           mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || 'DEMO_MAP_ID',
           mapTypeId: window.google.maps.MapTypeId.ROADMAP,
           disableDefaultUI: true,
           mapTypeControl: false,
-          scaleControl: false,
+          scaleControl: true,
           streetViewControl: false,
           fullscreenControl: false,
           rotateControl: false,
@@ -585,10 +587,7 @@ export default function MapScreen({
         map.setMapTypeId(window.google.maps.MapTypeId.ROADMAP);
         const settleZoomState = () => {
           const zoom = map.getZoom() ?? DEFAULT_ZOOM;
-          const nextDisplayZoom = Math.round(zoom * 10) / 10;
-          const nextZoomTier = Math.floor(zoom);
-          setZoomLevel((currentZoom) => currentZoom === nextDisplayZoom ? currentZoom : nextDisplayZoom);
-          setZoomTier((currentTier) => currentTier === nextZoomTier ? currentTier : nextZoomTier);
+          setZoomLevel(zoom);
         };
         settleZoomState();
 
@@ -736,10 +735,48 @@ export default function MapScreen({
     return () => window.removeEventListener('flinok-view-project-layout', viewLayout);
   }, [activeLayout, selectedProject]);
 
+  const [markerFootprints, setMarkerFootprints] = useState(new Map());
+  const [cameraRevision, setCameraRevision] = useState(0);
+  useEffect(() => {
+    if (!mapReady) return;
+    const listener = mapReady.addListener('idle', () => setCameraRevision((value) => value + 1));
+    return () => listener.remove();
+  }, [mapReady]);
+  useEffect(() => {
+    if (!mapReady) return;
+    const host = document.createElement('div');
+    host.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:-10000px;top:0';
+    mapElement.current.append(host);
+    const footprints = new Map();
+    try {
+      const measured = projects.map((project) => {
+        const content = markerContent(project, getProjectMarkerState({ zoom: zoomLevel, project }));
+        const row = document.createElement('div');
+        row.style.width = 'max-content';
+        row.append(content);
+        host.append(row);
+        return { project, content };
+      });
+      // Batch DOM writes before reads to avoid one forced layout per property.
+      for (const { project, content } of measured) {
+        const box = content.getBoundingClientRect();
+        footprints.set(project.id, { width: Math.max(44, box.width), height: Math.max(44, box.height) });
+      }
+    } finally { host.remove(); }
+    setMarkerFootprints(footprints);
+  }, [projects, zoomLevel, mapReady]);
   const propertyClusters = useMemo(() => createStablePropertyClusters(
     projects.filter((project) => isProjectPublishable(project) && pointFor(project))
-      .map((project) => ({ project, position: pointFor(project) })), zoomLevel
-  ), [projects, zoomLevel]);
+      .map((project) => ({ project, position: pointFor(project), ...markerFootprints.get(project.id) })), zoomLevel
+  ), [projects, zoomLevel, markerFootprints]);
+  const renderedClusters = useMemo(() => {
+    const bounds = mapReady?.getBounds();
+    if (!bounds) return propertyClusters;
+    const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
+    const latPad = (ne.lat() - sw.lat()) * 0.2, lngPad = (ne.lng() - sw.lng()) * 0.2;
+    return propertyClusters.filter(({ position }) => position.lat >= sw.lat() - latPad && position.lat <= ne.lat() + latPad
+      && position.lng >= sw.lng() - lngPad && position.lng <= ne.lng() + lngPad);
+  }, [propertyClusters, mapReady, cameraRevision]);
 
   // Group all supplied properties, not just the viewport. Selection does not
   // change membership or anchors; its individual marker is rendered above.
@@ -748,7 +785,7 @@ export default function MapScreen({
     if (!map || !window.google?.maps || !mapReady) return;
 
     const collisionBehavior = window.google.maps.CollisionBehavior?.REQUIRED;
-    const descriptors = (layerVisibility.markers ? propertyClusters : []).flatMap((group) => {
+    const descriptors = (layerVisibility.markers ? renderedClusters : []).flatMap((group) => {
         if (group.kind === 'cluster') {
           const content = document.createElement('div');
           content.className = 'zinoo-property-cluster-marker';
@@ -764,8 +801,12 @@ export default function MapScreen({
             key: `cluster:${JSON.stringify(group.entries.map(({ project }) => stableProjectKey(project)).sort())}`,
             options,
             onClick: () => {
-              map.panTo(group.position);
-              map.setZoom(Math.min(20, (map.getZoom() ?? DEFAULT_ZOOM) + 2));
+              const bounds = new window.google.maps.LatLngBounds();
+              group.entries.forEach(({ position }) => bounds.extend(position));
+              const first = group.entries[0].position;
+              const coLocated = group.entries.every(({ position }) => Math.abs(position.lat - first.lat) < 0.000001 && Math.abs(position.lng - first.lng) < 0.000001);
+              if (coLocated || (map.getZoom() ?? DEFAULT_ZOOM) >= MAX_ZOOM - 0.5) setClusterChoices(group.entries.map(({ project }) => project));
+              else map.fitBounds(bounds, 80);
             }
           }];
         }
@@ -789,7 +830,7 @@ export default function MapScreen({
     markerRecordsRef.current = reconcileMarkers(markerRecordsRef.current, descriptors, map,
       (options) => new window.google.maps.marker.AdvancedMarkerElement(options));
     markersRef.current = [...markerRecordsRef.current.values()].map(({ marker }) => marker);
-  }, [propertyClusters, mapReady, selectProjectFromMarker, layerVisibility.markers, zoomLevel, markerStates, selectedProject?.id]);
+  }, [renderedClusters, mapReady, selectProjectFromMarker, layerVisibility.markers, zoomLevel, markerStates, selectedProject?.id]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1025,6 +1066,17 @@ export default function MapScreen({
       {/* MAP CANVAS */}
       <div ref={mapElement} className="zinoo-google-map" />
       <ZoomBadge zoom={zoomLevel} />
+      <div className="map-zoom-controls" role="group" aria-label="Map zoom controls">
+        <button type="button" aria-label="Zoom in" disabled={!mapReady || zoomLevel >= MAX_ZOOM} onClick={() => mapReady.setZoom(Math.min(MAX_ZOOM, (mapReady.getZoom() ?? zoomLevel) + 1))}>+</button>
+        <button type="button" aria-label="Zoom out" disabled={!mapReady || zoomLevel <= 11} onClick={() => mapReady.setZoom(Math.max(11, (mapReady.getZoom() ?? zoomLevel) - 1))}>−</button>
+        <button type="button" disabled={!mapReady} onClick={() => { setClusterChoices(null); mapReady.moveCamera({ center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM }); }}>Reset view</button>
+      </div>
+      {clusterChoices && (
+        <section className="map-property-chooser" aria-label="Properties at this location" onKeyDown={(event) => { if (event.key === 'Escape') setClusterChoices(null); }}>
+          <header><strong>Choose a property</strong><button type="button" autoFocus aria-label="Close property chooser" onClick={() => setClusterChoices(null)}>×</button></header>
+          <div>{clusterChoices.map((project) => <button type="button" key={project.id} onClick={() => { setClusterChoices(null); selectProjectFromMarker(project); }}><strong>{project.name || 'Project'}</strong><span>{priceLabel(project.startingPrice ?? project.priceFrom)}</span></button>)}</div>
+        </section>
+      )}
       {mapStatus !== 'ready' && mapStatus !== 'loading' && (
         <div className="map-availability-state" role="alert">
           <MapPin size={24} />

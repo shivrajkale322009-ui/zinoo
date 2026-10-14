@@ -159,3 +159,23 @@ test('uses required collision behavior so Google Maps does not hide a project ma
   assert.match(source, /const collisionBehavior = window\.google\.maps\.CollisionBehavior\?\.REQUIRED/);
   assert.doesNotMatch(source, /OPTIONAL_AND_HIDES_LOWER_PRIORITY/);
 });
+
+test('keeps identical locations selectable as a cluster at maximum zoom', () => {
+  const groups = createStablePropertyClusters(['a', 'b'].map((id) => ({ project: { id }, position: { lat: 18.75, lng: 73.85 } })), 20);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].kind, 'cluster');
+});
+
+test('uses measured wide labels rather than the default collision width', () => {
+  const groups = createClusterRepresentations([
+    { ...entry('a', 0, 0), width: 160, height: 44 },
+    { ...entry('b', 70, 0), width: 160, height: 44 }
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].kind, 'cluster');
+});
+
+test('spatial cells retain overlapping pairs across cell boundaries', () => {
+  const groups = createClusterRepresentations([entry('a', 34, 0), entry('b', 36, 0), entry('c', 200, 0)]);
+  assert.deepEqual(groups.map((group) => group.entries.map(({ project }) => project.id)), [['a', 'b'], ['c']]);
+});
